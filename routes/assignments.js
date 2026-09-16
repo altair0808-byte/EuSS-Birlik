@@ -102,7 +102,7 @@ router.get('/mine', authRequired, async (req, res) => {
   try {
     const result = await query(`
       SELECT a.*, c.title_ru, c.title_kz, c.time_limit_minutes, c.pass_score_percent,
-             c.material_pdf_path, c.video_url, c.description_ru, c.description_kz
+             c.material_pdf_path, c.video_url, c.video_path, c.description_ru, c.description_kz
       FROM assignments a
       JOIN courses c ON c.id = a.course_id
       WHERE a.user_id = $1
@@ -183,13 +183,27 @@ router.post('/:id/start', authRequired, async (req, res) => {
       return res.status(400).json({ error: 'retake_not_allowed' });
     }
 
+    // Курс может хранить тесты в виде нескольких вариантов (билетов) — 10 билетов по 10 вопросов.
+    // При каждой попытке случайным образом выбирается один заполненный билет.
+    const variantsRes = await query(
+      'SELECT DISTINCT variant_number FROM questions WHERE course_id = $1 ORDER BY variant_number',
+      [a.course_id]
+    );
+    const variants = variantsRes.rows.map(r => r.variant_number);
+    const chosenVariant = variants.length ? variants[Math.floor(Math.random() * variants.length)] : null;
+
     await query(
-      `UPDATE assignments SET status='in_progress', attempts_used = attempts_used + 1, retake_allowed = 0 WHERE id = $1`,
-      [req.params.id]
+      `UPDATE assignments SET status='in_progress', attempts_used = attempts_used + 1, retake_allowed = 0, assigned_variant = $2 WHERE id = $1`,
+      [req.params.id, chosenVariant]
     );
 
-    const questionsRes = await query('SELECT id, course_id, question_ru, question_kz, options_ru, options_kz FROM questions WHERE course_id = $1', [a.course_id]);
-    res.json({ ok: true, questions: questionsRes.rows });
+    const questionsRes = chosenVariant
+      ? await query(
+          'SELECT id, course_id, question_ru, question_kz, options_ru, options_kz FROM questions WHERE course_id = $1 AND variant_number = $2 ORDER BY sort_order',
+          [a.course_id, chosenVariant]
+        )
+      : await query('SELECT id, course_id, question_ru, question_kz, options_ru, options_kz FROM questions WHERE course_id = $1', [a.course_id]);
+    res.json({ ok: true, questions: questionsRes.rows, variant: chosenVariant });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }
@@ -204,7 +218,11 @@ router.post('/:id/submit', authRequired, async (req, res) => {
 
     const cRes = await query('SELECT * FROM courses WHERE id = $1', [a.course_id]);
     const course = cRes.rows[0];
-    const qRes = await query('SELECT * FROM questions WHERE course_id = $1', [a.course_id]);
+    // Считаем результат только по вопросам того билета (варианта), который был выдан при старте попытки.
+    // Для старых попыток без привязки к варианту (assigned_variant пуст) используем все вопросы курса, как раньше.
+    const qRes = a.assigned_variant
+      ? await query('SELECT * FROM questions WHERE course_id = $1 AND variant_number = $2', [a.course_id, a.assigned_variant])
+      : await query('SELECT * FROM questions WHERE course_id = $1', [a.course_id]);
     const questions = qRes.rows;
 
     const { answers, focus_violations } = req.body;
