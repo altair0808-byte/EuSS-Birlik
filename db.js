@@ -19,6 +19,22 @@ async function query(text, params) {
 
 // Инициализация структуры таблиц и создание суперадмина
 async function initDb() {
+  // Если таблица settings была создана ранее без колонки id, пересоздаем ее с правильной структурой
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.tables 
+        WHERE table_schema = 'public' AND table_name = 'settings'
+      ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'public' AND table_name = 'settings' AND column_name = 'id'
+      ) THEN
+        DROP TABLE public.settings CASCADE;
+      END IF;
+    END $$;
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id BIGSERIAL PRIMARY KEY,
