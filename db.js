@@ -1,9 +1,11 @@
-const Database = require('better-sqlite3');
+const fs = require('fs');
 const path = require('path');
-const bcrypt = require('bcryptjs');
-require('dotenv').config();
+const Database = require('better-sqlite3');
 
-const db = new Database(path.join(__dirname, 'data', 'app.db'));
+const dbDir = path.join(__dirname, 'data');
+fs.mkdirSync(dbDir, { recursive: true });
+
+const db = new Database(path.join(dbDir, 'database.sqlite'));
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
