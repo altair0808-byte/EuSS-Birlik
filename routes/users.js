@@ -1,8 +1,12 @@
 const express = require('express');
 const router = express.Router();
+const bcrypt = require('bcryptjs');
+const ExcelJS = require('exceljs');
 const db = require('../db');
-const { authRequired, requireRole } = require('./auth'); // <-- ВОТ ЭТА СТРОКА
+const { authRequired, requireRole } = require('./auth');
 const { makeUploader } = require('../upload');
+
+const upload = makeUploader('imports');
 
 // List users (admin/superadmin only), with optional filters
 router.get('/', authRequired, requireRole('admin', 'superadmin'), (req, res) => {
@@ -30,7 +34,6 @@ router.get('/meta/objects', authRequired, requireRole('admin', 'superadmin'), (r
 });
 
 function validateRole(requesterRole, targetRole) {
-  // Only superadmin can create admins/superadmins. Admin can only create employees.
   if (requesterRole === 'superadmin') return true;
   if (requesterRole === 'admin' && targetRole === 'employee') return true;
   return false;
@@ -42,10 +45,8 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), (req, res) =>
   const targetRole = role || 'employee';
   if (!validateRole(req.user.role, targetRole)) return res.status(403).json({ error: 'forbidden_role' });
   if (!last_name || !first_name || !login || !password) return res.status(400).json({ error: 'missing_fields' });
-
   const exists = db.prepare('SELECT id FROM users WHERE login = ?').get(login);
   if (exists) return res.status(409).json({ error: 'login_taken' });
-
   const hash = bcrypt.hashSync(String(password), 10);
   const info = db.prepare(`INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -59,7 +60,6 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), (req, res) 
   const target = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
   if (!target) return res.status(404).json({ error: 'not_found' });
   if (req.user.role === 'admin' && target.role !== 'employee') return res.status(403).json({ error: 'forbidden' });
-
   const { last_name, first_name, object, department, position, login, password, active } = req.body;
   const fields = [];
   const params = [];
@@ -89,7 +89,6 @@ router.delete('/:id', authRequired, requireRole('admin', 'superadmin'), (req, re
 });
 
 // Bulk import from Excel
-// Expected columns (header row, RU): Фамилия | Имя | Объект | Отдел | Должность | Логин | Пароль | Роль(optional)
 router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'no_file' });
   try {
@@ -97,7 +96,6 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
     await wb.xlsx.readFile(req.file.path);
     const ws = wb.worksheets[0];
     const headerRow = ws.getRow(1).values.map(v => (v || '').toString().trim().toLowerCase());
-
     const colIndex = (names) => headerRow.findIndex(h => names.includes(h));
     const idx = {
       last_name: colIndex(['фамилия']),
@@ -112,13 +110,11 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
     if (idx.last_name < 0 || idx.first_name < 0 || idx.login < 0 || idx.password < 0) {
       return res.status(400).json({ error: 'bad_headers', message: 'Ожидаются колонки: Фамилия, Имя, Объект, Отдел, Должность, Логин, Пароль' });
     }
-
     let created = 0, updated = 0, errors = [];
     const insertStmt = db.prepare(`INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role)
                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
     const updateStmt = db.prepare(`UPDATE users SET last_name=?, first_name=?, object=?, department=?, position=?, password_hash=? WHERE login=?`);
     const findStmt = db.prepare('SELECT id FROM users WHERE login = ?');
-
     const rows = ws.getRows(2, ws.rowCount - 1) || [];
     const tx = db.transaction(() => {
       for (const row of rows) {
@@ -135,7 +131,6 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
         const safeRole = ['admin', 'employee'].includes(role) ? role : 'employee';
         if (!login || !password) { errors.push(`${last_name} ${first_name}: нет логина/пароля`); continue; }
         if (req.user.role === 'admin' && safeRole !== 'employee') { errors.push(`${last_name} ${first_name}: недостаточно прав для роли ${safeRole}`); continue; }
-
         const existing = findStmt.get(login);
         const hash = bcrypt.hashSync(password, 10);
         if (existing) {
@@ -148,7 +143,6 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
       }
     });
     tx();
-
     res.json({ created, updated, errors });
   } catch (e) {
     console.error(e);
