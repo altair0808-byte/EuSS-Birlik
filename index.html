@@ -1913,49 +1913,119 @@ function onTestVisibilityChange() {
   }
 }
 
+let currentTestIndex = 0;
+
 async function runTest(assignmentId, title, timeLimitMinutes) {
   const data = await api.startTest(assignmentId);
-  state.activeTest = { id: assignmentId, questions: data.questions, answers: {}, violations: 0 };
+  // Ограничиваем строго 10 вопросами
+  const questions = (data.questions || []).slice(0, 10);
+
+  state.activeTest = {
+    id: assignmentId,
+    questions: questions,
+    answers: {},
+    violations: 0
+  };
+  currentTestIndex = 0;
+
   document.getElementById('testRunTitle').textContent = title;
-
-  const qDiv = document.getElementById('testRunQuestions');
-  qDiv.innerHTML = data.questions.map((q, idx) => `
-    <div class="p-4 border rounded-xl bg-slate-50">
-      <div class="font-bold text-slate-900 mb-3 text-sm">${idx + 1}. ${esc(CURRENT_LANG === 'kz' ? q.question_kz : q.question_ru)}</div>
-      <div class="space-y-2">
-        ${parseOpts(CURRENT_LANG === 'kz' ? q.options_kz : q.options_ru).map((opt, optIdx) => `
-          <label class="flex items-center space-x-3 p-2 bg-white rounded-lg border hover:border-blue-400 cursor-pointer text-sm">
-            <input type="radio" name="q_${q.id}" value="${optIdx}" onchange="state.activeTest.answers[${q.id}] = ${optIdx}" class="text-blue-600">
-            <span>${esc(opt)}</span>
-          </label>
-        `).join('')}
-      </div>
-    </div>
-  `).join('');
-
   document.getElementById('testRunModal').classList.remove('hidden');
 
-  // Anti-cheat: count tab switches / window blur while the test is open
+  renderTestStep();
+
   document.addEventListener('visibilitychange', onTestVisibilityChange);
 
-  // Countdown timer — auto-submits when time runs out
+  // Обратный отсчет таймера
   const timerEl = document.getElementById('testRunTimer');
   state.timeLeft = Math.max(1, parseInt(timeLimitMinutes, 10) || 20) * 60;
   const renderTimer = () => {
     const m = Math.floor(state.timeLeft / 60).toString().padStart(2, '0');
     const s = (state.timeLeft % 60).toString().padStart(2, '0');
-    timerEl.textContent = `${m}:${s}`;
+    if (timerEl) timerEl.textContent = `${m}:${s}`;
   };
   renderTimer();
-  clearInterval(state.testTimer);
-  state.testTimer = setInterval(() => {
+  if (state.timerInterval) clearInterval(state.timerInterval);
+  state.timerInterval = setInterval(() => {
     state.timeLeft--;
     renderTimer();
     if (state.timeLeft <= 0) {
-      clearInterval(state.testTimer);
-      finishTest(true);
+      clearInterval(state.timerInterval);
+      alert('Время вышло! Тест будет завершен.');
+      finishTest();
     }
   }, 1000);
+}
+
+function renderTestStep() {
+  const test = state.activeTest;
+  if (!test || !test.questions.length) return;
+
+  const total = test.questions.length;
+  const q = test.questions[currentTestIndex];
+
+  document.getElementById('testRunSubtitle').textContent = `Вопрос ${currentTestIndex + 1} из ${total}`;
+
+  // Рендерим кнопки 1..10 (зеленые — где уже выбран ответ, синяя — текущий)
+  const pager = document.getElementById('testQuestionPager');
+  pager.innerHTML = test.questions.map((item, idx) => {
+    const isAnswered = test.answers[item.id] !== undefined;
+    const isCurrent = idx === currentTestIndex;
+    let cls = 'w-8 h-8 rounded-lg text-xs font-bold transition ';
+    if (isCurrent) {
+      cls += 'bg-blue-600 text-white ring-2 ring-blue-300';
+    } else if (isAnswered) {
+      cls += 'bg-emerald-100 text-emerald-800 border border-emerald-300';
+    } else {
+      cls += 'bg-slate-100 text-slate-600 hover:bg-slate-200';
+    }
+    return `<button type="button" onclick="goToQuestion(${idx})" class="${cls}">${idx + 1}</button>`;
+  }).join('');
+
+  // Текст вопроса и варианты
+  const qText = CURRENT_LANG === 'kz' ? (q.question_kz || q.question_ru) : (q.question_ru || q.question_kz);
+  const rawOpts = CURRENT_LANG === 'kz' ? (q.options_kz || q.options_ru) : (q.options_ru || q.options_kz);
+  const opts = parseOpts(rawOpts);
+
+  const container = document.getElementById('testRunQuestions');
+  container.innerHTML = `
+    <div class="space-y-4">
+      <div class="font-semibold text-slate-900 text-base leading-snug">
+        ${currentTestIndex + 1}. ${esc(qText)}
+      </div>
+      <div class="space-y-2.5 pt-2">
+        ${opts.map((opt, optIdx) => {
+          const checked = test.answers[q.id] === optIdx;
+          return `
+            <label class="flex items-center space-x-3 p-3 rounded-xl border ${checked ? 'border-blue-500 bg-blue-50/70 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'} cursor-pointer text-sm transition">
+              <input type="radio" name="active_q_${q.id}" value="${optIdx}" ${checked ? 'checked' : ''} onchange="setAnswer(${q.id}, ${optIdx})" class="text-blue-600 w-4 h-4">
+              <span class="text-slate-800">${esc(opt)}</span>
+            </label>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+
+  document.getElementById('btnPrevQ').disabled = (currentTestIndex === 0);
+  document.getElementById('btnNextQ').style.display = (currentTestIndex === total - 1) ? 'none' : 'inline-block';
+}
+
+function setAnswer(questionId, optIdx) {
+  state.activeTest.answers[questionId] = optIdx;
+  renderTestStep();
+}
+
+function goToQuestion(idx) {
+  currentTestIndex = idx;
+  renderTestStep();
+}
+
+function stepQuestion(delta) {
+  const next = currentTestIndex + delta;
+  if (next >= 0 && next < state.activeTest.questions.length) {
+    currentTestIndex = next;
+    renderTestStep();
+  }
 }
 
 async function finishTest(auto) {
