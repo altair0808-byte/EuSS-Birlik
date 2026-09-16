@@ -200,10 +200,13 @@ router.post('/:id/start', authRequired, async (req, res) => {
 
     const questionsRes = chosenVariant
       ? await query(
-          'SELECT id, course_id, question_ru, question_kz, options_ru, options_kz FROM questions WHERE course_id = $1 AND variant_number = $2 ORDER BY sort_order',
+          'SELECT id, course_id, question_ru, question_kz, options_ru, options_kz FROM questions WHERE course_id = $1 AND variant_number = $2 ORDER BY sort_order, id LIMIT 10',
           [a.course_id, chosenVariant]
         )
-      : await query('SELECT id, course_id, question_ru, question_kz, options_ru, options_kz FROM questions WHERE course_id = $1', [a.course_id]);
+      : await query(
+          'SELECT id, course_id, question_ru, question_kz, options_ru, options_kz FROM questions WHERE course_id = $1 ORDER BY RANDOM() LIMIT 10',
+          [a.course_id]
+        );
     res.json({ ok: true, questions: questionsRes.rows, variant: chosenVariant });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
