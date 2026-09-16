@@ -29,6 +29,7 @@ app.use('/api/courses', require('./routes/courses'));
 app.use('/api/assignments', require('./routes/assignments'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/export', require('./routes/export'));
+app.use('/api/certificates', require('./routes/certificate'));
 
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));

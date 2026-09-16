@@ -325,14 +325,16 @@ const api = {
   saveCourse(data, id) { return this.req(id ? '/api/courses/' + id : '/api/courses', { method: id ? 'PUT' : 'POST', body: data }); },
   deleteCourse(id) { return this.req('/api/courses/' + id, { method: 'DELETE' }); },
   addQuestion(cid, data) { return this.req('/api/courses/' + cid + '/questions', { method: 'POST', body: data }); },
-  deleteQuestion(qid) { return this.req('/api/courses/questions/' + qid, { method: 'DELETE' }); },
+  deleteQuestion(cid, qid) { return this.req('/api/courses/' + cid + '/questions/' + qid, { method: 'DELETE' }); },
+  updateQuestion(cid, qid, data) { return this.req('/api/courses/' + cid + '/questions/' + qid, { method: 'PUT', body: data }); },
   getAssignments() { return this.req('/api/assignments'); },
   getMyAssignments() { return this.req('/api/assignments/mine'); },
   createAssignment(data) { return this.req('/api/assignments', { method: 'POST', body: data }); },
+  getLastNumbers() { return this.req('/api/assignments/last-numbers'); },
   deleteAssignment(id) { return this.req('/api/assignments/' + id, { method: 'DELETE' }); },
   allowRetake(id) { return this.req('/api/assignments/' + id + '/allow-retake', { method: 'POST' }); },
   startTest(id) { return this.req('/api/assignments/' + id + '/start', { method: 'POST' }); },
-  submitTest(id, answers) { return this.req('/api/assignments/' + id + '/submit', { method: 'POST', body: { answers } }); },
+  submitTest(id, answers, focus_violations) { return this.req('/api/assignments/' + id + '/submit', { method: 'POST', body: { answers, focus_violations } }); },
   getSettings() { return this.req('/api/settings'); },
   saveSettings(data) { return this.req('/api/settings', { method: 'PUT', body: data }); }
 };
@@ -507,7 +509,11 @@ async function loadTabContent() {
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
         <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
           <h2 class="text-lg font-bold text-slate-900">${t('users_title')}</h2>
-          <button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${t('add_user')}</button>
+          <div class="flex gap-2">
+            <input type="file" id="importFile" accept=".xlsx,.xls" class="hidden" onchange="handleImportFile(this)">
+            <button onclick="document.getElementById('importFile').click()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">📥 ${t('import_excel')}</button>
+            <button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${t('add_user')}</button>
+          </div>
         </div>
         <div class="overflow-x-auto">
           <table class="min-w-full divide-y divide-slate-200 text-sm">
@@ -571,21 +577,63 @@ async function loadTabContent() {
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="coursesList"><div class="p-4 text-slate-400">Загрузка курсов...</div></div>
       </div>
       <div id="courseModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
-        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6">
+        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
           <h3 class="text-lg font-bold mb-4" id="courseModalTitle">Курс</h3>
           <form onsubmit="saveCourseForm(event)" class="space-y-3">
             <input type="hidden" id="courseId">
             <div><label class="text-xs font-semibold text-slate-600">Название (RU)</label><input id="cTitleRu" required class="w-full border p-2 rounded text-sm"></div>
             <div><label class="text-xs font-semibold text-slate-600">Название (KZ)</label><input id="cTitleKz" required class="w-full border p-2 rounded text-sm"></div>
+            <div><label class="text-xs font-semibold text-slate-600">Описание (RU)</label><textarea id="cDescRu" rows="2" class="w-full border p-2 rounded text-sm"></textarea></div>
+            <div><label class="text-xs font-semibold text-slate-600">Описание (KZ)</label><textarea id="cDescKz" rows="2" class="w-full border p-2 rounded text-sm"></textarea></div>
             <div class="grid grid-cols-3 gap-3">
               <div><label class="text-xs font-semibold text-slate-600">Время (мин)</label><input type="number" id="cTime" value="20" class="w-full border p-2 rounded text-sm"></div>
               <div><label class="text-xs font-semibold text-slate-600">Проходной (%)</label><input type="number" id="cPass" value="80" class="w-full border p-2 rounded text-sm"></div>
               <div><label class="text-xs font-semibold text-slate-600">Срок (мес)</label><input type="number" id="cValid" value="12" class="w-full border p-2 rounded text-sm"></div>
             </div>
             <div><label class="text-xs font-semibold text-slate-600">Видео URL</label><input id="cVideo" placeholder="https://youtube.com/..." class="w-full border p-2 rounded text-sm"></div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Методичка (PDF)</label>
+              <div class="flex items-center gap-2">
+                <input type="file" id="cMaterialFile" accept="application/pdf" class="w-full border p-2 rounded text-sm">
+                <button type="button" onclick="uploadCourseMaterial()" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить</button>
+              </div>
+              <div id="cMaterialStatus" class="text-xs text-slate-500 mt-1"></div>
+            </div>
             <div class="flex justify-end space-x-2 pt-3 border-t">
               <button type="button" onclick="document.getElementById('courseModal').classList.add('hidden')" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
               <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить</button>
+            </div>
+          </form>
+        </div>
+      </div>
+      <div id="questionsModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] flex flex-col">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="text-lg font-bold" id="questionsModalTitle">Вопросы курса</h3>
+            <button onclick="document.getElementById('questionsModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-700 text-xl leading-none">&times;</button>
+          </div>
+          <div id="questionsList" class="space-y-3 overflow-y-auto flex-1 mb-4"></div>
+          <form id="questionForm" onsubmit="saveQuestionForm(event)" class="border-t pt-4 space-y-2">
+            <input type="hidden" id="qId">
+            <div><label class="text-xs font-semibold text-slate-600">Вопрос (RU)</label><input id="qTextRu" required class="w-full border p-2 rounded text-sm"></div>
+            <div><label class="text-xs font-semibold text-slate-600">Вопрос (KZ)</label><input id="qTextKz" required class="w-full border p-2 rounded text-sm"></div>
+            <div class="grid grid-cols-2 gap-2">
+              <div class="space-y-1">
+                <label class="text-xs font-semibold text-slate-600">Варианты (RU), по одному в строке</label>
+                <textarea id="qOptsRu" rows="4" required class="w-full border p-2 rounded text-sm" placeholder="Вариант 1&#10;Вариант 2&#10;Вариант 3"></textarea>
+              </div>
+              <div class="space-y-1">
+                <label class="text-xs font-semibold text-slate-600">Варианты (KZ), по одному в строке</label>
+                <textarea id="qOptsKz" rows="4" required class="w-full border p-2 rounded text-sm" placeholder="Нұсқа 1&#10;Нұсқа 2&#10;Нұсқа 3"></textarea>
+              </div>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Номер правильного варианта (считая с 1, по порядку RU-списка)</label>
+              <input type="number" id="qCorrect" min="1" required class="w-32 border p-2 rounded text-sm">
+            </div>
+            <div class="flex justify-end space-x-2">
+              <button type="button" onclick="resetQuestionForm()" class="px-4 py-2 border rounded-lg text-sm">Очистить</button>
+              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить вопрос</button>
             </div>
           </form>
         </div>
@@ -667,20 +715,37 @@ async function loadTabContent() {
   }
 
   if (state.tab === 'settings') {
+    const isSuperadmin = state.user && state.user.role === 'superadmin';
     container.innerHTML = `
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-w-xl">
         <h2 class="text-lg font-bold text-slate-900 mb-4">${t('nav_settings')}</h2>
-        <form onsubmit="saveSettingsForm(event)" class="space-y-4">
-          <div>
-            <label class="text-xs font-semibold text-slate-600">Наименование организации (ТОО / АО)</label>
-            <input id="setComp" required class="w-full border p-2.5 rounded-lg text-sm">
+        ${!isSuperadmin ? `<div class="mb-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">Изменение настроек и фирменного бланка доступно только суперадминистратору.</div>` : ''}
+        <fieldset ${!isSuperadmin ? 'disabled' : ''}>
+          <form onsubmit="saveSettingsForm(event)" class="space-y-4">
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Наименование организации (ТОО / АО)</label>
+              <input id="setComp" required class="w-full border p-2.5 rounded-lg text-sm">
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Председатель комиссии (ФИО, должность)</label>
+              <input id="setChair" required class="w-full border p-2.5 rounded-lg text-sm">
+            </div>
+            <button type="submit" class="px-5 py-2.5 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить настройки</button>
+          </form>
+          <div class="border-t mt-6 pt-6 space-y-4">
+            <h3 class="text-sm font-bold text-slate-900">Фирменный бланк сертификата</h3>
+            ${['logo', 'stamp', 'signature'].map(kind => `
+              <div>
+                <label class="text-xs font-semibold text-slate-600">${t(kind + '_upload')}</label>
+                <div class="flex items-center gap-2">
+                  <input type="file" id="set_${kind}_file" accept="image/*" class="w-full border p-2 rounded-lg text-sm">
+                  <button type="button" onclick="uploadBrandingFile('${kind}')" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить</button>
+                </div>
+                <div id="set_${kind}_status" class="text-xs text-slate-500 mt-1"></div>
+              </div>
+            `).join('')}
           </div>
-          <div>
-            <label class="text-xs font-semibold text-slate-600">Председатель комиссии (ФИО, должность)</label>
-            <input id="setChair" required class="w-full border p-2.5 rounded-lg text-sm">
-          </div>
-          <button type="submit" class="px-5 py-2.5 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить настройки</button>
-        </form>
+        </fieldset>
       </div>
     `;
     loadSettingsData();
@@ -688,6 +753,24 @@ async function loadTabContent() {
 }
 
 // --- USERS LOGIC ---
+async function handleImportFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await api.req('/api/users/import', { method: 'POST', body: fd });
+    let msg = `Импортировано сотрудников: ${res.created}.`;
+    if (res.skipped) msg += ` Пропущено: ${res.skipped}.`;
+    if (res.errors && res.errors.length) msg += '\n\n' + res.errors.slice(0, 20).join('\n');
+    alert(msg);
+  } catch (e) {
+    alert('Ошибка импорта: ' + e.message);
+  }
+  input.value = '';
+  loadUsersList();
+}
+
 async function loadUsersList() {
   const allUsers = await api.getUsers();
   const users = allUsers.filter(u => u.role !== "superadmin");
@@ -778,41 +861,180 @@ async function loadCoursesList() {
           <h4 class="font-bold text-slate-900 text-base">${CURRENT_LANG === 'kz' ? c.title_kz : c.title_ru}</h4>
           <span class="text-xs font-semibold bg-blue-50 text-blue-700 px-2 py-0.5 rounded">${c.time_limit_minutes} мин | ${c.pass_score_percent}%</span>
         </div>
-        <p class="text-xs text-slate-500 mt-2">Вопросов в базе: ${c.questions_count || 0}</p>
+        <p class="text-xs text-slate-500 mt-2">Вопросов в базе: ${c.questions_count || 0}${c.material_pdf_path ? ' · методичка загружена' : ''}</p>
       </div>
       <div class="mt-4 pt-3 border-t flex justify-end space-x-3 text-xs font-semibold">
+        <button onclick="openQuestionsModal(${c.id})" class="text-emerald-600 hover:underline">Вопросы</button>
+        <button onclick="openCourseModal(${c.id})" class="text-blue-600 hover:underline">Изменить</button>
         <button onclick="delCourse(${c.id})" class="text-red-600 hover:underline">Удалить</button>
       </div>
     </div>
   `).join('');
 }
 
-function openCourseModal() {
-  document.getElementById('courseId').value = '';
-  document.getElementById('cTitleRu').value = '';
-  document.getElementById('cTitleKz').value = '';
-  document.getElementById('cVideo').value = '';
+async function openCourseModal(id) {
+  document.getElementById('cMaterialStatus').textContent = '';
+  document.getElementById('cMaterialFile').value = '';
+  if (id) {
+    const { course } = await api.getCourse(id);
+    document.getElementById('courseId').value = course.id;
+    document.getElementById('cTitleRu').value = course.title_ru || '';
+    document.getElementById('cTitleKz').value = course.title_kz || '';
+    document.getElementById('cDescRu').value = course.description_ru || '';
+    document.getElementById('cDescKz').value = course.description_kz || '';
+    document.getElementById('cTime').value = course.time_limit_minutes;
+    document.getElementById('cPass').value = course.pass_score_percent;
+    document.getElementById('cValid').value = course.validity_months;
+    document.getElementById('cVideo').value = course.video_url || '';
+    if (course.material_pdf_path) {
+      document.getElementById('cMaterialStatus').innerHTML = `Текущий файл: <a href="${course.material_pdf_path}" target="_blank" class="text-blue-600 underline">открыть</a>`;
+    }
+    document.getElementById('courseModalTitle').textContent = 'Редактировать курс';
+  } else {
+    document.getElementById('courseId').value = '';
+    document.getElementById('cTitleRu').value = '';
+    document.getElementById('cTitleKz').value = '';
+    document.getElementById('cDescRu').value = '';
+    document.getElementById('cDescKz').value = '';
+    document.getElementById('cTime').value = 20;
+    document.getElementById('cPass').value = 80;
+    document.getElementById('cValid').value = 12;
+    document.getElementById('cVideo').value = '';
+    document.getElementById('courseModalTitle').textContent = 'Новый курс';
+  }
   document.getElementById('courseModal').classList.remove('hidden');
 }
 
 async function saveCourseForm(e) {
   e.preventDefault();
+  const id = document.getElementById('courseId').value || undefined;
   const data = {
     title_ru: document.getElementById('cTitleRu').value.trim(),
     title_kz: document.getElementById('cTitleKz').value.trim(),
+    description_ru: document.getElementById('cDescRu').value.trim(),
+    description_kz: document.getElementById('cDescKz').value.trim(),
     time_limit_minutes: parseInt(document.getElementById('cTime').value) || 20,
     pass_score_percent: parseInt(document.getElementById('cPass').value) || 80,
     validity_months: parseInt(document.getElementById('cValid').value) || 12,
     video_url: document.getElementById('cVideo').value.trim()
   };
-  await api.saveCourse(data);
+  const saved = await api.saveCourse(data, id);
+  const courseId = id || saved.id;
+  const file = document.getElementById('cMaterialFile').files[0];
+  if (file) {
+    const fd = new FormData();
+    fd.append('file', file);
+    await api.req('/api/courses/' + courseId + '/material', { method: 'POST', body: fd });
+  }
   document.getElementById('courseModal').classList.add('hidden');
   loadCoursesList();
+}
+
+async function uploadCourseMaterial() {
+  const id = document.getElementById('courseId').value;
+  const file = document.getElementById('cMaterialFile').files[0];
+  if (!id) { alert('Сначала сохраните курс, затем загрузите методичку.'); return; }
+  if (!file) { alert('Выберите PDF-файл.'); return; }
+  const fd = new FormData();
+  fd.append('file', file);
+  const res = await api.req('/api/courses/' + id + '/material', { method: 'POST', body: fd });
+  document.getElementById('cMaterialStatus').innerHTML = `Загружено: <a href="${res.material_pdf_path}" target="_blank" class="text-blue-600 underline">открыть</a>`;
 }
 
 async function delCourse(id) {
   if (!confirm('Удалить курс?')) return;
   await api.deleteCourse(id);
+  loadCoursesList();
+}
+
+// --- QUESTIONS LOGIC ---
+let currentQuestionsCourseId = null;
+
+async function openQuestionsModal(courseId) {
+  currentQuestionsCourseId = courseId;
+  resetQuestionForm();
+  await loadQuestionsForCourse();
+  document.getElementById('questionsModal').classList.remove('hidden');
+}
+
+async function loadQuestionsForCourse() {
+  const { course, questions } = await api.getCourse(currentQuestionsCourseId);
+  document.getElementById('questionsModalTitle').textContent = 'Вопросы курса: ' + course.title_ru;
+  const div = document.getElementById('questionsList');
+  if (!questions.length) {
+    div.innerHTML = '<div class="text-sm text-slate-400">Вопросов пока нет. Добавьте первый ниже.</div>';
+    return;
+  }
+  div.innerHTML = questions.map((q, idx) => {
+    let opts = [];
+    try { opts = JSON.parse(q.options_ru); } catch (e) { opts = []; }
+    return `
+    <div class="border rounded-lg p-3 bg-slate-50">
+      <div class="flex justify-between items-start">
+        <div class="text-sm font-semibold text-slate-900">${idx + 1}. ${q.question_ru}</div>
+        <div class="space-x-2 text-xs font-semibold whitespace-nowrap">
+          <button onclick='editQuestionRow(${JSON.stringify(q).replace(/'/g, "&#39;")})' class="text-blue-600 hover:underline">Изменить</button>
+          <button onclick="deleteQuestionRow(${q.id})" class="text-red-600 hover:underline">Удалить</button>
+        </div>
+      </div>
+      <ul class="text-xs text-slate-600 mt-1 list-disc list-inside">
+        ${opts.map((o, i) => `<li class="${i === q.correct_index ? 'text-emerald-700 font-semibold' : ''}">${o}</li>`).join('')}
+      </ul>
+    </div>
+  `;
+  }).join('');
+}
+
+function resetQuestionForm() {
+  document.getElementById('qId').value = '';
+  document.getElementById('qTextRu').value = '';
+  document.getElementById('qTextKz').value = '';
+  document.getElementById('qOptsRu').value = '';
+  document.getElementById('qOptsKz').value = '';
+  document.getElementById('qCorrect').value = '';
+}
+
+function editQuestionRow(q) {
+  let optsRu = [], optsKz = [];
+  try { optsRu = JSON.parse(q.options_ru); } catch (e) {}
+  try { optsKz = JSON.parse(q.options_kz); } catch (e) {}
+  document.getElementById('qId').value = q.id;
+  document.getElementById('qTextRu').value = q.question_ru;
+  document.getElementById('qTextKz').value = q.question_kz;
+  document.getElementById('qOptsRu').value = optsRu.join('\n');
+  document.getElementById('qOptsKz').value = optsKz.join('\n');
+  document.getElementById('qCorrect').value = q.correct_index + 1;
+}
+
+async function saveQuestionForm(e) {
+  e.preventDefault();
+  const qid = document.getElementById('qId').value;
+  const optsRu = document.getElementById('qOptsRu').value.split('\n').map(s => s.trim()).filter(Boolean);
+  const optsKz = document.getElementById('qOptsKz').value.split('\n').map(s => s.trim()).filter(Boolean);
+  const correctPos = parseInt(document.getElementById('qCorrect').value, 10);
+  if (!optsRu.length || !optsKz.length) { alert('Укажите варианты ответа.'); return; }
+  if (!correctPos || correctPos < 1 || correctPos > optsRu.length) { alert('Номер правильного варианта вне диапазона списка RU.'); return; }
+  const data = {
+    question_ru: document.getElementById('qTextRu').value.trim(),
+    question_kz: document.getElementById('qTextKz').value.trim(),
+    options_ru: optsRu,
+    options_kz: optsKz,
+    correct_index: correctPos - 1
+  };
+  if (qid) {
+    await api.updateQuestion(currentQuestionsCourseId, qid, data);
+  } else {
+    await api.addQuestion(currentQuestionsCourseId, data);
+  }
+  resetQuestionForm();
+  await loadQuestionsForCourse();
+  loadCoursesList();
+}
+
+async function deleteQuestionRow(qid) {
+  if (!confirm('Удалить вопрос?')) return;
+  await api.deleteQuestion(currentQuestionsCourseId, qid);
+  await loadQuestionsForCourse();
   loadCoursesList();
 }
 
@@ -825,7 +1047,7 @@ async function loadAssignmentsList() {
   tbody.innerHTML = list.map(a => `
     <tr class="hover:bg-slate-50">
       <td class="px-4 py-3 font-medium">${a.last_name} ${a.first_name}<br><span class="text-xs text-slate-400">${a.position || ''}</span></td>
-      <td class="px-4 py-3">${CURRENT_LANG === 'kz' ? a.course_title_kz : a.course_title_ru}</td>
+      <td class="px-4 py-3">${CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru}</td>
       <td class="px-4 py-3 text-xs text-slate-600">№ ${a.protocol_number}<br>${a.protocol_date}</td>
       <td class="px-4 py-3">
         <span class="text-xs font-bold px-2 py-1 rounded ${a.status === 'passed' ? 'bg-emerald-100 text-emerald-800' : a.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}">
@@ -849,8 +1071,14 @@ async function openAssignModal() {
   const cSel = document.getElementById('asCourseId');
   uSel.innerHTML = users.filter(u => u.role === 'employee').map(u => `<option value="${u.id}">${u.last_name} ${u.first_name} (${u.login})</option>`).join('');
   cSel.innerHTML = courses.map(c => `<option value="${c.id}">${c.title_ru}</option>`).join('');
-  document.getElementById('asProtNum').value = '1';
   document.getElementById('asProtDate').value = new Date().toISOString().split('T')[0];
+  try {
+    const nums = await api.getLastNumbers();
+    const lastNum = parseInt(nums.last_protocol_number, 10);
+    document.getElementById('asProtNum').value = Number.isFinite(lastNum) ? String(lastNum + 1) : '1';
+  } catch (e) {
+    document.getElementById('asProtNum').value = '1';
+  }
   document.getElementById('assignModal').classList.remove('hidden');
 }
 
@@ -890,8 +1118,14 @@ async function loadMyTests() {
   div.innerHTML = list.map(a => `
     <div class="p-5 border border-slate-200 rounded-xl bg-white flex flex-wrap justify-between items-center gap-4">
       <div>
-        <h4 class="text-base font-bold text-slate-900">${CURRENT_LANG === 'kz' ? a.course_title_kz : a.course_title_ru}</h4>
+        <h4 class="text-base font-bold text-slate-900">${CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru}</h4>
         <p class="text-xs text-slate-500 mt-1">Протокол № ${a.protocol_number} от ${a.protocol_date}</p>
+        ${(a.material_pdf_path || a.video_url) ? `
+          <div class="mt-2 space-x-3 text-xs font-semibold">
+            ${a.material_pdf_path ? `<a href="${a.material_pdf_path}" target="_blank" class="text-blue-600 hover:underline">📄 Методичка (PDF)</a>` : ''}
+            ${a.video_url ? `<a href="${a.video_url}" target="_blank" class="text-blue-600 hover:underline">🎬 Видео</a>` : ''}
+          </div>
+        ` : ''}
       </div>
       <div class="flex items-center space-x-3">
         ${a.status === 'passed' ? `
@@ -900,7 +1134,7 @@ async function loadMyTests() {
         ` : a.status === 'failed' && !a.retake_allowed ? `
           <span class="text-xs font-bold text-red-700 bg-red-50 px-3 py-1.5 rounded-lg">Не сдано (${a.score_percent}%)</span>
         ` : `
-          <button onclick="runTest(${a.id}, '${CURRENT_LANG === 'kz' ? a.course_title_kz : a.course_title_ru}')" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-sm shadow">
+          <button onclick="runTest(${a.id}, '${(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru).replace(/'/g, "\\'")}', ${a.time_limit_minutes})" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-sm shadow">
             ${a.retake_allowed ? 'Пересдать тест' : 'Начать тестирование'}
           </button>
         `}
@@ -909,17 +1143,28 @@ async function loadMyTests() {
   `).join('');
 }
 
-async function runTest(assignmentId, title) {
+function parseOpts(raw) {
+  if (Array.isArray(raw)) return raw;
+  try { return JSON.parse(raw); } catch (e) { return []; }
+}
+
+function onTestVisibilityChange() {
+  if (document.hidden && state.activeTest) {
+    state.activeTest.violations = (state.activeTest.violations || 0) + 1;
+  }
+}
+
+async function runTest(assignmentId, title, timeLimitMinutes) {
   const data = await api.startTest(assignmentId);
-  state.activeTest = { id: assignmentId, questions: data.questions, answers: {} };
+  state.activeTest = { id: assignmentId, questions: data.questions, answers: {}, violations: 0 };
   document.getElementById('testRunTitle').textContent = title;
-  
+
   const qDiv = document.getElementById('testRunQuestions');
   qDiv.innerHTML = data.questions.map((q, idx) => `
     <div class="p-4 border rounded-xl bg-slate-50">
       <div class="font-bold text-slate-900 mb-3 text-sm">${idx + 1}. ${CURRENT_LANG === 'kz' ? q.question_kz : q.question_ru}</div>
       <div class="space-y-2">
-        ${(CURRENT_LANG === 'kz' ? q.options_kz : q.options_ru).map((opt, optIdx) => `
+        ${parseOpts(CURRENT_LANG === 'kz' ? q.options_kz : q.options_ru).map((opt, optIdx) => `
           <label class="flex items-center space-x-3 p-2 bg-white rounded-lg border hover:border-blue-400 cursor-pointer text-sm">
             <input type="radio" name="q_${q.id}" value="${optIdx}" onchange="state.activeTest.answers[${q.id}] = ${optIdx}" class="text-blue-600">
             <span>${opt}</span>
@@ -930,13 +1175,39 @@ async function runTest(assignmentId, title) {
   `).join('');
 
   document.getElementById('testRunModal').classList.remove('hidden');
+
+  // Anti-cheat: count tab switches / window blur while the test is open
+  document.addEventListener('visibilitychange', onTestVisibilityChange);
+
+  // Countdown timer — auto-submits when time runs out
+  const timerEl = document.getElementById('testRunTimer');
+  state.timeLeft = Math.max(1, parseInt(timeLimitMinutes, 10) || 20) * 60;
+  const renderTimer = () => {
+    const m = Math.floor(state.timeLeft / 60).toString().padStart(2, '0');
+    const s = (state.timeLeft % 60).toString().padStart(2, '0');
+    timerEl.textContent = `${m}:${s}`;
+  };
+  renderTimer();
+  clearInterval(state.testTimer);
+  state.testTimer = setInterval(() => {
+    state.timeLeft--;
+    renderTimer();
+    if (state.timeLeft <= 0) {
+      clearInterval(state.testTimer);
+      finishTest(true);
+    }
+  }, 1000);
 }
 
-async function finishTest() {
-  if (!confirm('Вы уверены, что хотите завершить тест?')) return;
-  const res = await api.submitTest(state.activeTest.id, state.activeTest.answers);
+async function finishTest(auto) {
+  if (!auto && !confirm('Вы уверены, что хотите завершить тест?')) return;
+  clearInterval(state.testTimer);
+  document.removeEventListener('visibilitychange', onTestVisibilityChange);
+  const res = await api.submitTest(state.activeTest.id, state.activeTest.answers, state.activeTest.violations || 0);
   document.getElementById('testRunModal').classList.add('hidden');
-  alert(res.passed ? `Поздравляем! Тест сдан (${res.score_percent}%)` : `К сожалению, тест не сдан (${res.score_percent}%)`);
+  const prefix = auto ? 'Время вышло. ' : '';
+  alert(res.passed ? `${prefix}Поздравляем! Тест сдан (${res.scorePercent}%)` : `${prefix}К сожалению, тест не сдан (${res.scorePercent}%)`);
+  state.activeTest = null;
   loadMyTests();
 }
 
@@ -945,6 +1216,13 @@ async function loadSettingsData() {
   const data = await api.getSettings();
   document.getElementById('setComp').value = data.company_name || '';
   document.getElementById('setChair').value = data.chairman_name || '';
+  const pathField = { logo: 'logo_path', stamp: 'stamp_path', signature: 'signature_path' };
+  ['logo', 'stamp', 'signature'].forEach(kind => {
+    const el = document.getElementById('set_' + kind + '_status');
+    if (el && data[pathField[kind]]) {
+      el.innerHTML = `Загружено: <a href="${data[pathField[kind]]}" target="_blank" class="text-blue-600 underline">открыть</a>`;
+    }
+  });
 }
 
 async function saveSettingsForm(e) {
@@ -954,6 +1232,17 @@ async function saveSettingsForm(e) {
     chairman_name: document.getElementById('setChair').value.trim()
   });
   alert('Настройки успешно сохранены!');
+}
+
+async function uploadBrandingFile(kind) {
+  const input = document.getElementById('set_' + kind + '_file');
+  const file = input.files[0];
+  if (!file) { alert('Выберите файл.'); return; }
+  const fd = new FormData();
+  fd.append('file', file);
+  const res = await api.req('/api/settings/' + kind, { method: 'POST', body: fd });
+  const pathField = { logo: 'logo_path', stamp: 'stamp_path', signature: 'signature_path' };
+  document.getElementById('set_' + kind + '_status').innerHTML = `Загружено: <a href="${res[pathField[kind]]}" target="_blank" class="text-blue-600 underline">открыть</a>`;
 }
 
 // Init app
