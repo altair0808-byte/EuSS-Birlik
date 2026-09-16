@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../db');
-const { authMiddleware, requireRole } = require('./auth');
+const { authRequired, requireRole } = require('./auth');
 
 const router = express.Router();
 
@@ -60,7 +60,7 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), (req, res) => 
   const { protocol_number, object, department, status, has_certificate } = req.query;
   let sql = `
     SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position, u.login,
-           c.title_ru, c.title_kz
+           c.title_ru, c.title_kz, c.pass_score_percent
     FROM assignments a
     JOIN users u ON u.id = a.user_id
     JOIN courses c ON c.id = a.course_id
@@ -77,60 +77,58 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), (req, res) => 
   res.json(rows);
 });
 
-// Employee starts test
+// Start test
 router.post('/:id/start', authRequired, (req, res) => {
-  const a = db.prepare('SELECT * FROM assignments WHERE id = ?').get(req.params.id);
+  const id = Number(req.params.id);
+  const a = db.prepare('SELECT * FROM assignments WHERE id = ?').get(id);
   if (!a) return res.status(404).json({ error: 'not_found' });
-  if (a.user_id !== req.user.id) return res.status(403).json({ error: 'forbidden' });
+  if (req.user.role === 'employee' && a.user_id !== req.user.id) return res.status(403).json({ error: 'forbidden' });
+  if (a.status === 'passed') return res.status(400).json({ error: 'already_passed' });
+  if (a.status === 'failed' && !a.retake_allowed) return res.status(400).json({ error: 'retake_not_allowed' });
 
-  if (a.status === 'passed') return res.status(409).json({ error: 'already_passed' });
-  if (a.status === 'failed' && !a.retake_allowed) return res.status(409).json({ error: 'retake_not_allowed' });
-  if (a.status === 'in_progress') {
-    // resume same attempt
-    return res.json({ ok: true, started_at: a.started_at || new Date().toISOString() });
-  }
-
-  const startedAt = new Date().toISOString();
-  db.prepare(`UPDATE assignments SET status='in_progress', attempts_used = attempts_used + 1, retake_allowed = 0 WHERE id = ?`)
-    .run(a.id);
-  res.json({ ok: true, started_at: startedAt });
+  db.prepare(`UPDATE assignments SET status = 'in_progress', attempts_used = attempts_used + 1, retake_allowed = 0 WHERE id = ?`).run(id);
+  res.json({ ok: true });
 });
 
-// Employee submits test
+// Submit test
 router.post('/:id/submit', authRequired, (req, res) => {
-  const a = db.prepare('SELECT * FROM assignments WHERE id = ?').get(req.params.id);
+  const id = Number(req.params.id);
+  const a = db.prepare('SELECT * FROM assignments WHERE id = ?').get(id);
   if (!a) return res.status(404).json({ error: 'not_found' });
-  if (a.user_id !== req.user.id) return res.status(403).json({ error: 'forbidden' });
-  if (a.status !== 'in_progress') return res.status(409).json({ error: 'not_in_progress' });
+  if (req.user.role === 'employee' && a.user_id !== req.user.id) return res.status(403).json({ error: 'forbidden' });
 
   const course = db.prepare('SELECT * FROM courses WHERE id = ?').get(a.course_id);
   const questions = db.prepare('SELECT * FROM questions WHERE course_id = ?').all(a.course_id);
+  const answers = req.body.answers || {}; // { questionId: chosenIndex }
+  const violations = Number(req.body.focus_violations || 0);
 
-  const { answers, violations, forced } = req.body; // answers: { [questionId]: selectedIndex }
-  let correct = 0;
+  let correctCount = 0;
   for (const q of questions) {
-    const sel = answers ? answers[q.id] : undefined;
-    if (sel !== undefined && Number(sel) === q.correct_index) correct++;
+    if (answers[q.id] !== undefined && Number(answers[q.id]) === q.correct_index) {
+      correctCount++;
+    }
   }
-  const total = questions.length || 1;
-  const scorePercent = Math.round((correct / total) * 100);
-  const isForced = !!forced || (Number(violations) || 0) > 3;
-  const finalScore = isForced ? 0 : scorePercent;
-  const passed = !isForced && finalScore >= (course.pass_score_percent || 80);
 
-  const testDate = new Date();
-  const nextDate = new Date(testDate);
-  nextDate.setMonth(nextDate.getMonth() + (course.validity_months || 12));
+  const scorePercent = questions.length ? Math.round((correctCount / questions.length) * 100) : 0;
+  const penalty = Math.min(violations * 2, 20); // 2% за нарушение, макс 20%
+  const finalScore = Math.max(0, scorePercent - penalty);
+  const passed = finalScore >= course.pass_score_percent;
 
-  let certificateNumber = a.certificate_number; // reuse if already had one (retake of previously certified course)
-  if (passed) {
-    // reuse existing certificate number for this user+course if one was ever issued, else assign next
+  let certificateNumber = a.certificate_number;
+  if (passed && !certificateNumber) {
     const prior = db.prepare(`
       SELECT certificate_number FROM assignments
       WHERE user_id = ? AND course_id = ? AND certificate_number IS NOT NULL AND id != ?
-      ORDER BY id DESC LIMIT 1`).get(a.user_id, a.course_id, a.id);
+      ORDER BY id DESC LIMIT 1
+    `).get(a.user_id, a.course_id, a.id);
     certificateNumber = prior ? prior.certificate_number : nextCertificateNumber();
   }
+
+  const now = new Date();
+  const testDate = now.toISOString().split('T')[0];
+  const nextDate = new Date(now);
+  nextDate.setMonth(nextDate.getMonth() + (course.validity_months || 12));
+  const nextTestDate = nextDate.toISOString().split('T')[0];
 
   db.prepare(`
     UPDATE assignments
@@ -140,38 +138,36 @@ router.post('/:id/submit', authRequired, (req, res) => {
   `).run(
     passed ? 'passed' : 'failed',
     finalScore,
-    Number(violations) || 0,
-    certificateNumber,
-    testDate.toISOString(),
-    passed ? nextDate.toISOString() : null,
-    a.id
+    violations,
+    passed ? certificateNumber : null,
+    testDate,
+    passed ? nextTestDate : null,
+    id
   );
 
   res.json({ passed, score_percent: finalScore, certificate_number: passed ? certificateNumber : null });
 });
 
-// Admin allows retake
+// Admin: allow retake
 router.post('/:id/allow-retake', authRequired, requireRole('admin', 'superadmin'), (req, res) => {
-  const a = db.prepare('SELECT * FROM assignments WHERE id = ?').get(req.params.id);
-  if (!a) return res.status(404).json({ error: 'not_found' });
-  db.prepare(`UPDATE assignments SET retake_allowed = 1, status = 'pending' WHERE id = ?`).run(a.id);
+  const id = Number(req.params.id);
+  db.prepare(`UPDATE assignments SET retake_allowed = 1, status = 'pending' WHERE id = ?`).run(id);
   res.json({ ok: true });
 });
 
-// Admin can edit protocol number/date
+// Admin: edit assignment
 router.put('/:id', authRequired, requireRole('admin', 'superadmin'), (req, res) => {
-  const { protocol_number, protocol_date } = req.body;
-  const fields = []; const params = [];
-  if (protocol_number !== undefined) { fields.push('protocol_number = ?'); params.push(protocol_number); }
-  if (protocol_date !== undefined) { fields.push('protocol_date = ?'); params.push(protocol_date); }
-  if (!fields.length) return res.json({ ok: true });
-  params.push(req.params.id);
-  db.prepare(`UPDATE assignments SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+  const id = Number(req.params.id);
+  const { protocol_number, protocol_date, certificate_number } = req.body;
+  db.prepare(`UPDATE assignments SET protocol_number = ?, protocol_date = ?, certificate_number = ? WHERE id = ?`)
+    .run(protocol_number, protocol_date, certificate_number || null, id);
   res.json({ ok: true });
 });
 
+// Admin: delete assignment
 router.delete('/:id', authRequired, requireRole('superadmin'), (req, res) => {
-  db.prepare('DELETE FROM assignments WHERE id = ?').run(req.params.id);
+  const id = Number(req.params.id);
+  db.prepare('DELETE FROM assignments WHERE id = ?').run(id);
   res.json({ ok: true });
 });
 
