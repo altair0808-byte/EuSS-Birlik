@@ -2,34 +2,51 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 
-require('./db'); // init DB + seed superadmin
+// Инициализация базы данных и создание суперадмина
+require('./db');
 
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: '5mb' }));
 
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use(cors());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Раздача статических файлов и загрузок
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+app.use('/uploads', express.static(uploadsDir));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Подключаем роуты прямо из текущей папки
-app.use('/api/auth', require('./auth'));
-app.use('/api/users', require('./users'));
-app.use('/api/courses', require('./courses'));
-app.use('/api/assignments', require('./assignments'));
-app.use('/api/settings', require('./settings'));
-app.use('/api/certificates', require('./certificate')); // имя файла certificate.js (без s)
-app.use('/api/export', require('./export'));
+// Подключение роутов из папки routes
+app.use('/api/auth', require('./routes/auth'));
+app.use('/api/users', require('./routes/users'));
+app.use('/api/courses', require('./routes/courses'));
+app.use('/api/assignments', require('./routes/assignments'));
+app.use('/api/settings', require('./routes/settings'));
 
-app.get('/', (req, res) => {
-  // Проверяем index.html в public или в корне
-  const fs = require('fs');
+// Проверка имени файла для сертификатов (certificate.js или certificates.js)
+const certRoute = fs.existsSync(path.join(__dirname, 'routes', 'certificate.js'))
+  ? './routes/certificate'
+  : './routes/certificates';
+app.use('/api/certificates', require(certRoute));
+
+app.use('/api/export', require('./routes/export'));
+
+// Отдача фронтенда (index.html)
+app.get('*', (req, res) => {
   const publicIndex = path.join(__dirname, 'public', 'index.html');
   const rootIndex = path.join(__dirname, 'index.html');
+
   if (fs.existsSync(publicIndex)) {
     res.sendFile(publicIndex);
-  } else {
+  } else if (fs.existsSync(rootIndex)) {
     res.sendFile(rootIndex);
+  } else {
+    res.status(404).send('index.html not found');
   }
 });
 
