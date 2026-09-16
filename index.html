@@ -1317,7 +1317,6 @@ function renderVariantQuestions() {
   const container = document.getElementById('questionsList');
   if (!container) return;
   const list = allCourseQuestions.filter(q => (q.variant_number || 1) === currentTestVariant);
-<button onclick="editQuestionById(${q.id})" class="text-blue-600 hover:underline">Изменить</button>
 
   if (!list.length) {
     container.innerHTML = '<div class="text-sm text-slate-400 py-4 text-center">В билете №' + currentTestVariant + ' пока нет вопросов. Добавьте первый ниже или загрузите тест из Excel.</div>';
