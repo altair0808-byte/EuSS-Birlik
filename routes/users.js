@@ -119,6 +119,23 @@ router.get('/meta/objects', authRequired, requireRole('admin', 'superadmin'), as
   }
 });
 
+// Get single user (профиль сотрудника) — должен быть после /meta/objects, чтобы не перехватывать его
+router.get('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+  try {
+    const result = await query(
+      `SELECT id, last_name, first_name, object, department, position, login, role, active, created_at
+       FROM users WHERE id = $1 AND role != 'superadmin'`,
+      [req.params.id]
+    );
+    const user = result.rows[0];
+    if (!user) return res.status(404).json({ error: 'not_found' });
+    res.json(user);
+  } catch (e) {
+    console.error('Error fetching user:', e);
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
 function validateRole(requesterRole, targetRole) {
   if (requesterRole === 'admin') return targetRole === 'employee';
   if (requesterRole === 'superadmin') return ['admin', 'employee'].includes(targetRole);

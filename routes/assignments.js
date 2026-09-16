@@ -69,7 +69,7 @@ router.get('/mine', authRequired, async (req, res) => {
 // List all assignments
 router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
-    const { status, user_id, course_id } = req.query;
+    const { status, user_id, course_id, object, department, q, date_from, date_to } = req.query;
     let sql = `
       SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position,
              c.title_ru, c.title_kz, c.pass_score_percent
@@ -82,9 +82,39 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, re
     if (status) { params.push(status); sql += ` AND a.status = $${params.length}`; }
     if (user_id) { params.push(user_id); sql += ` AND a.user_id = $${params.length}`; }
     if (course_id) { params.push(course_id); sql += ` AND a.course_id = $${params.length}`; }
+    if (object) { params.push(object); sql += ` AND u.object = $${params.length}`; }
+    if (department) { params.push(department); sql += ` AND u.department = $${params.length}`; }
+    if (q) {
+      params.push(`%${q}%`);
+      sql += ` AND (u.last_name ILIKE $${params.length} OR u.first_name ILIKE $${params.length} OR u.login ILIKE $${params.length})`;
+    }
+    // Дата прохождения теста (test_date) — используется для журнала по датам и календаря
+    if (date_from) { params.push(date_from); sql += ` AND a.test_date >= $${params.length}`; }
+    if (date_to) { params.push(date_to + 'T23:59:59.999Z'); sql += ` AND a.test_date <= $${params.length}`; }
     sql += ' ORDER BY a.created_at DESC';
 
     const result = await query(sql, params);
+    res.json(result.rows);
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
+// Assignments whose certificate is expiring soon (or already expired) — for admin dashboard widget
+router.get('/expiring', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+  try {
+    const days = Number(req.query.days) || 30;
+    const result = await query(`
+      SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position,
+             c.title_ru, c.title_kz
+      FROM assignments a
+      JOIN users u ON u.id = a.user_id
+      JOIN courses c ON c.id = a.course_id
+      WHERE a.status = 'passed'
+        AND a.next_test_date IS NOT NULL
+        AND a.next_test_date::timestamptz <= NOW() + ($1 || ' days')::interval
+      ORDER BY a.next_test_date::timestamptz ASC
+    `, [String(days)]);
     res.json(result.rows);
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
