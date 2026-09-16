@@ -14,7 +14,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Создаем папки для загрузок
-['materials', 'imports', 'logo', 'stamp', 'signature'].forEach(sub => {
+['materials', 'videos', 'imports', 'logo', 'stamp', 'signature'].forEach(sub => {
   fs.mkdirSync(path.join(__dirname, 'uploads', sub), { recursive: true });
 });
 

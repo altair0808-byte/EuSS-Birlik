@@ -73,7 +73,8 @@ async function initDb() {
       options_ru TEXT NOT NULL,
       options_kz TEXT NOT NULL,
       correct_index INT NOT NULL,
-      sort_order INT NOT NULL DEFAULT 0
+      sort_order INT NOT NULL DEFAULT 0,
+      variant_number INT NOT NULL DEFAULT 1
     );
 
     CREATE TABLE IF NOT EXISTS assignments (
@@ -104,6 +105,15 @@ async function initDb() {
     );
 
     INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+  `);
+
+  // Миграции для существующих баз данных (на случай, если таблицы были созданы
+  // более ранней версией схемы без этих колонок)
+  await pool.query(`
+    ALTER TABLE questions ADD COLUMN IF NOT EXISTS variant_number INT NOT NULL DEFAULT 1;
+    ALTER TABLE courses ADD COLUMN IF NOT EXISTS video_path TEXT;
+    ALTER TABLE assignments ADD COLUMN IF NOT EXISTS assigned_variant INT;
+    CREATE INDEX IF NOT EXISTS idx_questions_course_variant ON questions(course_id, variant_number);
   `);
 
   // Создание учетной записи суперадмина

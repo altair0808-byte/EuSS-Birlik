@@ -2,7 +2,8 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-function makeUploader(subdir) {
+// options: { maxSizeMB, fileFilter(req, file, cb) }
+function makeUploader(subdir, options = {}) {
   const dest = path.join(__dirname, '..', 'uploads', subdir);
   if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
   const storage = multer.diskStorage({
@@ -13,7 +14,12 @@ function makeUploader(subdir) {
       cb(null, name);
     }
   });
-  return multer({ storage, limits: { fileSize: 25 * 1024 * 1024 } });
+  const maxSizeMB = options.maxSizeMB || 25;
+  return multer({
+    storage,
+    limits: { fileSize: maxSizeMB * 1024 * 1024 },
+    fileFilter: options.fileFilter
+  });
 }
 
 module.exports = { makeUploader };

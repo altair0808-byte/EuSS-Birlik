@@ -363,7 +363,7 @@ const api = {
     }
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: 'Ошибка сервера' }));
-      throw new Error(err.error || 'Ошибка запроса');
+      throw new Error(err.message || err.error || 'Ошибка запроса');
     }
     const ct = res.headers.get('content-type');
     if (ct && ct.includes('application/json')) return res.json();
@@ -676,14 +676,23 @@ async function loadTabContent() {
               <div><label class="text-xs font-semibold text-slate-600">Проходной (%)</label><input type="number" id="cPass" value="80" class="w-full border p-2 rounded text-sm"></div>
               <div><label class="text-xs font-semibold text-slate-600">Срок (мес)</label><input type="number" id="cValid" value="12" class="w-full border p-2 rounded text-sm"></div>
             </div>
-            <div><label class="text-xs font-semibold text-slate-600">Видео URL</label><input id="cVideo" placeholder="https://youtube.com/..." class="w-full border p-2 rounded text-sm"></div>
-            <div>
-              <label class="text-xs font-semibold text-slate-600">Методичка (PDF)</label>
-              <div class="flex items-center gap-2">
-                <input type="file" id="cMaterialFile" accept="application/pdf" class="w-full border p-2 rounded text-sm">
+            <div class="border-t pt-3">
+              <label class="text-xs font-semibold text-slate-600">Материалы курса (презентация PPT/PPTX или PDF) — отдельный файл</label>
+              <div class="flex items-center gap-2 mt-1">
+                <input type="file" id="cMaterialFile" accept=".pdf,.ppt,.pptx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="w-full border p-2 rounded text-sm">
                 <button type="button" onclick="uploadCourseMaterial()" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить</button>
               </div>
               <div id="cMaterialStatus" class="text-xs text-slate-500 mt-1"></div>
+            </div>
+            <div class="border-t pt-3">
+              <label class="text-xs font-semibold text-slate-600">Видео курса (необязательно) — файл или ссылка</label>
+              <input id="cVideo" placeholder="https://youtube.com/..." class="w-full border p-2 rounded text-sm mt-1">
+              <div class="flex items-center gap-2 mt-2">
+                <input type="file" id="cVideoFile" accept="video/*,.mp4,.webm,.mov,.avi,.mkv" class="w-full border p-2 rounded text-sm">
+                <button type="button" onclick="uploadCourseVideo()" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить</button>
+              </div>
+              <div id="cVideoStatus" class="text-xs text-slate-500 mt-1"></div>
+              <p class="text-[11px] text-slate-400 mt-1">Видео может отсутствовать — курс можно сохранить без него.</p>
             </div>
             <div class="flex justify-end space-x-2 pt-3 border-t">
               <button type="button" onclick="document.getElementById('courseModal').classList.add('hidden')" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
@@ -693,29 +702,45 @@ async function loadTabContent() {
         </div>
       </div>
       <div id="questionsModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
-        <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] flex flex-col">
-          <div class="flex justify-between items-center mb-4">
-            <h3 class="text-lg font-bold" id="questionsModalTitle">Вопросы курса</h3>
+        <div class="bg-white rounded-xl shadow-2xl max-w-4xl w-full p-6 max-h-[90vh] flex flex-col">
+          <div class="flex justify-between items-center mb-3">
+            <h3 class="text-lg font-bold" id="questionsModalTitle">Тесты курса</h3>
             <button onclick="document.getElementById('questionsModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-700 text-xl leading-none">&times;</button>
           </div>
+
+          <div class="bg-slate-50 border rounded-lg p-3 mb-3">
+            <p class="text-xs font-semibold text-slate-700 mb-2">Автоматическая загрузка теста из Excel (10 вариантов по 10 вопросов, по 4 ответа)</p>
+            <div class="flex flex-wrap items-center gap-2">
+              <button type="button" onclick="downloadTestTemplate()" class="px-3 py-1.5 border rounded-lg text-xs font-semibold whitespace-nowrap">⬇ Скачать шаблон Excel</button>
+              <input type="file" id="testImportFile" accept=".xlsx" class="border p-1.5 rounded text-xs flex-1 min-w-[160px]">
+              <select id="testImportMode" class="border p-1.5 rounded text-xs">
+                <option value="replace">Заменить всю базу тестов</option>
+                <option value="append">Добавить к существующим</option>
+              </select>
+              <button type="button" onclick="importTestFile()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить тест</button>
+            </div>
+            <div id="testImportStatus" class="text-xs mt-2"></div>
+          </div>
+
+          <div id="variantTabs" class="flex flex-wrap gap-1.5 mb-3"></div>
+
           <div id="questionsList" class="space-y-3 overflow-y-auto flex-1 mb-4"></div>
+
           <form id="questionForm" onsubmit="saveQuestionForm(event)" class="border-t pt-4 space-y-2">
             <input type="hidden" id="qId">
+            <input type="hidden" id="qVariant" value="1">
+            <p class="text-xs font-semibold text-slate-500">Вопрос для билета (варианта) <span id="qVariantLabel">1</span></p>
             <div><label class="text-xs font-semibold text-slate-600">Вопрос (RU)</label><input id="qTextRu" required class="w-full border p-2 rounded text-sm"></div>
             <div><label class="text-xs font-semibold text-slate-600">Вопрос (KZ)</label><input id="qTextKz" required class="w-full border p-2 rounded text-sm"></div>
-            <div class="grid grid-cols-2 gap-2">
-              <div class="space-y-1">
-                <label class="text-xs font-semibold text-slate-600">Варианты (RU), по одному в строке</label>
-                <textarea id="qOptsRu" rows="4" required class="w-full border p-2 rounded text-sm" placeholder="Вариант 1&#10;Вариант 2&#10;Вариант 3"></textarea>
-              </div>
-              <div class="space-y-1">
-                <label class="text-xs font-semibold text-slate-600">Варианты (KZ), по одному в строке</label>
-                <textarea id="qOptsKz" rows="4" required class="w-full border p-2 rounded text-sm" placeholder="Нұсқа 1&#10;Нұсқа 2&#10;Нұсқа 3"></textarea>
-              </div>
-            </div>
-            <div>
-              <label class="text-xs font-semibold text-slate-600">Номер правильного варианта (считая с 1, по порядку RU-списка)</label>
-              <input type="number" id="qCorrect" min="1" required class="w-32 border p-2 rounded text-sm">
+            <div class="space-y-1.5">
+              <label class="text-xs font-semibold text-slate-600">Варианты ответа — отметьте ✓ правильный</label>
+              ${[0, 1, 2, 3].map(i => `
+                <div class="flex items-center gap-2 border rounded-lg p-2 bg-slate-50">
+                  <input type="radio" name="qCorrectRadio" value="${i}" id="qCorrectR${i}" ${i === 0 ? 'checked' : ''} class="w-4 h-4 accent-emerald-600 shrink-0" title="Отметить как правильный ответ">
+                  <input id="qOpt${i}Ru" placeholder="Ответ ${i + 1} (RU)" required class="flex-1 border p-2 rounded text-sm">
+                  <input id="qOpt${i}Kz" placeholder="Жауап ${i + 1} (KZ)" required class="flex-1 border p-2 rounded text-sm">
+                </div>
+              `).join('')}
             </div>
             <div class="flex justify-end space-x-2">
               <button type="button" onclick="resetQuestionForm()" class="px-4 py-2 border rounded-lg text-sm">Очистить</button>
@@ -1068,10 +1093,14 @@ async function loadCoursesList() {
           <h4 class="font-bold text-slate-900 text-base">${esc(CURRENT_LANG === 'kz' ? c.title_kz : c.title_ru)}</h4>
           <span class="text-xs font-semibold bg-blue-50 text-blue-700 px-2 py-0.5 rounded">${c.time_limit_minutes} мин | ${c.pass_score_percent}%</span>
         </div>
-        <p class="text-xs text-slate-500 mt-2">Вопросов в базе: ${c.questions_count || 0}${c.material_pdf_path ? ' · методичка загружена' : ''}</p>
+        <p class="text-xs text-slate-500 mt-2">Вопросов в базе: ${c.questions_count || 0}</p>
+        <div class="flex flex-wrap gap-1.5 mt-2">
+          ${c.material_pdf_path ? '<span class="text-[11px] font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">📄 материалы</span>' : '<span class="text-[11px] font-semibold bg-amber-50 text-amber-600 px-2 py-0.5 rounded">📄 нет материалов</span>'}
+          ${(c.video_path || c.video_url) ? '<span class="text-[11px] font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">🎬 видео</span>' : '<span class="text-[11px] font-semibold bg-slate-100 text-slate-400 px-2 py-0.5 rounded">видео не добавлено</span>'}
+        </div>
       </div>
       <div class="mt-4 pt-3 border-t flex justify-end space-x-3 text-xs font-semibold">
-        <button onclick="openQuestionsModal(${c.id})" class="text-emerald-600 hover:underline">Вопросы</button>
+        <button onclick="openTestsModal(${c.id})" class="text-emerald-600 hover:underline">Тесты</button>
         <button onclick="openCourseModal(${c.id})" class="text-blue-600 hover:underline">Изменить</button>
         <button onclick="delCourse(${c.id})" class="text-red-600 hover:underline">Удалить</button>
       </div>
@@ -1082,6 +1111,8 @@ async function loadCoursesList() {
 async function openCourseModal(id) {
   document.getElementById('cMaterialStatus').textContent = '';
   document.getElementById('cMaterialFile').value = '';
+  document.getElementById('cVideoStatus').textContent = '';
+  document.getElementById('cVideoFile').value = '';
   if (id) {
     const { course } = await api.getCourse(id);
     document.getElementById('courseId').value = course.id;
@@ -1093,9 +1124,8 @@ async function openCourseModal(id) {
     document.getElementById('cPass').value = course.pass_score_percent;
     document.getElementById('cValid').value = course.validity_months;
     document.getElementById('cVideo').value = course.video_url || '';
-    if (course.material_pdf_path) {
-      document.getElementById('cMaterialStatus').innerHTML = `Текущий файл: <a href="${course.material_pdf_path}" target="_blank" class="text-blue-600 underline">открыть</a>`;
-    }
+    renderMaterialStatus(course.material_pdf_path);
+    renderVideoStatus(course.video_path);
     document.getElementById('courseModalTitle').textContent = 'Редактировать курс';
   } else {
     document.getElementById('courseId').value = '';
@@ -1110,6 +1140,20 @@ async function openCourseModal(id) {
     document.getElementById('courseModalTitle').textContent = 'Новый курс';
   }
   document.getElementById('courseModal').classList.remove('hidden');
+}
+
+function renderMaterialStatus(path) {
+  const el = document.getElementById('cMaterialStatus');
+  el.innerHTML = path
+    ? `Текущий файл: <a href="${path}" target="_blank" class="text-blue-600 underline">открыть</a> · <button type="button" onclick="deleteCourseMaterial()" class="text-red-600 underline">удалить</button>`
+    : 'Материалы пока не загружены.';
+}
+
+function renderVideoStatus(path) {
+  const el = document.getElementById('cVideoStatus');
+  el.innerHTML = path
+    ? `Текущий видеофайл: <a href="${path}" target="_blank" class="text-blue-600 underline">открыть</a> · <button type="button" onclick="deleteCourseVideo()" class="text-red-600 underline">удалить</button>`
+    : 'Видеофайл не загружен (можно указать только ссылку выше или оставить пустым).';
 }
 
 async function saveCourseForm(e) {
@@ -1127,11 +1171,17 @@ async function saveCourseForm(e) {
   };
   const saved = await api.saveCourse(data, id);
   const courseId = id || saved.id;
-  const file = document.getElementById('cMaterialFile').files[0];
-  if (file) {
+  const materialFile = document.getElementById('cMaterialFile').files[0];
+  if (materialFile) {
     const fd = new FormData();
-    fd.append('file', file);
+    fd.append('file', materialFile);
     await api.req('/api/courses/' + courseId + '/material', { method: 'POST', body: fd });
+  }
+  const videoFile = document.getElementById('cVideoFile').files[0];
+  if (videoFile) {
+    const fd = new FormData();
+    fd.append('file', videoFile);
+    await api.req('/api/courses/' + courseId + '/video', { method: 'POST', body: fd });
   }
   document.getElementById('courseModal').classList.add('hidden');
   loadCoursesList();
@@ -1140,12 +1190,50 @@ async function saveCourseForm(e) {
 async function uploadCourseMaterial() {
   const id = document.getElementById('courseId').value;
   const file = document.getElementById('cMaterialFile').files[0];
-  if (!id) { alert('Сначала сохраните курс, затем загрузите методичку.'); return; }
-  if (!file) { alert('Выберите PDF-файл.'); return; }
-  const fd = new FormData();
-  fd.append('file', file);
-  const res = await api.req('/api/courses/' + id + '/material', { method: 'POST', body: fd });
-  document.getElementById('cMaterialStatus').innerHTML = `Загружено: <a href="${res.material_pdf_path}" target="_blank" class="text-blue-600 underline">открыть</a>`;
+  if (!id) { alert('Сначала сохраните курс, затем загрузите материалы.'); return; }
+  if (!file) { alert('Выберите файл (PDF, PPT или PPTX).'); return; }
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await api.req('/api/courses/' + id + '/material', { method: 'POST', body: fd });
+    renderMaterialStatus(res.material_pdf_path);
+    loadCoursesList();
+  } catch (e) {
+    alert('Не удалось загрузить файл: ' + e.message);
+  }
+}
+
+async function deleteCourseMaterial() {
+  const id = document.getElementById('courseId').value;
+  if (!id || !confirm('Удалить материалы курса?')) return;
+  await api.req('/api/courses/' + id + '/material', { method: 'DELETE' });
+  renderMaterialStatus(null);
+  loadCoursesList();
+}
+
+async function uploadCourseVideo() {
+  const id = document.getElementById('courseId').value;
+  const file = document.getElementById('cVideoFile').files[0];
+  if (!id) { alert('Сначала сохраните курс, затем загрузите видео.'); return; }
+  if (!file) { alert('Выберите видеофайл.'); return; }
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await api.req('/api/courses/' + id + '/video', { method: 'POST', body: fd });
+    renderVideoStatus(res.video_path);
+    loadCoursesList();
+  } catch (e) {
+    alert('Не удалось загрузить видео: ' + e.message);
+  }
+}
+
+async function deleteCourseVideo() {
+  const id = document.getElementById('courseId').value;
+  if (!id || !confirm('Удалить видео курса (файл и ссылку)?')) return;
+  await api.req('/api/courses/' + id + '/video', { method: 'DELETE' });
+  document.getElementById('cVideo').value = '';
+  renderVideoStatus(null);
+  loadCoursesList();
 }
 
 async function delCourse(id) {
@@ -1154,22 +1242,61 @@ async function delCourse(id) {
   loadCoursesList();
 }
 
-// --- QUESTIONS LOGIC ---
+// --- TESTS (QUESTIONS BY VARIANT) LOGIC ---
+// Тестовая база курса организована как до 10 вариантов (билетов) по 10 вопросов,
+// по 4 варианта ответа в каждом. Это позволяет выдавать сотрудникам разные билеты.
+const TEST_VARIANTS_COUNT = 10;
 let currentQuestionsCourseId = null;
+let currentTestVariant = 1;
+let allCourseQuestions = [];
 
-async function openQuestionsModal(courseId) {
+async function openTestsModal(courseId) {
   currentQuestionsCourseId = courseId;
+  currentTestVariant = 1;
   resetQuestionForm();
+  document.getElementById('testImportStatus').innerHTML = '';
+  document.getElementById('testImportFile').value = '';
   await loadQuestionsForCourse();
   document.getElementById('questionsModal').classList.remove('hidden');
 }
+// Сохраняем старое имя как алиас на случай, если где-то ещё осталась ссылка на него
+function openQuestionsModal(courseId) { return openTestsModal(courseId); }
 
 async function loadQuestionsForCourse() {
   const { course, questions } = await api.getCourse(currentQuestionsCourseId);
-  document.getElementById('questionsModalTitle').textContent = 'Вопросы курса: ' + course.title_ru;
+  document.getElementById('questionsModalTitle').textContent = 'Тесты курса: ' + course.title_ru;
+  allCourseQuestions = questions;
+  renderVariantTabs();
+  renderVariantQuestions();
+}
+
+function renderVariantTabs() {
+  const div = document.getElementById('variantTabs');
+  const counts = {};
+  allCourseQuestions.forEach(q => { counts[q.variant_number] = (counts[q.variant_number] || 0) + 1; });
+  div.innerHTML = Array.from({ length: TEST_VARIANTS_COUNT }, (_, i) => i + 1).map(v => {
+    const count = counts[v] || 0;
+    const complete = count >= 10;
+    const active = v === currentTestVariant;
+    const colorClasses = active
+      ? 'bg-blue-600 text-white'
+      : (complete ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-slate-100 text-slate-600 hover:bg-slate-200');
+    return `<button type="button" onclick="selectTestVariant(${v})" class="px-3 py-1.5 rounded-lg text-xs font-semibold ${colorClasses}">Билет ${v} (${count}/10)</button>`;
+  }).join('');
+}
+
+function selectTestVariant(v) {
+  currentTestVariant = v;
+  resetQuestionForm();
+  renderVariantTabs();
+  renderVariantQuestions();
+}
+
+function renderVariantQuestions() {
   const div = document.getElementById('questionsList');
+  const questions = allCourseQuestions.filter(q => q.variant_number === currentTestVariant);
   if (!questions.length) {
-    div.innerHTML = '<div class="text-sm text-slate-400">Вопросов пока нет. Добавьте первый ниже.</div>';
+    div.innerHTML = `<div class="text-sm text-slate-400">В билете ${currentTestVariant} пока нет вопросов. Добавьте первый ниже или загрузите тест из Excel.</div>`;
     return;
   }
   div.innerHTML = questions.map((q, idx) => {
@@ -1185,7 +1312,7 @@ async function loadQuestionsForCourse() {
         </div>
       </div>
       <ul class="text-xs text-slate-600 mt-1 list-disc list-inside">
-        ${opts.map((o, i) => `<li class="${i === q.correct_index ? 'text-emerald-700 font-semibold' : ''}">${esc(o)}</li>`).join('')}
+        ${opts.map((o, i) => `<li class="${i === q.correct_index ? 'text-emerald-700 font-semibold' : ''}">${esc(o)}${i === q.correct_index ? ' ✓' : ''}</li>`).join('')}
       </ul>
     </div>
   `;
@@ -1194,11 +1321,15 @@ async function loadQuestionsForCourse() {
 
 function resetQuestionForm() {
   document.getElementById('qId').value = '';
+  document.getElementById('qVariant').value = currentTestVariant;
+  document.getElementById('qVariantLabel').textContent = currentTestVariant;
   document.getElementById('qTextRu').value = '';
   document.getElementById('qTextKz').value = '';
-  document.getElementById('qOptsRu').value = '';
-  document.getElementById('qOptsKz').value = '';
-  document.getElementById('qCorrect').value = '';
+  for (let i = 0; i < 4; i++) {
+    document.getElementById('qOpt' + i + 'Ru').value = '';
+    document.getElementById('qOpt' + i + 'Kz').value = '';
+  }
+  document.getElementById('qCorrectR0').checked = true;
 }
 
 function editQuestionRow(q) {
@@ -1206,27 +1337,33 @@ function editQuestionRow(q) {
   try { optsRu = JSON.parse(q.options_ru); } catch (e) {}
   try { optsKz = JSON.parse(q.options_kz); } catch (e) {}
   document.getElementById('qId').value = q.id;
+  document.getElementById('qVariant').value = q.variant_number;
+  document.getElementById('qVariantLabel').textContent = q.variant_number;
   document.getElementById('qTextRu').value = q.question_ru;
   document.getElementById('qTextKz').value = q.question_kz;
-  document.getElementById('qOptsRu').value = optsRu.join('\n');
-  document.getElementById('qOptsKz').value = optsKz.join('\n');
-  document.getElementById('qCorrect').value = q.correct_index + 1;
+  for (let i = 0; i < 4; i++) {
+    document.getElementById('qOpt' + i + 'Ru').value = optsRu[i] || '';
+    document.getElementById('qOpt' + i + 'Kz').value = optsKz[i] || '';
+  }
+  const radio = document.getElementById('qCorrectR' + q.correct_index);
+  if (radio) radio.checked = true;
 }
 
 async function saveQuestionForm(e) {
   e.preventDefault();
   const qid = document.getElementById('qId').value;
-  const optsRu = document.getElementById('qOptsRu').value.split('\n').map(s => s.trim()).filter(Boolean);
-  const optsKz = document.getElementById('qOptsKz').value.split('\n').map(s => s.trim()).filter(Boolean);
-  const correctPos = parseInt(document.getElementById('qCorrect').value, 10);
-  if (!optsRu.length || !optsKz.length) { alert('Укажите варианты ответа.'); return; }
-  if (!correctPos || correctPos < 1 || correctPos > optsRu.length) { alert('Номер правильного варианта вне диапазона списка RU.'); return; }
+  const optsRu = [0, 1, 2, 3].map(i => document.getElementById('qOpt' + i + 'Ru').value.trim());
+  const optsKz = [0, 1, 2, 3].map(i => document.getElementById('qOpt' + i + 'Kz').value.trim());
+  if (optsRu.some(o => !o) || optsKz.some(o => !o)) { alert('Заполните все 4 варианта ответа на RU и KZ.'); return; }
+  const correctRadio = document.querySelector('input[name="qCorrectRadio"]:checked');
+  if (!correctRadio) { alert('Отметьте галочкой правильный вариант ответа.'); return; }
   const data = {
     question_ru: document.getElementById('qTextRu').value.trim(),
     question_kz: document.getElementById('qTextKz').value.trim(),
     options_ru: optsRu,
     options_kz: optsKz,
-    correct_index: correctPos - 1
+    correct_index: parseInt(correctRadio.value, 10),
+    variant_number: parseInt(document.getElementById('qVariant').value, 10) || currentTestVariant
   };
   if (qid) {
     await api.updateQuestion(currentQuestionsCourseId, qid, data);
@@ -1243,6 +1380,52 @@ async function deleteQuestionRow(qid) {
   await api.deleteQuestion(currentQuestionsCourseId, qid);
   await loadQuestionsForCourse();
   loadCoursesList();
+}
+
+// --- Автоматическая загрузка теста из Excel ---
+async function downloadTestTemplate() {
+  try {
+    const res = await api.req('/api/courses/questions-template.xlsx');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'test_template.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('Не удалось скачать шаблон: ' + e.message);
+  }
+}
+
+async function importTestFile() {
+  const fileInput = document.getElementById('testImportFile');
+  const file = fileInput.files[0];
+  const mode = document.getElementById('testImportMode').value;
+  const statusEl = document.getElementById('testImportStatus');
+  if (!file) { alert('Выберите файл Excel (.xlsx) для загрузки.'); return; }
+  if (mode === 'replace' && !confirm('Вся текущая база тестов этого курса будет удалена и заменена содержимым файла. Продолжить?')) return;
+
+  statusEl.innerHTML = '<span class="text-slate-500">Загрузка и проверка файла...</span>';
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await api.req('/api/courses/' + currentQuestionsCourseId + '/questions/import?mode=' + mode, { method: 'POST', body: fd });
+    let html = `<span class="text-emerald-700 font-semibold">Загружено вопросов: ${res.imported}</span>`;
+    if (res.skipped) {
+      html += `<div class="text-amber-600 mt-1">Пропущено строк: ${res.skipped}</div>`;
+      html += `<ul class="list-disc list-inside text-amber-600">${res.errors.slice(0, 15).map(e => `<li>${esc(e)}</li>`).join('')}</ul>`;
+      if (res.errors.length > 15) html += `<div class="text-amber-600">...и ещё ${res.errors.length - 15}</div>`;
+    }
+    statusEl.innerHTML = html;
+    fileInput.value = '';
+    await loadQuestionsForCourse();
+    loadCoursesList();
+  } catch (e) {
+    statusEl.innerHTML = `<span class="text-red-600">Ошибка загрузки: ${esc(e.message)}</span>`;
+  }
 }
 
 // --- ASSIGNMENTS LOGIC ---
@@ -1618,10 +1801,10 @@ async function loadMyTests() {
       <div>
         <h4 class="text-base font-bold text-slate-900">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</h4>
         <p class="text-xs text-slate-500 mt-1">Протокол № ${esc(a.protocol_number)} от ${esc(a.protocol_date)}</p>
-        ${(a.material_pdf_path || a.video_url) ? `
+        ${(a.material_pdf_path || a.video_url || a.video_path) ? `
           <div class="mt-2 space-x-3 text-xs font-semibold">
-            ${a.material_pdf_path ? `<a href="${a.material_pdf_path}" target="_blank" class="text-blue-600 hover:underline">📄 Методичка (PDF)</a>` : ''}
-            ${a.video_url ? `<a href="${a.video_url}" target="_blank" class="text-blue-600 hover:underline">🎬 Видео</a>` : ''}
+            ${a.material_pdf_path ? `<a href="${a.material_pdf_path}" target="_blank" class="text-blue-600 hover:underline">📄 Материалы курса</a>` : ''}
+            ${a.video_path ? `<a href="${a.video_path}" target="_blank" class="text-blue-600 hover:underline">🎬 Видео</a>` : (a.video_url ? `<a href="${a.video_url}" target="_blank" class="text-blue-600 hover:underline">🎬 Видео</a>` : '')}
           </div>
         ` : ''}
       </div>
