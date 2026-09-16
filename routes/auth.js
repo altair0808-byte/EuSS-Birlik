@@ -1,64 +1,88 @@
 const express = require('express');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const db = require('../db');
-require('dotenv').config();
-
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'tb-training-secret-key-2026';
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const { query } = require('../db');
 
-// Middleware: проверка авторизации по JWT токену
+const JWT_SECRET = process.env.JWT_SECRET || 'tb-training-secret-key-change-in-production';
+
 function authRequired(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'unauthorized', message: 'Токен отсутствует' });
-  }
-  const token = authHeader.split(' ')[1];
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded;
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'unauthorized', message: 'Токен отсутствует' });
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ error: 'forbidden', message: 'Недействительный токен' });
+    req.user = user;
     next();
-  } catch (err) {
-    return res.status(401).json({ error: 'invalid_token', message: 'Недействительный или просроченный токен' });
-  }
+  });
 }
 
-// Middleware: проверка роли пользователя
-function requireRole(...allowedRoles) {
+function requireRole(...roles) {
   return (req, res, next) => {
-    if (!req.user || !allowedRoles.includes(req.user.role)) {
-      return res.status(403).json({ error: 'forbidden', message: 'Недостаточно прав доступа' });
+    if (!req.user || !roles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'forbidden_role', message: 'Недостаточно прав' });
     }
     next();
   };
 }
 
-router.post('/login', (req, res) => {
+// POST /api/auth/login
+router.post('/login', async (req, res) => {
   const { login, password } = req.body;
-  if (!login || !password) return res.status(400).json({ error: 'missing_fields' });
+  if (!login || !password) {
+    return res.status(400).json({ error: 'missing_fields', message: 'Укажите логин и пароль' });
+  }
 
-  const user = db.prepare('SELECT * FROM users WHERE login = ? AND active = 1').get(login);
-  if (!user) return res.status(401).json({ error: 'invalid_credentials' });
+  try {
+    const result = await query('SELECT * FROM users WHERE login = $1 AND active = 1', [login]);
+    const user = result.rows[0];
 
-  const ok = bcrypt.compareSync(password, user.password_hash);
-  if (!ok) return res.status(401).json({ error: 'invalid_credentials' });
-
-  const token = jwt.sign(
-    { id: user.id, login: user.login, role: user.role, first_name: user.first_name, last_name: user.last_name },
-    JWT_SECRET,
-    { expiresIn: '12h' }
-  );
-
-  res.json({
-    token,
-    user: {
-      id: user.id, login: user.login, role: user.role,
-      first_name: user.first_name, last_name: user.last_name,
-      object: user.object, department: user.department, position: user.position
+    if (!user) {
+      return res.status(401).json({ error: 'invalid_credentials', message: 'Неверный логин или пароль' });
     }
-  });
+
+    const valid = bcrypt.compareSync(password, user.password_hash);
+    if (!valid) {
+      return res.status(401).json({ error: 'invalid_credentials', message: 'Неверный логин или пароль' });
+    }
+
+    const token = jwt.sign(
+      {
+        id: user.id,
+        login: user.login,
+        role: user.role,
+        last_name: user.last_name,
+        first_name: user.first_name,
+        object: user.object,
+        department: user.department,
+        position: user.position
+      },
+      JWT_SECRET,
+      { expiresIn: '12h' }
+    );
+
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        login: user.login,
+        role: user.role,
+        last_name: user.last_name,
+        first_name: user.first_name,
+        object: user.object,
+        department: user.department,
+        position: user.position
+      }
+    });
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'server_error', details: err.message });
+  }
 });
 
-module.exports = router;
-module.exports.authRequired = authRequired;
-module.exports.requireRole = requireRole;
+module.exports = {
+  router,
+  authRequired,
+  requireRole
+};
