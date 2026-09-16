@@ -386,6 +386,7 @@ const api = {
   getExpiring(days = 30) { return this.req('/api/assignments/expiring' + qs({ days })); },
   getMyAssignments() { return this.req('/api/assignments/mine'); },
   createAssignment(data) { return this.req('/api/assignments', { method: 'POST', body: data }); },
+  createAssignmentsBulk(data) { return this.req('/api/assignments/bulk', { method: 'POST', body: data }); },
   getLastNumbers() { return this.req('/api/assignments/last-numbers'); },
   deleteAssignment(id) { return this.req('/api/assignments/' + id, { method: 'DELETE' }); },
   allowRetake(id) { return this.req('/api/assignments/' + id + '/allow-retake', { method: 'POST' }); },
@@ -769,13 +770,9 @@ async function loadTabContent() {
         </div>
       </div>
       <div id="assignModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
-        <div class="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] flex flex-col">
           <h3 class="text-lg font-bold mb-4">Назначить тестирование</h3>
-          <form onsubmit="submitAssignForm(event)" class="space-y-3">
-            <div>
-              <label class="text-xs font-semibold text-slate-600">Сотрудник</label>
-              <select id="asUserId" required class="w-full border p-2 rounded text-sm"></select>
-            </div>
+          <form onsubmit="submitAssignForm(event)" class="space-y-3 overflow-y-auto flex-1 pr-1">
             <div>
               <label class="text-xs font-semibold text-slate-600">Курс</label>
               <select id="asCourseId" required class="w-full border p-2 rounded text-sm"></select>
@@ -784,7 +781,23 @@ async function loadTabContent() {
               <div><label class="text-xs font-semibold text-slate-600">Номер протокола</label><input id="asProtNum" required class="w-full border p-2 rounded text-sm"></div>
               <div><label class="text-xs font-semibold text-slate-600">Дата протокола</label><input type="date" id="asProtDate" required class="w-full border p-2 rounded text-sm"></div>
             </div>
-            <div class="flex justify-end space-x-2 pt-3 border-t">
+            <div class="text-[11px] text-slate-500 -mt-1">Один номер протокола будет присвоен всем выбранным ниже сотрудникам.</div>
+            <div class="border-t pt-3">
+              <div class="flex items-center justify-between mb-2">
+                <label class="text-xs font-semibold text-slate-600">Сотрудники <span id="asSelectedCount" class="text-blue-600 font-bold"></span></label>
+                <div class="space-x-2 text-xs">
+                  <button type="button" onclick="asSelectAll(true)" class="text-blue-600 hover:underline">Выбрать всех</button>
+                  <button type="button" onclick="asSelectAll(false)" class="text-slate-500 hover:underline">Снять всё</button>
+                </div>
+              </div>
+              <div class="grid grid-cols-2 gap-2 mb-2">
+                <input id="asFilterQ" type="text" placeholder="${t('search_placeholder')}" oninput="renderAssignEmployeeList()" class="border border-slate-300 rounded-lg px-2 py-1.5 text-xs col-span-2">
+                <select id="asFilterObject" onchange="renderAssignEmployeeList()" class="border border-slate-300 rounded-lg px-2 py-1.5 text-xs"><option value="">${t('all_objects')}</option></select>
+                <select id="asFilterDept" onchange="renderAssignEmployeeList()" class="border border-slate-300 rounded-lg px-2 py-1.5 text-xs"><option value="">${t('all_departments')}</option></select>
+              </div>
+              <div id="asEmployeeList" class="border rounded-lg divide-y max-h-52 overflow-y-auto"></div>
+            </div>
+            <div class="flex justify-end space-x-2 pt-3 border-t sticky bottom-0 bg-white">
               <button type="button" onclick="document.getElementById('assignModal').classList.add('hidden')" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
               <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Назначить</button>
             </div>
@@ -1295,14 +1308,25 @@ async function loadAssignmentsList() {
   populateAssignMetaFilters();
 }
 
+let asAllEmployees = [];
+let asSelectedIds = new Set();
+
 async function openAssignModal() {
   const [allUsers, courses] = await Promise.all([api.getUsers(), api.getCourses()]);
-  const users = allUsers.filter(u => u.role !== "superadmin");
-  const uSel = document.getElementById('asUserId');
+  asAllEmployees = allUsers.filter(u => u.role === 'employee');
+  asSelectedIds = new Set();
+
   const cSel = document.getElementById('asCourseId');
-  uSel.innerHTML = users.filter(u => u.role === 'employee').map(u => `<option value="${u.id}">${esc(u.last_name)} ${esc(u.first_name)} (${esc(u.login)})</option>`).join('');
   cSel.innerHTML = courses.map(c => `<option value="${c.id}">${esc(c.title_ru)}</option>`).join('');
-  document.getElementById('asProtDate').value = new Date().toISOString().split('T')[0];
+
+  // Фильтры по объекту/отделу для списка сотрудников
+  const objects = [...new Set(asAllEmployees.map(u => u.object).filter(Boolean))].sort();
+  const departments = [...new Set(asAllEmployees.map(u => u.department).filter(Boolean))].sort();
+  document.getElementById('asFilterObject').innerHTML = `<option value="">${t('all_objects')}</option>` + objects.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('');
+  document.getElementById('asFilterDept').innerHTML = `<option value="">${t('all_departments')}</option>` + departments.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('');
+  document.getElementById('asFilterQ').value = '';
+
+  document.getElementById('asProtDate').value = toLocalDateStr(new Date());
   try {
     const nums = await api.getLastNumbers();
     const lastNum = parseInt(nums.last_protocol_number, 10);
@@ -1310,19 +1334,85 @@ async function openAssignModal() {
   } catch (e) {
     document.getElementById('asProtNum').value = '1';
   }
+
+  renderAssignEmployeeList();
   document.getElementById('assignModal').classList.remove('hidden');
+}
+
+function renderAssignEmployeeList() {
+  const q = (document.getElementById('asFilterQ').value || '').toLowerCase();
+  const obj = document.getElementById('asFilterObject').value;
+  const dept = document.getElementById('asFilterDept').value;
+
+  const filtered = asAllEmployees.filter(u => {
+    if (obj && u.object !== obj) return false;
+    if (dept && u.department !== dept) return false;
+    if (q) {
+      const hay = `${u.last_name} ${u.first_name} ${u.login}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const div = document.getElementById('asEmployeeList');
+  if (!filtered.length) {
+    div.innerHTML = `<div class="p-3 text-xs text-slate-400 text-center">${t('no_data')}</div>`;
+  } else {
+    div.innerHTML = filtered.map(u => `
+      <label class="flex items-center gap-2 px-3 py-2 text-sm hover:bg-slate-50 cursor-pointer">
+        <input type="checkbox" value="${u.id}" ${asSelectedIds.has(u.id) ? 'checked' : ''} onchange="toggleAsEmployee(${u.id}, this.checked)" class="rounded text-blue-600">
+        <span class="flex-1">${esc(u.last_name)} ${esc(u.first_name)}</span>
+        <span class="text-xs text-slate-400">${esc(u.object || '—')}</span>
+      </label>
+    `).join('');
+  }
+  updateAsSelectedCount();
+}
+
+function toggleAsEmployee(id, checked) {
+  if (checked) asSelectedIds.add(id); else asSelectedIds.delete(id);
+  updateAsSelectedCount();
+}
+
+function asSelectAll(select) {
+  const q = (document.getElementById('asFilterQ').value || '').toLowerCase();
+  const obj = document.getElementById('asFilterObject').value;
+  const dept = document.getElementById('asFilterDept').value;
+  const filtered = asAllEmployees.filter(u => {
+    if (obj && u.object !== obj) return false;
+    if (dept && u.department !== dept) return false;
+    if (q) {
+      const hay = `${u.last_name} ${u.first_name} ${u.login}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  filtered.forEach(u => select ? asSelectedIds.add(u.id) : asSelectedIds.delete(u.id));
+  renderAssignEmployeeList();
+}
+
+function updateAsSelectedCount() {
+  const span = document.getElementById('asSelectedCount');
+  if (span) span.textContent = asSelectedIds.size ? `(${asSelectedIds.size})` : '';
 }
 
 async function submitAssignForm(e) {
   e.preventDefault();
+  if (asSelectedIds.size === 0) {
+    alert('Выберите хотя бы одного сотрудника.');
+    return;
+  }
   const data = {
-    user_id: document.getElementById('asUserId').value,
+    user_ids: [...asSelectedIds],
     course_id: document.getElementById('asCourseId').value,
     protocol_number: document.getElementById('asProtNum').value.trim(),
     protocol_date: document.getElementById('asProtDate').value
   };
-  await api.createAssignment(data);
+  const res = await api.createAssignmentsBulk(data);
   document.getElementById('assignModal').classList.add('hidden');
+  if (res.skipped) {
+    alert(`Назначено: ${res.created}. Пропущено (некорректный id): ${res.skipped}.`);
+  }
   loadAssignmentsList();
 }
 
