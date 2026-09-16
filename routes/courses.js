@@ -1,9 +1,9 @@
 const express = require('express');
-const db = require('../db');
-const { authMiddleware, requireRole } = require('./auth');
-const upload = require('../upload');
-
 const router = express.Router();
+const db = require('../db');
+const { authRequired, requireRole } = require('./auth');
+const { makeUploader } = require('../upload'); // <-- ДОБАВИТЬ ЭТУ СТРОКУ
+
 const uploadMaterial = makeUploader('materials');
 
 // List courses (all authenticated users can see titles; employees see only assigned ones via assignments endpoint)
