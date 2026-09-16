@@ -8,15 +8,16 @@ const { makeUploader } = require('../upload');
 
 const upload = makeUploader('imports');
 
-// List users (admin/superadmin only), with optional filters
+// List users (admin/superadmin only) — суперадмин скрыт из списка сотрудников
 router.get('/', authRequired, requireRole('admin', 'superadmin'), (req, res) => {
   const { object, department, role, q } = req.query;
+  // Всегда исключаем суперадмина из списка сотрудников
   let sql = `SELECT id, last_name, first_name, object, department, position, login, role, active, created_at
-             FROM users WHERE 1=1`;
+             FROM users WHERE role != 'superadmin'`;
   const params = [];
   if (object) { sql += ' AND object = ?'; params.push(object); }
   if (department) { sql += ' AND department = ?'; params.push(department); }
-  if (role) { sql += ' AND role = ?'; params.push(role); }
+  if (role && role !== 'superadmin') { sql += ' AND role = ?'; params.push(role); }
   if (q) {
     sql += ' AND (last_name LIKE ? OR first_name LIKE ? OR login LIKE ?)';
     params.push(`%${q}%`, `%${q}%`, `%${q}%`);
@@ -28,14 +29,16 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), (req, res) => 
 
 // Distinct objects/departments (for filters/dropdowns)
 router.get('/meta/objects', authRequired, requireRole('admin', 'superadmin'), (req, res) => {
-  const objects = db.prepare(`SELECT DISTINCT object FROM users WHERE object != '' ORDER BY object`).all().map(r => r.object);
-  const departments = db.prepare(`SELECT DISTINCT department FROM users WHERE department != '' ORDER BY department`).all().map(r => r.department);
+  const objects = db.prepare(`SELECT DISTINCT object FROM users WHERE object != '' AND role != 'superadmin' ORDER BY object`).all().map(r => r.object);
+  const departments = db.prepare(`SELECT DISTINCT department FROM users WHERE department != '' AND role != 'superadmin' ORDER BY department`).all().map(r => r.department);
   res.json({ objects, departments });
 });
 
 function validateRole(requesterRole, targetRole) {
-  if (requesterRole === 'superadmin') return true;
-  if (requesterRole === 'admin' && targetRole === 'employee') return true;
+  // Админ может создавать ТОЛЬКО сотрудников
+  if (requesterRole === 'admin') return targetRole === 'employee';
+  // Суперадмин может создавать админов или сотрудников
+  if (requesterRole === 'superadmin') return ['admin', 'employee'].includes(targetRole);
   return false;
 }
 
@@ -43,10 +46,17 @@ function validateRole(requesterRole, targetRole) {
 router.post('/', authRequired, requireRole('admin', 'superadmin'), (req, res) => {
   const { last_name, first_name, object, department, position, login, password, role } = req.body;
   const targetRole = role || 'employee';
-  if (!validateRole(req.user.role, targetRole)) return res.status(403).json({ error: 'forbidden_role' });
-  if (!last_name || !first_name || !login || !password) return res.status(400).json({ error: 'missing_fields' });
+
+  if (!validateRole(req.user.role, targetRole)) {
+    return res.status(403).json({ error: 'forbidden_role', message: 'Недостаточно прав для назначения данной роли' });
+  }
+  if (!last_name || !first_name || !login || !password) {
+    return res.status(400).json({ error: 'missing_fields' });
+  }
+
   const exists = db.prepare('SELECT id FROM users WHERE login = ?').get(login);
   if (exists) return res.status(409).json({ error: 'login_taken' });
+
   const hash = bcrypt.hashSync(String(password), 10);
   const info = db.prepare(`INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -59,18 +69,44 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), (req, res) 
   const id = Number(req.params.id);
   const target = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
   if (!target) return res.status(404).json({ error: 'not_found' });
-  if (req.user.role === 'admin' && target.role !== 'employee') return res.status(403).json({ error: 'forbidden' });
-  const { last_name, first_name, object, department, position, login, password, active } = req.body;
+
+  // Админ не может редактировать других админов и суперадмина
+  if (req.user.role === 'admin' && target.role !== 'employee') {
+    return res.status(403).json({ error: 'forbidden', message: 'Администратор может редактировать только обычных сотрудников' });
+  }
+
+  const { last_name, first_name, object, department, position, login, password, active, role } = req.body;
   const fields = [];
   const params = [];
+
+  // Проверка изменения роли
+  if (role !== undefined) {
+    if (req.user.role === 'admin' && role !== 'employee') {
+      return res.status(403).json({ error: 'forbidden_role', message: 'Администратор не может назначать статус администратора или суперадминистратора' });
+    }
+    if (req.user.role === 'superadmin') {
+      if (!['admin', 'employee'].includes(role)) {
+        return res.status(400).json({ error: 'invalid_role', message: 'Допустимые роли: admin, employee' });
+      }
+      fields.push('role = ?');
+      params.push(role);
+    }
+  }
+
   if (last_name !== undefined) { fields.push('last_name = ?'); params.push(last_name); }
   if (first_name !== undefined) { fields.push('first_name = ?'); params.push(first_name); }
   if (object !== undefined) { fields.push('object = ?'); params.push(object); }
   if (department !== undefined) { fields.push('department = ?'); params.push(department); }
   if (position !== undefined) { fields.push('position = ?'); params.push(position); }
-  if (login !== undefined) { fields.push('login = ?'); params.push(login); }
+  if (login !== undefined) {
+    const existing = db.prepare('SELECT id FROM users WHERE login = ? AND id != ?').get(login, id);
+    if (existing) return res.status(409).json({ error: 'login_taken' });
+    fields.push('login = ?');
+    params.push(login);
+  }
   if (active !== undefined) { fields.push('active = ?'); params.push(active ? 1 : 0); }
   if (password) { fields.push('password_hash = ?'); params.push(bcrypt.hashSync(String(password), 10)); }
+
   if (fields.length === 0) return res.json({ ok: true });
   params.push(id);
   db.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).run(...params);
@@ -82,8 +118,12 @@ router.delete('/:id', authRequired, requireRole('admin', 'superadmin'), (req, re
   const id = Number(req.params.id);
   const target = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
   if (!target) return res.status(404).json({ error: 'not_found' });
-  if (req.user.role === 'admin' && target.role !== 'employee') return res.status(403).json({ error: 'forbidden' });
-  if (target.role === 'superadmin') return res.status(403).json({ error: 'cannot_delete_superadmin' });
+  if (req.user.role === 'admin' && target.role !== 'employee') {
+    return res.status(403).json({ error: 'forbidden', message: 'Администратор может удалять только обычных сотрудников' });
+  }
+  if (target.role === 'superadmin') {
+    return res.status(403).json({ error: 'cannot_delete_superadmin', message: 'Нельзя удалить суперадминистратора' });
+  }
   db.prepare('DELETE FROM users WHERE id = ?').run(id);
   res.json({ ok: true });
 });
@@ -93,10 +133,17 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
   if (!req.file) return res.status(400).json({ error: 'no_file' });
   try {
     const wb = new ExcelJS.Workbook();
-    await wb.xlsx.readFile(req.file.path);
+    await wb.xlsx.load(req.file.buffer);
     const ws = wb.worksheets[0];
-    const headerRow = ws.getRow(1).values.map(v => (v || '').toString().trim().toLowerCase());
-    const colIndex = (names) => headerRow.findIndex(h => names.includes(h));
+    if (!ws) return res.status(400).json({ error: 'empty_workbook' });
+
+    const headerRow = ws.getRow(1);
+    const headers = [];
+    headerRow.eachCell((cell, colNum) => {
+      headers[colNum - 1] = (cell.value || '').toString().trim().toLowerCase();
+    });
+
+    const colIndex = (names) => headers.findIndex(h => h && names.some(n => h.includes(n)));
     const idx = {
       last_name: colIndex(['фамилия']),
       first_name: colIndex(['имя']),
@@ -114,24 +161,40 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
     const insertStmt = db.prepare(`INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role)
                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
     const updateStmt = db.prepare(`UPDATE users SET last_name=?, first_name=?, object=?, department=?, position=?, password_hash=? WHERE login=?`);
-    const findStmt = db.prepare('SELECT id FROM users WHERE login = ?');
+    const findStmt = db.prepare('SELECT id, role FROM users WHERE login = ?');
     const rows = ws.getRows(2, ws.rowCount - 1) || [];
+
     const tx = db.transaction(() => {
       for (const row of rows) {
-        const vals = row.values;
+        const vals = [];
+        row.eachCell({ includeEmpty: true }, (c, col) => { vals[col - 1] = c.value; });
         const last_name = (vals[idx.last_name] || '').toString().trim();
         const first_name = (vals[idx.first_name] || '').toString().trim();
-        if (!last_name || !first_name) continue;
+        if (!last_name && !first_name) continue;
         const object = idx.object >= 0 ? (vals[idx.object] || '').toString().trim() : '';
         const department = idx.department >= 0 ? (vals[idx.department] || '').toString().trim() : '';
         const position = idx.position >= 0 ? (vals[idx.position] || '').toString().trim() : '';
         const login = (vals[idx.login] || '').toString().trim();
         const password = (vals[idx.password] || '').toString().trim();
-        const role = idx.role >= 0 ? ((vals[idx.role] || '').toString().trim().toLowerCase() || 'employee') : 'employee';
-        const safeRole = ['admin', 'employee'].includes(role) ? role : 'employee';
+        const rawRole = idx.role >= 0 ? ((vals[idx.role] || '').toString().trim().toLowerCase() || 'employee') : 'employee';
+
+        // Админ через импорт может создавать ТОЛЬКО сотрудников
+        let safeRole = 'employee';
+        if (req.user.role === 'superadmin' && rawRole === 'admin') {
+          safeRole = 'admin';
+        }
+
         if (!login || !password) { errors.push(`${last_name} ${first_name}: нет логина/пароля`); continue; }
-        if (req.user.role === 'admin' && safeRole !== 'employee') { errors.push(`${last_name} ${first_name}: недостаточно прав для роли ${safeRole}`); continue; }
         const existing = findStmt.get(login);
+        if (existing && existing.role === 'superadmin') {
+          errors.push(`${login}: аккаунт суперадминистратора нельзя перезаписать через импорт`);
+          continue;
+        }
+        if (existing && req.user.role === 'admin' && existing.role !== 'employee') {
+          errors.push(`${login}: администратор не может менять данные администратора`);
+          continue;
+        }
+
         const hash = bcrypt.hashSync(password, 10);
         if (existing) {
           updateStmt.run(last_name, first_name, object, department, position, hash, login);
@@ -145,8 +208,8 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
     tx();
     res.json({ created, updated, errors });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'import_failed', message: e.message });
+    console.error('Import error:', e);
+    res.status(500).json({ error: 'import_failed', details: e.message });
   }
 });
 
