@@ -1305,13 +1305,17 @@ function renderVariantQuestions() {
   }
   div.innerHTML = questions.map((q, idx) => {
     let opts = [];
-    try { opts = JSON.parse(q.options_ru); } catch (e) { opts = []; }
+    if (Array.isArray(q.options_ru)) {
+      opts = q.options_ru;
+    } else {
+      try { opts = JSON.parse(q.options_ru || '[]'); } catch (e) { opts = []; }
+    }
     return `
     <div class="border rounded-lg p-3 bg-slate-50">
       <div class="flex justify-between items-start">
         <div class="text-sm font-semibold text-slate-900">${idx + 1}. ${esc(q.question_ru)}</div>
         <div class="space-x-2 text-xs font-semibold whitespace-nowrap">
-          <button onclick='editQuestionRow(${JSON.stringify(q).replace(/'/g, "&#39;")})' class="text-blue-600 hover:underline">Изменить</button>
+          <button onclick="editQuestionById(${q.id})" class="text-blue-600 hover:underline">Изменить</button>
           <button onclick="deleteQuestionRow(${q.id})" class="text-red-600 hover:underline">Удалить</button>
         </div>
       </div>
@@ -1330,28 +1334,50 @@ function resetQuestionForm() {
   document.getElementById('qTextRu').value = '';
   document.getElementById('qTextKz').value = '';
   for (let i = 0; i < 4; i++) {
-    document.getElementById('qOpt' + i + 'Ru').value = '';
-    document.getElementById('qOpt' + i + 'Kz').value = '';
+    const elRu = document.getElementById('qOpt' + i + 'Ru');
+    const elKz = document.getElementById('qOpt' + i + 'Kz');
+    if (elRu) elRu.value = '';
+    if (elKz) elKz.value = '';
   }
-  document.getElementById('qCorrectR0').checked = true;
+  const r0 = document.getElementById('qCorrectR0');
+  if (r0) r0.checked = true;
 }
 
-function editQuestionRow(q) {
-  let optsRu = [], optsKz = [];
-  try { optsRu = JSON.parse(q.options_ru); } catch (e) {}
-  try { optsKz = JSON.parse(q.options_kz); } catch (e) {}
+function editQuestionById(id) {
+  const q = allCourseQuestions.find(x => x.id === id);
+  if (!q) return;
+
+  let optsRu = Array.isArray(q.options_ru) ? q.options_ru : [];
+  let optsKz = Array.isArray(q.options_kz) ? q.options_kz : [];
+  if (!optsRu.length) {
+    try { optsRu = JSON.parse(q.options_ru || '[]'); } catch (e) {}
+  }
+  if (!optsKz.length) {
+    try { optsKz = JSON.parse(q.options_kz || '[]'); } catch (e) {}
+  }
+
   document.getElementById('qId').value = q.id;
-  document.getElementById('qVariant').value = q.variant_number;
-  document.getElementById('qVariantLabel').textContent = q.variant_number;
-  document.getElementById('qTextRu').value = q.question_ru;
-  document.getElementById('qTextKz').value = q.question_kz;
+  document.getElementById('qVariant').value = q.variant_number || currentTestVariant;
+  document.getElementById('qVariantLabel').textContent = q.variant_number || currentTestVariant;
+  document.getElementById('qTextRu').value = q.question_ru || '';
+  document.getElementById('qTextKz').value = q.question_kz || '';
   for (let i = 0; i < 4; i++) {
-    document.getElementById('qOpt' + i + 'Ru').value = optsRu[i] || '';
-    document.getElementById('qOpt' + i + 'Kz').value = optsKz[i] || '';
+    const elRu = document.getElementById('qOpt' + i + 'Ru');
+    const elKz = document.getElementById('qOpt' + i + 'Kz');
+    if (elRu) elRu.value = optsRu[i] || '';
+    if (elKz) elKz.value = optsKz[i] || '';
   }
   const radio = document.getElementById('qCorrectR' + q.correct_index);
   if (radio) radio.checked = true;
+
+  const form = document.getElementById('questionForm');
+  if (form) form.scrollIntoView({ behavior: 'smooth' });
 }
+
+function editQuestionRow(q) {
+  if (q && q.id) editQuestionById(q.id);
+}
+
 
 async function saveQuestionForm(e) {
   e.preventDefault();
