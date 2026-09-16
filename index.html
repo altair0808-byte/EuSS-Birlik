@@ -726,7 +726,7 @@ async function loadTabContent() {
 
           <div id="questionsList" class="space-y-3 overflow-y-auto flex-1 mb-4"></div>
 
-          <form id="questionForm" onsubmit="saveQuestionForm(event)" class="border-t pt-4 space-y-2">
+          <form id="questionForm" onsubmit="saveQuestionForm(event)" novalidate class="border-t pt-4 space-y-2">
             <input type="hidden" id="qId">
             <input type="hidden" id="qVariant" value="1">
             <p class="text-xs font-semibold text-slate-500">Вопрос для билета (варианта) <span id="qVariantLabel">1</span></p>
