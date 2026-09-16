@@ -1,56 +1,47 @@
-require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+require('dotenv').config();
 
-// Инициализация базы данных и создание суперадмина
-require('./db');
+const { initDb } = require('./db');
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// Раздача статических файлов и загрузок
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-app.use('/uploads', express.static(uploadsDir));
-app.use(express.static(path.join(__dirname, 'public')));
+// Создаем папки для загрузок
+['materials', 'imports', 'logo', 'stamp', 'signature'].forEach(sub => {
+  fs.mkdirSync(path.join(__dirname, 'uploads', sub), { recursive: true });
+});
 
-// Подключение роутов из папки routes
-app.use('/api/auth', require('./routes/auth'));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use(express.static(path.join(__dirname)));
+
+// Подключение роутов
+const { router: authRouter } = require('./routes/auth');
+app.use('/api/auth', authRouter);
 app.use('/api/users', require('./routes/users'));
 app.use('/api/courses', require('./routes/courses'));
 app.use('/api/assignments', require('./routes/assignments'));
 app.use('/api/settings', require('./routes/settings'));
-
-// Проверка имени файла для сертификатов (certificate.js или certificates.js)
-const certRoute = fs.existsSync(path.join(__dirname, 'routes', 'certificate.js'))
-  ? './routes/certificate'
-  : './routes/certificates';
-app.use('/api/certificates', require(certRoute));
-
 app.use('/api/export', require('./routes/export'));
 
-// Отдача фронтенда (index.html)
 app.get('*', (req, res) => {
-  const publicIndex = path.join(__dirname, 'public', 'index.html');
-  const rootIndex = path.join(__dirname, 'index.html');
-
-  if (fs.existsSync(publicIndex)) {
-    res.sendFile(publicIndex);
-  } else if (fs.existsSync(rootIndex)) {
-    res.sendFile(rootIndex);
-  } else {
-    res.status(404).send('index.html not found');
-  }
+  res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ TB Training Platform запущен на порту ${PORT}`);
-});
+// Запуск после подключения и проверки таблиц в Supabase
+initDb()
+  .then(() => {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`✅ TB Training Platform запущен на порту ${PORT} (база данных Supabase)`);
+    });
+  })
+  .catch(err => {
+    console.error('Ошибка подключения к базе данных Supabase:', err);
+    process.exit(1);
+  });
