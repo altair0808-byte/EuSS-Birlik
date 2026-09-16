@@ -1113,33 +1113,37 @@ async function openCourseModal(id) {
   document.getElementById('cMaterialFile').value = '';
   document.getElementById('cVideoStatus').textContent = '';
   document.getElementById('cVideoFile').value = '';
-  if (id) {
-    const { course } = await api.getCourse(id);
-    document.getElementById('courseId').value = course.id;
-    document.getElementById('cTitleRu').value = course.title_ru || '';
-    document.getElementById('cTitleKz').value = course.title_kz || '';
-    document.getElementById('cDescRu').value = course.description_ru || '';
-    document.getElementById('cDescKz').value = course.description_kz || '';
-    document.getElementById('cTime').value = course.time_limit_minutes;
-    document.getElementById('cPass').value = course.pass_score_percent;
-    document.getElementById('cValid').value = course.validity_months;
-    document.getElementById('cVideo').value = course.video_url || '';
-    renderMaterialStatus(course.material_pdf_path);
-    renderVideoStatus(course.video_path);
-    document.getElementById('courseModalTitle').textContent = 'Редактировать курс';
-  } else {
-    document.getElementById('courseId').value = '';
-    document.getElementById('cTitleRu').value = '';
-    document.getElementById('cTitleKz').value = '';
-    document.getElementById('cDescRu').value = '';
-    document.getElementById('cDescKz').value = '';
-    document.getElementById('cTime').value = 20;
-    document.getElementById('cPass').value = 80;
-    document.getElementById('cValid').value = 12;
-    document.getElementById('cVideo').value = '';
-    document.getElementById('courseModalTitle').textContent = 'Новый курс';
+  try {
+    if (id) {
+      const { course } = await api.getCourse(id);
+      document.getElementById('courseId').value = course.id;
+      document.getElementById('cTitleRu').value = course.title_ru || '';
+      document.getElementById('cTitleKz').value = course.title_kz || '';
+      document.getElementById('cDescRu').value = course.description_ru || '';
+      document.getElementById('cDescKz').value = course.description_kz || '';
+      document.getElementById('cTime').value = course.time_limit_minutes;
+      document.getElementById('cPass').value = course.pass_score_percent;
+      document.getElementById('cValid').value = course.validity_months;
+      document.getElementById('cVideo').value = course.video_url || '';
+      renderMaterialStatus(course.material_pdf_path);
+      renderVideoStatus(course.video_path);
+      document.getElementById('courseModalTitle').textContent = 'Редактировать курс';
+    } else {
+      document.getElementById('courseId').value = '';
+      document.getElementById('cTitleRu').value = '';
+      document.getElementById('cTitleKz').value = '';
+      document.getElementById('cDescRu').value = '';
+      document.getElementById('cDescKz').value = '';
+      document.getElementById('cTime').value = 20;
+      document.getElementById('cPass').value = 80;
+      document.getElementById('cValid').value = 12;
+      document.getElementById('cVideo').value = '';
+      document.getElementById('courseModalTitle').textContent = 'Новый курс';
+    }
+    document.getElementById('courseModal').classList.remove('hidden');
+  } catch (e) {
+    alert('Не удалось открыть курс: ' + e.message);
   }
-  document.getElementById('courseModal').classList.remove('hidden');
 }
 
 function renderMaterialStatus(path) {
