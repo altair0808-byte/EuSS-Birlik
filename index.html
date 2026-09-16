@@ -37,6 +37,7 @@ const I18N = {
     nav_export: 'Экспорт в Excel',
     nav_settings: 'Настройки',
     nav_my_tests: 'Мои тесты',
+    nav_calendar: 'Календарь',
 
     role_superadmin: 'Суперадминистратор',
     role_admin: 'Администратор (Инженер ТБ)',
@@ -145,7 +146,27 @@ const I18N = {
     no_data: 'Нет данных',
     required_field: 'Обязательное поле',
     save_success: 'Сохранено',
-    error_generic: 'Произошла ошибка. Попробуйте снова.'
+    error_generic: 'Произошла ошибка. Попробуйте снова.',
+
+    profile_title: 'Профиль сотрудника',
+    back_to_users: 'К списку сотрудников',
+    profile_info: 'Данные сотрудника',
+    profile_history: 'История обучения',
+    download_report: 'Скачать отчёт (Excel)',
+    date_from: 'С даты',
+    date_to: 'По дату',
+    filters: 'Фильтры',
+    expiring_soon_title: 'Скоро истекает срок сертификата',
+    expiring_none: 'Нет сертификатов, истекающих в ближайшее время.',
+    days_left: 'дней осталось',
+    overdue: 'просрочен',
+    expires_today: 'истекает сегодня',
+    calendar_title: 'Календарь прохождения обучения',
+    calendar_completions_on: 'Прошли обучение',
+    prev_month: 'Назад',
+    next_month: 'Вперёд',
+    all_statuses: 'Все статусы',
+    all_roles: 'Все роли'
   },
   kz: {
     app_title: 'ЕҚ / БиОТ бойынша оқыту және білім тексеру',
@@ -164,6 +185,7 @@ const I18N = {
     nav_export: 'Excel-ге экспорт',
     nav_settings: 'Баптаулар',
     nav_my_tests: 'Менің тесттерім',
+    nav_calendar: 'Күнтізбе',
 
     role_superadmin: 'Супер әкімші',
     role_admin: 'Әкімші (ЕҚ инженері)',
@@ -272,7 +294,27 @@ const I18N = {
     no_data: 'Деректер жоқ',
     required_field: 'Міндетті өріс',
     save_success: 'Сақталды',
-    error_generic: 'Қате орын алды. Қайталап көріңіз.'
+    error_generic: 'Қате орын алды. Қайталап көріңіз.',
+
+    profile_title: 'Қызметкер профилі',
+    back_to_users: 'Қызметкерлер тізіміне',
+    profile_info: 'Қызметкер деректері',
+    profile_history: 'Оқыту тарихы',
+    download_report: 'Есепті жүктеу (Excel)',
+    date_from: 'Күннен',
+    date_to: 'Күнге дейін',
+    filters: 'Сүзгілер',
+    expiring_soon_title: 'Сертификат мерзімі жақында аяқталады',
+    expiring_none: 'Жақын арада мерзімі аяқталатын сертификаттар жоқ.',
+    days_left: 'күн қалды',
+    overdue: 'мерзімі өтті',
+    expires_today: 'бүгін аяқталады',
+    calendar_title: 'Оқытудан өту күнтізбесі',
+    calendar_completions_on: 'Оқудан өткендер',
+    prev_month: 'Артқа',
+    next_month: 'Алға',
+    all_statuses: 'Барлық мәртебелер',
+    all_roles: 'Барлық рөлдер'
   }
 };
 
@@ -292,8 +334,19 @@ const state = {
   settings: {},
   activeTest: null,
   testTimer: null,
-  timeLeft: 0
+  timeLeft: 0,
+  usersFilter: { q: '', object: '', department: '', role: '' },
+  assignFilter: { status: '', object: '', department: '', q: '', date_from: '', date_to: '' },
+  meta: { objects: [], departments: [] },
+  profileUserId: null,
+  calendarDate: new Date()
 };
+
+function qs(obj) {
+  const parts = Object.entries(obj).filter(([, v]) => v !== '' && v !== null && v !== undefined);
+  if (!parts.length) return '';
+  return '?' + parts.map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v)).join('&');
+}
 
 const api = {
   async req(url, opts = {}) {
@@ -317,7 +370,9 @@ const api = {
     return res;
   },
   login(login, password) { return this.req('/api/auth/login', { method: 'POST', body: { login, password } }); },
-  getUsers(params = '') { return this.req('/api/users' + params); },
+  getUsers(filter = {}) { return this.req('/api/users' + qs(filter)); },
+  getUser(id) { return this.req('/api/users/' + id); },
+  getUsersMeta() { return this.req('/api/users/meta/objects'); },
   saveUser(data, id) { return this.req(id ? '/api/users/' + id : '/api/users', { method: id ? 'PUT' : 'POST', body: data }); },
   deleteUser(id) { return this.req('/api/users/' + id, { method: 'DELETE' }); },
   getCourses() { return this.req('/api/courses'); },
@@ -327,7 +382,8 @@ const api = {
   addQuestion(cid, data) { return this.req('/api/courses/' + cid + '/questions', { method: 'POST', body: data }); },
   deleteQuestion(cid, qid) { return this.req('/api/courses/' + cid + '/questions/' + qid, { method: 'DELETE' }); },
   updateQuestion(cid, qid, data) { return this.req('/api/courses/' + cid + '/questions/' + qid, { method: 'PUT', body: data }); },
-  getAssignments() { return this.req('/api/assignments'); },
+  getAssignments(filter = {}) { return this.req('/api/assignments' + qs(filter)); },
+  getExpiring(days = 30) { return this.req('/api/assignments/expiring' + qs({ days })); },
   getMyAssignments() { return this.req('/api/assignments/mine'); },
   createAssignment(data) { return this.req('/api/assignments', { method: 'POST', body: data }); },
   getLastNumbers() { return this.req('/api/assignments/last-numbers'); },
@@ -338,6 +394,11 @@ const api = {
   getSettings() { return this.req('/api/settings'); },
   saveSettings(data) { return this.req('/api/settings', { method: 'PUT', body: data }); }
 };
+
+// Экранирование текста перед вставкой в innerHTML (защита от XSS в ФИО/названиях)
+function esc(str) {
+  return String(str ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 
 function logout() {
   state.token = null;
@@ -425,7 +486,7 @@ function renderMain(app) {
           <div class="w-9 h-9 bg-blue-600 text-white rounded-lg flex items-center justify-center font-bold text-lg">ТБ</div>
           <div>
             <h1 class="text-base font-bold text-slate-900 leading-tight">${t('app_title')}</h1>
-            <p class="text-xs text-slate-500">${state.user.last_name || ''} ${state.user.first_name || ''} (${roleName})</p>
+            <p class="text-xs text-slate-500">${esc(state.user.last_name || '')} ${esc(state.user.first_name || '')} (${esc(roleName)})</p>
           </div>
         </div>
         <div class="flex items-center space-x-3">
@@ -445,6 +506,7 @@ function renderMain(app) {
             <button onclick="setTab('users')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_users')}</button>
             <button onclick="setTab('courses')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'courses' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_courses')}</button>
             <button onclick="setTab('assignments')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'assignments' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_assignments')}</button>
+            <button onclick="setTab('calendar')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'calendar' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_calendar')}</button>
             <a href="/api/export/excel" target="_blank" class="px-3 py-1.5 text-xs font-semibold rounded-md text-emerald-700 hover:bg-emerald-50">📥 ${t('nav_export')}</a>
             <button onclick="setTab('settings')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'settings' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_settings')}</button>
           ` : `
@@ -487,13 +549,17 @@ async function loadTabContent() {
           <div class="text-3xl font-black text-emerald-600 mt-2" id="dashAssignments">...</div>
         </div>
       </div>
-      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
         <h3 class="text-base font-bold mb-4">Быстрые действия</h3>
         <div class="flex flex-wrap gap-3">
           <button onclick="setTab('assignments')" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700">Назначить проверку знаний</button>
           <button onclick="setTab('users')" class="px-4 py-2 bg-slate-100 text-slate-800 rounded-lg text-sm font-semibold hover:bg-slate-200">Добавить сотрудника</button>
           <button onclick="setTab('courses')" class="px-4 py-2 bg-slate-100 text-slate-800 rounded-lg text-sm font-semibold hover:bg-slate-200">Создать курс</button>
         </div>
+      </div>
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <h3 class="text-base font-bold mb-4">⏰ ${t('expiring_soon_title')} (30 ${CURRENT_LANG === 'kz' ? 'күн' : 'дней'})</h3>
+        <div id="expiringList" class="space-y-2"><div class="text-slate-400 text-sm">${t('loading')}</div></div>
       </div>
     `;
     try {
@@ -502,6 +568,7 @@ async function loadTabContent() {
       document.getElementById('dashCourses').textContent = c.length;
       document.getElementById('dashAssignments').textContent = a.length;
     } catch (e) {}
+    loadExpiringWidget();
   }
 
   if (state.tab === 'users') {
@@ -514,6 +581,16 @@ async function loadTabContent() {
             <button onclick="document.getElementById('importFile').click()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">📥 ${t('import_excel')}</button>
             <button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${t('add_user')}</button>
           </div>
+        </div>
+        <div class="flex flex-wrap gap-2 mb-4">
+          <input id="uFilterQ" type="text" placeholder="${t('search_placeholder')}" value="${esc(state.usersFilter.q)}" oninput="onUsersFilterChange()" class="flex-1 min-w-[200px] border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          <select id="uFilterObject" onchange="onUsersFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm"><option value="">${t('all_objects')}</option></select>
+          <select id="uFilterDept" onchange="onUsersFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm"><option value="">${t('all_departments')}</option></select>
+          <select id="uFilterRole" onchange="onUsersFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm">
+            <option value="">${t('all_roles')}</option>
+            <option value="employee">${t('role_employee')}</option>
+            <option value="admin">${t('role_admin')}</option>
+          </select>
         </div>
         <div class="overflow-x-auto">
           <table class="min-w-full divide-y divide-slate-200 text-sm">
@@ -565,6 +642,14 @@ async function loadTabContent() {
       </div>
     `;
     loadUsersList();
+  }
+
+  if (state.tab === 'user_profile') {
+    container.innerHTML = `
+      <button onclick="setTab('users')" class="text-sm text-blue-600 hover:underline mb-4">&larr; ${t('back_to_users')}</button>
+      <div id="profileContent"><div class="text-slate-400">${t('loading')}</div></div>
+    `;
+    loadUserProfile(state.profileUserId);
   }
 
   if (state.tab === 'courses') {
@@ -649,6 +734,24 @@ async function loadTabContent() {
           <h2 class="text-lg font-bold text-slate-900">${t('nav_assignments')}</h2>
           <button onclick="openAssignModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold">+ Назначить тест</button>
         </div>
+        <div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-4">
+          <input id="aFilterQ" type="text" placeholder="${t('search_placeholder')}" value="${esc(state.assignFilter.q)}" oninput="onAssignFilterChange()" class="col-span-2 border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          <select id="aFilterObject" onchange="onAssignFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm"><option value="">${t('all_objects')}</option></select>
+          <select id="aFilterDept" onchange="onAssignFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm"><option value="">${t('all_departments')}</option></select>
+          <select id="aFilterStatus" onchange="onAssignFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm">
+            <option value="">${t('all_statuses')}</option>
+            <option value="pending">${t('status_pending')}</option>
+            <option value="in_progress">${t('status_in_progress')}</option>
+            <option value="passed">${t('status_passed')}</option>
+            <option value="failed">${t('status_failed')}</option>
+          </select>
+          <div class="flex gap-1 col-span-2 md:col-span-1">
+            <input id="aFilterFrom" type="date" title="${t('date_from')}" onchange="onAssignFilterChange()" class="w-full border border-slate-300 rounded-lg px-2 py-2 text-xs">
+          </div>
+          <div class="flex gap-1">
+            <input id="aFilterTo" type="date" title="${t('date_to')}" onchange="onAssignFilterChange()" class="w-full border border-slate-300 rounded-lg px-2 py-2 text-xs">
+          </div>
+        </div>
         <div class="overflow-x-auto">
           <table class="min-w-full divide-y divide-slate-200 text-sm">
             <thead class="bg-slate-50">
@@ -690,6 +793,32 @@ async function loadTabContent() {
       </div>
     `;
     loadAssignmentsList();
+  }
+
+  if (state.tab === 'calendar') {
+    container.innerHTML = `
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <div class="flex justify-between items-center mb-6">
+          <h2 class="text-lg font-bold text-slate-900">${t('calendar_title')}</h2>
+          <div class="flex items-center gap-2">
+            <button onclick="changeCalendarMonth(-1)" class="px-3 py-1.5 border rounded-lg text-sm hover:bg-slate-50">&larr; ${t('prev_month')}</button>
+            <span id="calMonthLabel" class="text-sm font-semibold w-40 text-center"></span>
+            <button onclick="changeCalendarMonth(1)" class="px-3 py-1.5 border rounded-lg text-sm hover:bg-slate-50">${t('next_month')} &rarr;</button>
+          </div>
+        </div>
+        <div id="calGrid" class="grid grid-cols-7 gap-1.5"></div>
+      </div>
+      <div id="calDayModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[80vh] overflow-y-auto">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="text-lg font-bold" id="calDayTitle"></h3>
+            <button onclick="document.getElementById('calDayModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-700 text-xl leading-none">&times;</button>
+          </div>
+          <div id="calDayList" class="space-y-2"></div>
+        </div>
+      </div>
+    `;
+    loadCalendar();
   }
 
   if (state.tab === 'my_tests') {
@@ -752,6 +881,42 @@ async function loadTabContent() {
   }
 }
 
+// --- DASHBOARD: EXPIRING CERTIFICATES WIDGET ---
+async function loadExpiringWidget() {
+  const div = document.getElementById('expiringList');
+  if (!div) return;
+  try {
+    const list = await api.getExpiring(30);
+    if (!list.length) {
+      div.innerHTML = `<div class="text-sm text-slate-500">${t('expiring_none')}</div>`;
+      return;
+    }
+    const now = new Date();
+    div.innerHTML = list.map(a => {
+      const nextDate = new Date(a.next_test_date);
+      const daysLeft = Math.ceil((nextDate - now) / (1000 * 60 * 60 * 24));
+      const overdue = daysLeft < 0;
+      const today = daysLeft === 0;
+      const badgeClass = overdue ? 'bg-red-100 text-red-800' : daysLeft <= 7 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700';
+      const badgeText = overdue ? `${Math.abs(daysLeft)} ${CURRENT_LANG === 'kz' ? 'күн' : 'дн.'} ${t('overdue')}` : today ? t('expires_today') : `${daysLeft} ${t('days_left')}`;
+      return `
+        <div class="flex flex-wrap items-center justify-between gap-2 p-3 rounded-lg border ${overdue ? 'border-red-200 bg-red-50/40' : 'border-slate-100'}">
+          <div class="min-w-0">
+            <button onclick="openUserProfile(${a.user_id})" class="font-semibold text-slate-900 text-sm hover:text-blue-600 hover:underline text-left">${esc(a.last_name)} ${esc(a.first_name)}</button>
+            <div class="text-xs text-slate-500">${esc(a.object || '—')} / ${esc(a.department || '—')} · ${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-bold px-2.5 py-1 rounded-lg ${badgeClass}">${badgeText}</span>
+            <span class="text-xs text-slate-400">${nextDate.toLocaleDateString('ru-RU')}</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch (e) {
+    div.innerHTML = `<div class="text-sm text-red-600">${t('error_generic')}</div>`;
+  }
+}
+
 // --- USERS LOGIC ---
 async function handleImportFile(input) {
   const file = input.files[0];
@@ -771,25 +936,54 @@ async function handleImportFile(input) {
   loadUsersList();
 }
 
+let usersFilterTimeout = null;
+function onUsersFilterChange() {
+  state.usersFilter.q = document.getElementById('uFilterQ').value;
+  state.usersFilter.object = document.getElementById('uFilterObject').value;
+  state.usersFilter.department = document.getElementById('uFilterDept').value;
+  state.usersFilter.role = document.getElementById('uFilterRole').value;
+  clearTimeout(usersFilterTimeout);
+  usersFilterTimeout = setTimeout(loadUsersList, 250);
+}
+
+async function populateUsersMetaFilters() {
+  try {
+    const meta = await api.getUsersMeta();
+    state.meta = meta;
+    const objSel = document.getElementById('uFilterObject');
+    const depSel = document.getElementById('uFilterDept');
+    if (objSel) objSel.innerHTML = `<option value="">${t('all_objects')}</option>` + meta.objects.map(o => `<option value="${esc(o)}" ${state.usersFilter.object === o ? 'selected' : ''}>${esc(o)}</option>`).join('');
+    if (depSel) depSel.innerHTML = `<option value="">${t('all_departments')}</option>` + meta.departments.map(d => `<option value="${esc(d)}" ${state.usersFilter.department === d ? 'selected' : ''}>${esc(d)}</option>`).join('');
+  } catch (e) {}
+}
+
 async function loadUsersList() {
-  const allUsers = await api.getUsers();
-  const users = allUsers.filter(u => u.role !== "superadmin");
-  state.users = users;
+  const roleFilter = document.getElementById('uFilterRole');
+  if (roleFilter) roleFilter.value = state.usersFilter.role;
+  const users = await api.getUsers(state.usersFilter);
+  state.users = users.filter(u => u.role !== "superadmin");
   const tbody = document.getElementById('usersTable');
   if (!tbody) return;
-  tbody.innerHTML = users.map(u => `
+  if (!state.users.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-slate-400">${t('no_data')}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = state.users.map(u => `
     <tr class="hover:bg-slate-50">
-      <td class="px-4 py-3 font-medium text-slate-900">${u.last_name} ${u.first_name}</td>
-      <td class="px-4 py-3 font-mono text-slate-600">${u.login}</td>
-      <td class="px-4 py-3 text-slate-600">${u.object || '—'} / ${u.department || '—'}</td>
-      <td class="px-4 py-3 text-slate-600">${u.position || '—'}</td>
-      <td class="px-4 py-3"><span class="text-xs font-semibold px-2 py-0.5 rounded ${u.role === 'superadmin' ? 'bg-purple-100 text-purple-700' : u.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-700'}">${u.role}</span></td>
+      <td class="px-4 py-3 font-medium text-slate-900">
+        <button onclick="openUserProfile(${u.id})" class="hover:text-blue-600 hover:underline text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>
+      </td>
+      <td class="px-4 py-3 font-mono text-slate-600">${esc(u.login)}</td>
+      <td class="px-4 py-3 text-slate-600">${esc(u.object || '—')} / ${esc(u.department || '—')}</td>
+      <td class="px-4 py-3 text-slate-600">${esc(u.position || '—')}</td>
+      <td class="px-4 py-3"><span class="text-xs font-semibold px-2 py-0.5 rounded ${u.role === 'superadmin' ? 'bg-purple-100 text-purple-700' : u.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-700'}">${esc(u.role)}</span></td>
       <td class="px-4 py-3 text-right space-x-2">
         <button onclick="editUser(${u.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>
         <button onclick="delUser(${u.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
       </td>
     </tr>
   `).join('');
+  populateUsersMetaFilters();
 }
 
 function openUserModal(u = null) {
@@ -858,7 +1052,7 @@ async function loadCoursesList() {
     <div class="border border-slate-200 p-4 rounded-xl hover:shadow-sm transition bg-white flex flex-col justify-between">
       <div>
         <div class="flex justify-between items-start">
-          <h4 class="font-bold text-slate-900 text-base">${CURRENT_LANG === 'kz' ? c.title_kz : c.title_ru}</h4>
+          <h4 class="font-bold text-slate-900 text-base">${esc(CURRENT_LANG === 'kz' ? c.title_kz : c.title_ru)}</h4>
           <span class="text-xs font-semibold bg-blue-50 text-blue-700 px-2 py-0.5 rounded">${c.time_limit_minutes} мин | ${c.pass_score_percent}%</span>
         </div>
         <p class="text-xs text-slate-500 mt-2">Вопросов в базе: ${c.questions_count || 0}${c.material_pdf_path ? ' · методичка загружена' : ''}</p>
@@ -971,14 +1165,14 @@ async function loadQuestionsForCourse() {
     return `
     <div class="border rounded-lg p-3 bg-slate-50">
       <div class="flex justify-between items-start">
-        <div class="text-sm font-semibold text-slate-900">${idx + 1}. ${q.question_ru}</div>
+        <div class="text-sm font-semibold text-slate-900">${idx + 1}. ${esc(q.question_ru)}</div>
         <div class="space-x-2 text-xs font-semibold whitespace-nowrap">
           <button onclick='editQuestionRow(${JSON.stringify(q).replace(/'/g, "&#39;")})' class="text-blue-600 hover:underline">Изменить</button>
           <button onclick="deleteQuestionRow(${q.id})" class="text-red-600 hover:underline">Удалить</button>
         </div>
       </div>
       <ul class="text-xs text-slate-600 mt-1 list-disc list-inside">
-        ${opts.map((o, i) => `<li class="${i === q.correct_index ? 'text-emerald-700 font-semibold' : ''}">${o}</li>`).join('')}
+        ${opts.map((o, i) => `<li class="${i === q.correct_index ? 'text-emerald-700 font-semibold' : ''}">${esc(o)}</li>`).join('')}
       </ul>
     </div>
   `;
@@ -1039,29 +1233,66 @@ async function deleteQuestionRow(qid) {
 }
 
 // --- ASSIGNMENTS LOGIC ---
+let assignFilterTimeout = null;
+function onAssignFilterChange() {
+  state.assignFilter.q = document.getElementById('aFilterQ').value;
+  state.assignFilter.object = document.getElementById('aFilterObject').value;
+  state.assignFilter.department = document.getElementById('aFilterDept').value;
+  state.assignFilter.status = document.getElementById('aFilterStatus').value;
+  state.assignFilter.date_from = document.getElementById('aFilterFrom').value;
+  state.assignFilter.date_to = document.getElementById('aFilterTo').value;
+  clearTimeout(assignFilterTimeout);
+  assignFilterTimeout = setTimeout(loadAssignmentsList, 250);
+}
+
+async function populateAssignMetaFilters() {
+  try {
+    const meta = await api.getUsersMeta();
+    const objSel = document.getElementById('aFilterObject');
+    const depSel = document.getElementById('aFilterDept');
+    if (objSel) objSel.innerHTML = `<option value="">${t('all_objects')}</option>` + meta.objects.map(o => `<option value="${esc(o)}" ${state.assignFilter.object === o ? 'selected' : ''}>${esc(o)}</option>`).join('');
+    if (depSel) depSel.innerHTML = `<option value="">${t('all_departments')}</option>` + meta.departments.map(d => `<option value="${esc(d)}" ${state.assignFilter.department === d ? 'selected' : ''}>${esc(d)}</option>`).join('');
+  } catch (e) {}
+}
+
 async function loadAssignmentsList() {
-  const list = await api.getAssignments();
+  const statusSel = document.getElementById('aFilterStatus');
+  if (statusSel) statusSel.value = state.assignFilter.status;
+  const fromInput = document.getElementById('aFilterFrom');
+  if (fromInput) fromInput.value = state.assignFilter.date_from;
+  const toInput = document.getElementById('aFilterTo');
+  if (toInput) toInput.value = state.assignFilter.date_to;
+
+  const list = await api.getAssignments(state.assignFilter);
   state.assignments = list;
   const tbody = document.getElementById('assignTable');
   if (!tbody) return;
-  tbody.innerHTML = list.map(a => `
-    <tr class="hover:bg-slate-50">
-      <td class="px-4 py-3 font-medium">${a.last_name} ${a.first_name}<br><span class="text-xs text-slate-400">${a.position || ''}</span></td>
-      <td class="px-4 py-3">${CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru}</td>
-      <td class="px-4 py-3 text-xs text-slate-600">№ ${a.protocol_number}<br>${a.protocol_date}</td>
-      <td class="px-4 py-3">
-        <span class="text-xs font-bold px-2 py-1 rounded ${a.status === 'passed' ? 'bg-emerald-100 text-emerald-800' : a.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}">
-          ${a.status === 'passed' ? 'СДАЛ' : a.status === 'failed' ? 'НЕ СДАЛ' : 'НАЗНАЧЕН'}
-        </span>
-      </td>
-      <td class="px-4 py-3 font-bold">${a.score_percent !== null ? a.score_percent + '%' : '—'}</td>
-      <td class="px-4 py-3 text-right space-x-2">
-        ${a.status === 'passed' && a.certificate_number ? `<a href="/api/certificates/${a.id}" target="_blank" class="text-blue-600 hover:underline text-xs font-semibold">Сертификат</a>` : ''}
-        ${a.status === 'failed' ? `<button onclick="allowRetake(${a.id})" class="text-amber-600 hover:underline text-xs">Пересдача</button>` : ''}
-        <button onclick="delAssign(${a.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
-      </td>
-    </tr>
-  `).join('');
+  if (!list.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-slate-400">${t('no_data')}</td></tr>`;
+  } else {
+    tbody.innerHTML = list.map(a => `
+      <tr class="hover:bg-slate-50">
+        <td class="px-4 py-3 font-medium">
+          <button onclick="openUserProfile(${a.user_id})" class="hover:text-blue-600 hover:underline text-left">${esc(a.last_name)} ${esc(a.first_name)}</button>
+          <br><span class="text-xs text-slate-400">${esc(a.position || '')}</span>
+        </td>
+        <td class="px-4 py-3">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</td>
+        <td class="px-4 py-3 text-xs text-slate-600">№ ${esc(a.protocol_number)}<br>${esc(a.protocol_date)}${a.test_date ? `<br><span class="text-slate-400">${t('test_date')}: ${new Date(a.test_date).toLocaleDateString('ru-RU')}</span>` : ''}</td>
+        <td class="px-4 py-3">
+          <span class="text-xs font-bold px-2 py-1 rounded ${a.status === 'passed' ? 'bg-emerald-100 text-emerald-800' : a.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}">
+            ${a.status === 'passed' ? 'СДАЛ' : a.status === 'failed' ? 'НЕ СДАЛ' : 'НАЗНАЧЕН'}
+          </span>
+        </td>
+        <td class="px-4 py-3 font-bold">${a.score_percent !== null ? a.score_percent + '%' : '—'}</td>
+        <td class="px-4 py-3 text-right space-x-2">
+          ${a.status === 'passed' && a.certificate_number ? `<a href="/api/certificates/${a.id}" target="_blank" class="text-blue-600 hover:underline text-xs font-semibold">Сертификат</a>` : ''}
+          ${a.status === 'failed' ? `<button onclick="allowRetake(${a.id})" class="text-amber-600 hover:underline text-xs">Пересдача</button>` : ''}
+          <button onclick="delAssign(${a.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
+        </td>
+      </tr>
+    `).join('');
+  }
+  populateAssignMetaFilters();
 }
 
 async function openAssignModal() {
@@ -1069,8 +1300,8 @@ async function openAssignModal() {
   const users = allUsers.filter(u => u.role !== "superadmin");
   const uSel = document.getElementById('asUserId');
   const cSel = document.getElementById('asCourseId');
-  uSel.innerHTML = users.filter(u => u.role === 'employee').map(u => `<option value="${u.id}">${u.last_name} ${u.first_name} (${u.login})</option>`).join('');
-  cSel.innerHTML = courses.map(c => `<option value="${c.id}">${c.title_ru}</option>`).join('');
+  uSel.innerHTML = users.filter(u => u.role === 'employee').map(u => `<option value="${u.id}">${esc(u.last_name)} ${esc(u.first_name)} (${esc(u.login)})</option>`).join('');
+  cSel.innerHTML = courses.map(c => `<option value="${c.id}">${esc(c.title_ru)}</option>`).join('');
   document.getElementById('asProtDate').value = new Date().toISOString().split('T')[0];
   try {
     const nums = await api.getLastNumbers();
@@ -1106,6 +1337,183 @@ async function delAssign(id) {
   loadAssignmentsList();
 }
 
+// --- USER PROFILE (АДМИН/СУПЕРАДМИН СМОТРИТ КАРТОЧКУ СОТРУДНИКА) ---
+function openUserProfile(userId) {
+  state.profileUserId = userId;
+  state.tab = 'user_profile';
+  render();
+}
+
+// Переход на вкладку "Сотрудники" и открытие модалки редактирования конкретного
+// пользователя. Сначала переключаем вкладку (это синхронно кладёт разметку модалки
+// в DOM), и только потом открываем её — иначе элементов модалки ещё не существует.
+async function editUserFromProfile(id) {
+  state.tab = 'users';
+  render();
+  try {
+    const u = await api.getUser(id);
+    openUserModal(u);
+  } catch (e) {
+    alert(t('error_generic'));
+  }
+}
+
+async function loadUserProfile(userId) {
+  const div = document.getElementById('profileContent');
+  if (!div) return;
+  try {
+    const [user, assignments] = await Promise.all([
+      api.getUser(userId),
+      api.getAssignments({ user_id: userId })
+    ]);
+    const roleName = t('role_' + user.role) || user.role;
+    div.innerHTML = `
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
+        <div class="flex flex-wrap justify-between items-start gap-4">
+          <div>
+            <h2 class="text-xl font-bold text-slate-900">${esc(user.last_name)} ${esc(user.first_name)}</h2>
+            <p class="text-sm text-slate-500 mt-1">${esc(user.position || '—')} · ${esc(user.object || '—')} / ${esc(user.department || '—')}</p>
+            <p class="text-xs text-slate-400 mt-1">${t('login_field')}: <span class="font-mono">${esc(user.login)}</span> · ${esc(roleName)}</p>
+          </div>
+          <div class="flex gap-2">
+            <button onclick="editUserFromProfile(${user.id})" class="px-4 py-2 border rounded-lg text-sm font-semibold hover:bg-slate-50">${t('edit')}</button>
+            <a href="/api/export/excel" target="_blank" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold">📥 ${t('download_report')}</a>
+          </div>
+        </div>
+      </div>
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <h3 class="text-base font-bold mb-4">${t('profile_history')}</h3>
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Курс</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Протокол</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Статус</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Балл</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">${t('next_test_date')}</th>
+                <th class="px-4 py-3 text-right font-semibold text-slate-600">${t('actions')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${assignments.length ? assignments.map(a => `
+                <tr class="hover:bg-slate-50">
+                  <td class="px-4 py-3">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</td>
+                  <td class="px-4 py-3 text-xs text-slate-600">№ ${esc(a.protocol_number)}<br>${esc(a.protocol_date)}</td>
+                  <td class="px-4 py-3">
+                    <span class="text-xs font-bold px-2 py-1 rounded ${a.status === 'passed' ? 'bg-emerald-100 text-emerald-800' : a.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}">
+                      ${a.status === 'passed' ? 'СДАЛ' : a.status === 'failed' ? 'НЕ СДАЛ' : 'НАЗНАЧЕН'}
+                    </span>
+                  </td>
+                  <td class="px-4 py-3 font-bold">${a.score_percent !== null ? a.score_percent + '%' : '—'}</td>
+                  <td class="px-4 py-3 text-xs text-slate-600">${a.next_test_date ? new Date(a.next_test_date).toLocaleDateString('ru-RU') : '—'}</td>
+                  <td class="px-4 py-3 text-right">
+                    ${a.status === 'passed' && a.certificate_number ? `<a href="/api/assignments/${a.id}/certificate.pdf" target="_blank" class="text-blue-600 hover:underline text-xs font-semibold">${t('download_cert')}</a>` : '—'}
+                  </td>
+                </tr>
+              `).join('') : `<tr><td colspan="6" class="p-4 text-center text-slate-400">${t('no_data')}</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    div.innerHTML = `<div class="text-red-600 text-sm">${t('error_generic')}</div>`;
+  }
+}
+
+// --- CALENDAR (АДМИН/СУПЕРАДМИН: КТО ПРОШЁЛ ОБУЧЕНИЕ В ВЫБРАННЫЕ ДАТЫ) ---
+// Форматирует дату в YYYY-MM-DD по ЛОКАЛЬНОМУ времени (в отличие от toISOString,
+// который переводит в UTC и может сдвинуть дату на день назад/вперёд для часовых поясов вроде UTC+5)
+function toLocalDateStr(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function changeCalendarMonth(delta) {
+  const d = new Date(state.calendarDate);
+  d.setMonth(d.getMonth() + delta);
+  state.calendarDate = d;
+  loadCalendar();
+}
+
+async function loadCalendar() {
+  const d = state.calendarDate;
+  const year = d.getFullYear();
+  const month = d.getMonth(); // 0-based
+  const label = document.getElementById('calMonthLabel');
+  const monthNames = CURRENT_LANG === 'kz'
+    ? ['Қаңтар','Ақпан','Наурыз','Сәуір','Мамыр','Маусым','Шілде','Тамыз','Қыркүйек','Қазан','Қараша','Желтоқсан']
+    : ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+  if (label) label.textContent = `${monthNames[month]} ${year}`;
+
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const dateFrom = toLocalDateStr(firstDay);
+  const dateTo = toLocalDateStr(lastDay);
+
+  const grid = document.getElementById('calGrid');
+  if (!grid) return;
+  grid.innerHTML = `<div class="col-span-7 text-center text-slate-400 py-8">${t('loading')}</div>`;
+
+  let list = [];
+  try {
+    list = await api.getAssignments({ status: 'passed', date_from: dateFrom, date_to: dateTo });
+  } catch (e) {
+    grid.innerHTML = `<div class="col-span-7 text-center text-red-600 py-8">${t('error_generic')}</div>`;
+    return;
+  }
+
+  // Группируем прошедших обучение по дню месяца (по дате фактической сдачи test_date)
+  const byDay = {};
+  list.forEach(a => {
+    if (!a.test_date) return;
+    const day = new Date(a.test_date).getDate();
+    (byDay[day] = byDay[day] || []).push(a);
+  });
+  state.calendarByDay = byDay;
+
+  const weekdayNames = CURRENT_LANG === 'kz' ? ['Дс','Сс','Ср','Бс','Жм','Сн','Жс'] : ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+  let startWeekday = firstDay.getDay(); // 0=Sun
+  startWeekday = startWeekday === 0 ? 6 : startWeekday - 1; // делаем понедельник первым днём недели
+  const daysInMonth = lastDay.getDate();
+  const todayStr = new Date().toDateString();
+
+  let cells = weekdayNames.map(wd => `<div class="text-center text-xs font-bold text-slate-400 py-1">${wd}</div>`).join('');
+  for (let i = 0; i < startWeekday; i++) cells += `<div></div>`;
+  for (let day = 1; day <= daysInMonth; day++) {
+    const count = (byDay[day] || []).length;
+    const isToday = new Date(year, month, day).toDateString() === todayStr;
+    cells += `
+      <button onclick="showCalendarDay(${day})" class="aspect-square rounded-lg border ${isToday ? 'border-blue-400' : 'border-slate-100'} p-1.5 flex flex-col items-start justify-between hover:border-blue-400 hover:shadow-sm transition ${count ? 'bg-emerald-50' : 'bg-white'}">
+        <span class="text-xs font-semibold ${isToday ? 'text-blue-600' : 'text-slate-600'}">${day}</span>
+        ${count ? `<span class="text-[10px] font-bold text-emerald-700 bg-emerald-100 rounded px-1.5 py-0.5 self-end">${count}</span>` : ''}
+      </button>
+    `;
+  }
+  grid.innerHTML = cells;
+}
+
+function showCalendarDay(day) {
+  const d = state.calendarDate;
+  const list = (state.calendarByDay && state.calendarByDay[day]) || [];
+  const dateLabel = new Date(d.getFullYear(), d.getMonth(), day).toLocaleDateString('ru-RU');
+  document.getElementById('calDayTitle').textContent = `${t('calendar_completions_on')} — ${dateLabel}`;
+  const listDiv = document.getElementById('calDayList');
+  listDiv.innerHTML = list.length ? list.map(a => `
+    <div class="flex items-center justify-between p-3 rounded-lg border border-slate-100 hover:bg-slate-50">
+      <div>
+        <button onclick="document.getElementById('calDayModal').classList.add('hidden'); openUserProfile(${a.user_id})" class="font-semibold text-sm text-slate-900 hover:text-blue-600 hover:underline text-left">${esc(a.last_name)} ${esc(a.first_name)}</button>
+        <div class="text-xs text-slate-500">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</div>
+      </div>
+      <span class="text-xs font-bold px-2 py-1 rounded bg-emerald-100 text-emerald-800">${a.score_percent}%</span>
+    </div>
+  `).join('') : `<div class="text-sm text-slate-400">${t('no_data')}</div>`;
+  document.getElementById('calDayModal').classList.remove('hidden');
+}
+
 // --- MY TESTS (EMPLOYEE) ---
 async function loadMyTests() {
   const list = await api.getMyAssignments();
@@ -1118,8 +1526,8 @@ async function loadMyTests() {
   div.innerHTML = list.map(a => `
     <div class="p-5 border border-slate-200 rounded-xl bg-white flex flex-wrap justify-between items-center gap-4">
       <div>
-        <h4 class="text-base font-bold text-slate-900">${CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru}</h4>
-        <p class="text-xs text-slate-500 mt-1">Протокол № ${a.protocol_number} от ${a.protocol_date}</p>
+        <h4 class="text-base font-bold text-slate-900">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</h4>
+        <p class="text-xs text-slate-500 mt-1">Протокол № ${esc(a.protocol_number)} от ${esc(a.protocol_date)}</p>
         ${(a.material_pdf_path || a.video_url) ? `
           <div class="mt-2 space-x-3 text-xs font-semibold">
             ${a.material_pdf_path ? `<a href="${a.material_pdf_path}" target="_blank" class="text-blue-600 hover:underline">📄 Методичка (PDF)</a>` : ''}
@@ -1134,7 +1542,7 @@ async function loadMyTests() {
         ` : a.status === 'failed' && !a.retake_allowed ? `
           <span class="text-xs font-bold text-red-700 bg-red-50 px-3 py-1.5 rounded-lg">Не сдано (${a.score_percent}%)</span>
         ` : `
-          <button onclick="runTest(${a.id}, '${(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru).replace(/'/g, "\\'")}', ${a.time_limit_minutes})" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-sm shadow">
+          <button onclick="runTest(${a.id}, '${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}', ${a.time_limit_minutes})" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-sm shadow">
             ${a.retake_allowed ? 'Пересдать тест' : 'Начать тестирование'}
           </button>
         `}
@@ -1162,12 +1570,12 @@ async function runTest(assignmentId, title, timeLimitMinutes) {
   const qDiv = document.getElementById('testRunQuestions');
   qDiv.innerHTML = data.questions.map((q, idx) => `
     <div class="p-4 border rounded-xl bg-slate-50">
-      <div class="font-bold text-slate-900 mb-3 text-sm">${idx + 1}. ${CURRENT_LANG === 'kz' ? q.question_kz : q.question_ru}</div>
+      <div class="font-bold text-slate-900 mb-3 text-sm">${idx + 1}. ${esc(CURRENT_LANG === 'kz' ? q.question_kz : q.question_ru)}</div>
       <div class="space-y-2">
         ${parseOpts(CURRENT_LANG === 'kz' ? q.options_kz : q.options_ru).map((opt, optIdx) => `
           <label class="flex items-center space-x-3 p-2 bg-white rounded-lg border hover:border-blue-400 cursor-pointer text-sm">
             <input type="radio" name="q_${q.id}" value="${optIdx}" onchange="state.activeTest.answers[${q.id}] = ${optIdx}" class="text-blue-600">
-            <span>${opt}</span>
+            <span>${esc(opt)}</span>
           </label>
         `).join('')}
       </div>
