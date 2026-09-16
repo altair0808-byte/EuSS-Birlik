@@ -6,8 +6,6 @@ const { authMiddleware, requireRole } = require('./auth');
 const upload = require('../upload');
 
 const router = express.Router();
-const upload = makeUploader('imports');
-
 // List users (admin/superadmin only), with optional filters
 router.get('/', authRequired, requireRole('admin', 'superadmin'), (req, res) => {
   const { object, department, role, q } = req.query;
