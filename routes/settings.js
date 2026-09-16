@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../db');
-const { authRequired, requireRole } = require('../middleware/auth');
+const { authMiddleware, requireRole } = require('./auth');
 const { makeUploader } = require('../utils/upload');
 
 const router = express.Router();
