@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { query } = require('../db');
 const { authRequired, requireRole } = require('./auth');
-const { generateCertificatePdf } = require('../certificate');
+const { generateCertificatePdf } = require('./certificate');
 
 async function getNextCertNumber() {
   const result = await query(`SELECT certificate_number FROM assignments WHERE certificate_number IS NOT NULL`);
@@ -180,7 +180,7 @@ router.delete('/:id', authRequired, requireRole('admin', 'superadmin'), async (r
   }
 });
 
-// PDF certificate
+// PDF certificate route directly on assignments
 router.get('/:id/certificate.pdf', authRequired, async (req, res) => {
   try {
     const aRes = await query('SELECT * FROM assignments WHERE id = $1', [req.params.id]);
