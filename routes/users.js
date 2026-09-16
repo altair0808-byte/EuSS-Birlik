@@ -2,7 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const ExcelJS = require('exceljs');
 const db = require('../db');
-const { authRequired, requireRole } = require('../middleware/auth');
+const { authMiddleware, requireRole } = require('./auth');
 const { makeUploader } = require('../utils/upload');
 
 const router = express.Router();
