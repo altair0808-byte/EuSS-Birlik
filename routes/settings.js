@@ -1,7 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { authMiddleware, requireRole } = require('./auth');
-const { makeUploader } = require('../utils/upload');
+const upload = require('../upload');
 
 const router = express.Router();
 const uploadLogo = makeUploader('logo');
