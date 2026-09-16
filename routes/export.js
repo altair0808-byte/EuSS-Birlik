@@ -1,7 +1,7 @@
 const express = require('express');
 const ExcelJS = require('exceljs');
 const db = require('../db');
-const { authMiddleware, requireRole } = require('./auth');
+const { authRequired, requireRole } = require('./auth');
 
 const router = express.Router();
 
@@ -44,7 +44,6 @@ router.get('/excel', authRequired, requireRole('admin', 'superadmin'), async (re
 
   const deptNames = Object.keys(byDept).length ? Object.keys(byDept) : ['Нет данных'];
   for (const dept of deptNames) {
-    // Excel sheet names: max 31 chars, no special chars \/*?[]:
     const safeName = dept.replace(/[\\/*?\[\]:]/g, '-').slice(0, 31) || 'Отдел';
     const ws = wb.addWorksheet(safeName);
     ws.columns = headers.map((h, i) => ({ header: h, key: `c${i}`, width: i === 2 || i === 3 ? 18 : i === 1 ? 16 : 16 }));
@@ -68,14 +67,10 @@ router.get('/excel', authRequired, requireRole('admin', 'superadmin'), async (re
         statusLabel[r.status] || r.status
       ]);
     });
-    ws.autoFilter = { from: 'A1', to: `K1` };
-    ws.views = [{ state: 'frozen', ySplit: 1 }];
   }
 
-  const safeObjectName = object.replace(/[^\p{L}\p{N}_-]/gu, '_');
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', `attachment; filename="export_${safeObjectName}.xlsx"`);
-
+  res.setHeader('Content-Disposition', `attachment; filename="report_${encodeURIComponent(object)}.xlsx"`);
   await wb.xlsx.write(res);
   res.end();
 });
