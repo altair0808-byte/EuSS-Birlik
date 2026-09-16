@@ -2,11 +2,8 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { authRequired, requireRole } = require('./auth');
-const { makeUploader } = require('../upload'); // <-- ДОБАВИТЬ ЭТУ СТРОКУ
+const { makeUploader } = require('../upload');
 
-const uploadMaterial = makeUploader('materials');
-
-const router = express.Router();
 const uploadLogo = makeUploader('logo');
 const uploadStamp = makeUploader('stamp');
 const uploadSignature = makeUploader('signature');
