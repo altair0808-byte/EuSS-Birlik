@@ -1296,34 +1296,40 @@ function selectTestVariant(v) {
   renderVariantQuestions();
 }
 
+let allCourseQuestions = [];
+
 function renderVariantQuestions() {
-  const div = document.getElementById('questionsList');
-  const questions = allCourseQuestions.filter(q => q.variant_number === currentTestVariant);
-  if (!questions.length) {
-    div.innerHTML = `<div class="text-sm text-slate-400">В билете ${currentTestVariant} пока нет вопросов. Добавьте первый ниже или загрузите тест из Excel.</div>`;
+  const container = document.getElementById('questionsList');
+  if (!container) return;
+  const list = allCourseQuestions.filter(q => (q.variant_number || 1) === currentTestVariant);
+
+  if (!list.length) {
+    container.innerHTML = `<p class="text-xs text-slate-400 py-4 text-center">В билете №${currentTestVariant} пока нет вопросов. Добавьте ниже или загрузите из Excel.</p>`;
     return;
   }
-  div.innerHTML = questions.map((q, idx) => {
+
+  container.innerHTML = list.map((q, idx) => {
     let opts = [];
     if (Array.isArray(q.options_ru)) {
       opts = q.options_ru;
     } else {
       try { opts = JSON.parse(q.options_ru || '[]'); } catch (e) { opts = []; }
     }
+
     return `
     <div class="border rounded-lg p-3 bg-slate-50">
       <div class="flex justify-between items-start">
         <div class="text-sm font-semibold text-slate-900">${idx + 1}. ${esc(q.question_ru)}</div>
         <div class="space-x-2 text-xs font-semibold whitespace-nowrap">
-          <button onclick="editQuestionById(${q.id})" class="text-blue-600 hover:underline">Изменить</button>
-          <button onclick="deleteQuestionRow(${q.id})" class="text-red-600 hover:underline">Удалить</button>
+          <button type="button" onclick="editQuestionById(${q.id})" class="text-blue-600 hover:underline">Изменить</button>
+          <button type="button" onclick="deleteQuestionRow(${q.id})" class="text-red-600 hover:underline">Удалить</button>
         </div>
       </div>
       <ul class="text-xs text-slate-600 mt-1 list-disc list-inside">
         ${opts.map((o, i) => `<li class="${i === q.correct_index ? 'text-emerald-700 font-semibold' : ''}">${esc(o)}${i === q.correct_index ? ' ✓' : ''}</li>`).join('')}
       </ul>
     </div>
-  `;
+    `;
   }).join('');
 }
 
@@ -1334,129 +1340,105 @@ function resetQuestionForm() {
   document.getElementById('qTextRu').value = '';
   document.getElementById('qTextKz').value = '';
   for (let i = 0; i < 4; i++) {
-    const elRu = document.getElementById('qOpt' + i + 'Ru');
-    const elKz = document.getElementById('qOpt' + i + 'Kz');
-    if (elRu) elRu.value = '';
-    if (elKz) elKz.value = '';
+    document.getElementById('qOpt' + i + 'Ru').value = '';
+    document.getElementById('qOpt' + i + 'Kz').value = '';
   }
-  const r0 = document.getElementById('qCorrectR0');
-  if (r0) r0.checked = true;
+  document.getElementById('qCorrectR0').checked = true;
 }
 
-function editQuestionById(id) {
-  const q = allCourseQuestions.find(x => x.id === id);
+function editQuestionById(qid) {
+  const q = allCourseQuestions.find(item => item.id === qid);
   if (!q) return;
 
-  let optsRu = Array.isArray(q.options_ru) ? q.options_ru : [];
-  let optsKz = Array.isArray(q.options_kz) ? q.options_kz : [];
-  if (!optsRu.length) {
-    try { optsRu = JSON.parse(q.options_ru || '[]'); } catch (e) {}
-  }
-  if (!optsKz.length) {
-    try { optsKz = JSON.parse(q.options_kz || '[]'); } catch (e) {}
-  }
+  let optsRu = [], optsKz = [];
+  if (Array.isArray(q.options_ru)) optsRu = q.options_ru;
+  else { try { optsRu = JSON.parse(q.options_ru || '[]'); } catch (e) {} }
+
+  if (Array.isArray(q.options_kz)) optsKz = q.options_kz;
+  else { try { optsKz = JSON.parse(q.options_kz || '[]'); } catch (e) {} }
 
   document.getElementById('qId').value = q.id;
   document.getElementById('qVariant').value = q.variant_number || currentTestVariant;
   document.getElementById('qVariantLabel').textContent = q.variant_number || currentTestVariant;
   document.getElementById('qTextRu').value = q.question_ru || '';
-  document.getElementById('qTextKz').value = q.question_kz || '';
+  document.getElementById('qTextKz').value = q.question_kz || q.question_ru || '';
+
   for (let i = 0; i < 4; i++) {
-    const elRu = document.getElementById('qOpt' + i + 'Ru');
-    const elKz = document.getElementById('qOpt' + i + 'Kz');
-    if (elRu) elRu.value = optsRu[i] || '';
-    if (elKz) elKz.value = optsKz[i] || '';
+    document.getElementById('qOpt' + i + 'Ru').value = optsRu[i] || '';
+    document.getElementById('qOpt' + i + 'Kz').value = optsKz[i] || optsRu[i] || '';
   }
-  const radio = document.getElementById('qCorrectR' + q.correct_index);
+
+  const cIdx = typeof q.correct_index === 'number' ? q.correct_index : 0;
+  const radio = document.getElementById('qCorrectR' + cIdx);
   if (radio) radio.checked = true;
 
-  const form = document.getElementById('questionForm');
-  if (form) form.scrollIntoView({ behavior: 'smooth' });
+  document.getElementById('questionForm').scrollIntoView({ behavior: 'smooth' });
 }
-
-function editQuestionRow(q) {
-  if (q && q.id) editQuestionById(q.id);
-}
-
 
 async function saveQuestionForm(e) {
   e.preventDefault();
   const qid = document.getElementById('qId').value;
+  const textRu = document.getElementById('qTextRu').value.trim();
+  let textKz = document.getElementById('qTextKz').value.trim();
+
+  if (!textRu) {
+    alert('Пожалуйста, введите текст вопроса.');
+    return;
+  }
+  // Если казахский перевод не введен, дублируем русский, чтобы не блокировать создание
+  if (!textKz) textKz = textRu;
+
   const optsRu = [0, 1, 2, 3].map(i => document.getElementById('qOpt' + i + 'Ru').value.trim());
-  const optsKz = [0, 1, 2, 3].map(i => document.getElementById('qOpt' + i + 'Kz').value.trim());
-  if (optsRu.some(o => !o) || optsKz.some(o => !o)) { alert('Заполните все 4 варианта ответа на RU и KZ.'); return; }
+  let optsKz = [0, 1, 2, 3].map(i => document.getElementById('qOpt' + i + 'Kz').value.trim());
+
+  if (optsRu.some(o => !o)) {
+    alert('Заполните все 4 варианта ответа (RU).');
+    return;
+  }
+
+  // Если казахские варианты не заполнены, подставляем русские
+  optsKz = optsKz.map((kz, i) => kz || optsRu[i]);
+
   const correctRadio = document.querySelector('input[name="qCorrectRadio"]:checked');
-  if (!correctRadio) { alert('Отметьте галочкой правильный вариант ответа.'); return; }
+  if (!correctRadio) {
+    alert('Отметьте точку правильного ответа слева от одного из вариантов.');
+    return;
+  }
+
   const data = {
-    question_ru: document.getElementById('qTextRu').value.trim(),
-    question_kz: document.getElementById('qTextKz').value.trim(),
+    question_ru: textRu,
+    question_kz: textKz,
     options_ru: optsRu,
     options_kz: optsKz,
     correct_index: parseInt(correctRadio.value, 10),
     variant_number: parseInt(document.getElementById('qVariant').value, 10) || currentTestVariant
   };
-  if (qid) {
-    await api.updateQuestion(currentQuestionsCourseId, qid, data);
-  } else {
-    await api.addQuestion(currentQuestionsCourseId, data);
+
+  try {
+    if (qid) {
+      await api.updateQuestion(currentQuestionsCourseId, qid, data);
+    } else {
+      await api.addQuestion(currentQuestionsCourseId, data);
+    }
+    resetQuestionForm();
+    await loadQuestionsForCourse();
+    loadCoursesList();
+  } catch (err) {
+    alert('Ошибка сохранения вопроса: ' + (err.message || 'Ошибка сервера'));
   }
-  resetQuestionForm();
-  await loadQuestionsForCourse();
-  loadCoursesList();
 }
 
 async function deleteQuestionRow(qid) {
   if (!confirm('Удалить вопрос?')) return;
-  await api.deleteQuestion(currentQuestionsCourseId, qid);
-  await loadQuestionsForCourse();
-  loadCoursesList();
-}
-
-// --- Автоматическая загрузка теста из Excel ---
-async function downloadTestTemplate() {
   try {
-    const res = await api.req('/api/courses/questions-template.xlsx');
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'test_template.xlsx';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  } catch (e) {
-    alert('Не удалось скачать шаблон: ' + e.message);
-  }
-}
-
-async function importTestFile() {
-  const fileInput = document.getElementById('testImportFile');
-  const file = fileInput.files[0];
-  const mode = document.getElementById('testImportMode').value;
-  const statusEl = document.getElementById('testImportStatus');
-  if (!file) { alert('Выберите файл Excel (.xlsx) для загрузки.'); return; }
-  if (mode === 'replace' && !confirm('Вся текущая база тестов этого курса будет удалена и заменена содержимым файла. Продолжить?')) return;
-
-  statusEl.innerHTML = '<span class="text-slate-500">Загрузка и проверка файла...</span>';
-  try {
-    const fd = new FormData();
-    fd.append('file', file);
-    const res = await api.req('/api/courses/' + currentQuestionsCourseId + '/questions/import?mode=' + mode, { method: 'POST', body: fd });
-    let html = `<span class="text-emerald-700 font-semibold">Загружено вопросов: ${res.imported}</span>`;
-    if (res.skipped) {
-      html += `<div class="text-amber-600 mt-1">Пропущено строк: ${res.skipped}</div>`;
-      html += `<ul class="list-disc list-inside text-amber-600">${res.errors.slice(0, 15).map(e => `<li>${esc(e)}</li>`).join('')}</ul>`;
-      if (res.errors.length > 15) html += `<div class="text-amber-600">...и ещё ${res.errors.length - 15}</div>`;
-    }
-    statusEl.innerHTML = html;
-    fileInput.value = '';
+    await api.deleteQuestion(currentQuestionsCourseId, qid);
     await loadQuestionsForCourse();
     loadCoursesList();
-  } catch (e) {
-    statusEl.innerHTML = `<span class="text-red-600">Ошибка загрузки: ${esc(e.message)}</span>`;
+  } catch (err) {
+    alert('Ошибка при удалении: ' + (err.message || 'Ошибка сервера'));
   }
 }
+
 
 // --- ASSIGNMENTS LOGIC ---
 let assignFilterTimeout = null;
