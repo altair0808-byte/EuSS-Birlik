@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { query } = require('../db');
+const { query, pool } = require('../db');
 const { authRequired, requireRole } = require('./auth');
 const { generateCertificatePdf } = require('./certificate');
 
@@ -46,6 +46,54 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
     res.json({ id: result.rows[0].id });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
+// Bulk create assignments — один протокол/курс/дата на группу сотрудников сразу.
+// Один и тот же protocol_number намеренно проставляется всем строкам: на практике
+// один протокол комиссии обычно покрывает сразу нескольких проверяемых сотрудников.
+router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+  const { user_ids, course_id, protocol_number, protocol_date } = req.body;
+
+  if (!Array.isArray(user_ids) || user_ids.length === 0 || !course_id || !protocol_number || !protocol_date) {
+    return res.status(400).json({ error: 'missing_fields' });
+  }
+
+  // На всякий случай убираем дубликаты id, которые мог прислать фронт
+  const uniqueUserIds = [...new Set(user_ids.map(Number))].filter(Number.isFinite);
+  if (uniqueUserIds.length === 0) {
+    return res.status(400).json({ error: 'missing_fields' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Проверяем, что все переданные id действительно существуют и относятся к сотрудникам
+    const checkRes = await client.query(
+      `SELECT id FROM users WHERE id = ANY($1::bigint[]) AND role = 'employee'`,
+      [uniqueUserIds]
+    );
+    const validIds = new Set(checkRes.rows.map(r => r.id));
+    const skippedIds = uniqueUserIds.filter(id => !validIds.has(id));
+
+    const createdIds = [];
+    for (const userId of uniqueUserIds) {
+      if (!validIds.has(userId)) continue;
+      const result = await client.query(`
+        INSERT INTO assignments (user_id, course_id, protocol_number, protocol_date, assigned_by)
+        VALUES ($1, $2, $3, $4, $5) RETURNING id
+      `, [userId, course_id, protocol_number, protocol_date, req.user.id]);
+      createdIds.push(result.rows[0].id);
+    }
+
+    await client.query('COMMIT');
+    res.json({ created: createdIds.length, ids: createdIds, skipped: skippedIds.length });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: 'db_error', details: e.message });
+  } finally {
+    client.release();
   }
 });
 
