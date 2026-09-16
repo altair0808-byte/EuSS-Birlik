@@ -53,7 +53,8 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
 router.get('/mine', authRequired, async (req, res) => {
   try {
     const result = await query(`
-      SELECT a.*, c.title_ru, c.title_kz, c.time_limit_minutes, c.pass_score_percent
+      SELECT a.*, c.title_ru, c.title_kz, c.time_limit_minutes, c.pass_score_percent,
+             c.material_pdf_path, c.video_url, c.description_ru, c.description_kz
       FROM assignments a
       JOIN courses c ON c.id = a.course_id
       WHERE a.user_id = $1

@@ -31,6 +31,80 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, re
   }
 });
 
+// Bulk import from Excel
+// Expected columns (header row, any order): Фамилия, Имя, Объект, Отдел, Должность, Логин, Пароль
+router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'no_file' });
+
+  const headerMap = {
+    'фамилия': 'last_name',
+    'имя': 'first_name',
+    'объект': 'object',
+    'отдел': 'department',
+    'подразделение': 'department',
+    'должность': 'position',
+    'логин': 'login',
+    'табельный номер': 'login',
+    'пароль': 'password'
+  };
+
+  try {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(req.file.path);
+    const ws = wb.worksheets[0];
+    if (!ws) return res.status(400).json({ error: 'empty_file' });
+
+    const headerRow = ws.getRow(1);
+    const colByField = {};
+    headerRow.eachCell((cell, colNumber) => {
+      const key = String(cell.value || '').trim().toLowerCase();
+      if (headerMap[key]) colByField[headerMap[key]] = colNumber;
+    });
+    if (!colByField.last_name || !colByField.first_name || !colByField.login) {
+      return res.status(400).json({ error: 'missing_columns', message: 'В файле должны быть колонки: Фамилия, Имя, Логин (и опционально Объект, Отдел, Должность, Пароль)' });
+    }
+
+    let created = 0, skipped = 0;
+    const errors = [];
+
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      const get = (field) => colByField[field] ? String(row.getCell(colByField[field]).value || '').trim() : '';
+      const last_name = get('last_name');
+      const first_name = get('first_name');
+      const login = get('login');
+      if (!last_name && !first_name && !login) continue; // blank row
+
+      if (!last_name || !first_name || !login) {
+        errors.push(`Строка ${r}: не заполнены обязательные поля`);
+        skipped++;
+        continue;
+      }
+
+      const exists = await query('SELECT id FROM users WHERE login = $1', [login]);
+      if (exists.rows.length > 0) {
+        errors.push(`Строка ${r}: логин "${login}" уже занят`);
+        skipped++;
+        continue;
+      }
+
+      const password = get('password') || Math.random().toString(36).slice(-8);
+      const hash = bcrypt.hashSync(password, 10);
+      await query(
+        `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'employee')`,
+        [last_name, first_name, get('object'), get('department'), get('position'), login, hash]
+      );
+      created++;
+    }
+
+    res.json({ created, skipped, errors });
+  } catch (e) {
+    console.error('Error importing users:', e);
+    res.status(500).json({ error: 'import_failed', details: e.message });
+  }
+});
+
 // Meta
 router.get('/meta/objects', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {

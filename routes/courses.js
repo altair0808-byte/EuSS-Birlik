@@ -19,8 +19,9 @@ router.get('/', authRequired, async (req, res) => {
   }
 });
 
-// Single course with questions
-router.get('/:id', authRequired, async (req, res) => {
+// Single course with questions (includes correct_index — admin/superadmin only,
+// otherwise employees could fetch the answer key before taking the test)
+router.get('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
     const courseRes = await query('SELECT * FROM courses WHERE id = $1', [req.params.id]);
     const course = courseRes.rows[0];

@@ -4,7 +4,10 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { query } = require('../db');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'tb-training-secret-key-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET не задана в переменных окружения!');
+}
 
 function authRequired(req, res, next) {
   const authHeader = req.headers['authorization'];
