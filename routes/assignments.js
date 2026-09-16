@@ -69,12 +69,13 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (re
   try {
     await client.query('BEGIN');
 
-    // Проверяем, что все переданные id действительно существуют и относятся к сотрудникам
+    // Проверяем, что все переданные id существуют в базе (исключая суперадмина)
     const checkRes = await client.query(
-      `SELECT id FROM users WHERE id = ANY($1::bigint[]) AND role = 'employee'`,
+      `SELECT id FROM users WHERE id = ANY($1::bigint[]) AND role != 'superadmin'`,
       [uniqueUserIds]
     );
-    const validIds = new Set(checkRes.rows.map(r => r.id));
+    // Приводим id из базы к Number, чтобы совпадало с типами в uniqueUserIds
+    const validIds = new Set(checkRes.rows.map(r => Number(r.id)));
     const skippedIds = uniqueUserIds.filter(id => !validIds.has(id));
 
     const createdIds = [];
