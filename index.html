@@ -10,16 +10,945 @@
   body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
-  .no-select { user-select: none; -webkit-user-select: none; }
-  .fade-in { animation: fadeIn .25s ease-out; }
-  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px);} to { opacity:1; transform:none; } }
+  .fade-in { animation: fadeIn .2s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 </style>
 </head>
-<body class="bg-slate-100 min-h-screen">
-  <div id="app"></div>
+<body class="bg-slate-100 min-h-screen text-slate-800">
+<div id="app"></div>
 
-  <script src="/js/i18n.js"></script>
-  <script src="/js/api.js"></script>
-  <script src="/js/app.js"></script>
+<script>
+// --- I18N DICTIONARY ---
+const I18N = {
+  ru: {
+    app_title: 'Обучение и проверка знаний по ТБ / БиОТ',
+    login: 'Вход в систему',
+    login_field: 'Логин',
+    password_field: 'Пароль',
+    login_btn: 'Войти',
+    login_error: 'Неверный логин или пароль',
+    logout: 'Выйти',
+    lang_switch: 'ҚАЗ',
+
+    nav_dashboard: 'Главная',
+    nav_users: 'Сотрудники',
+    nav_courses: 'Курсы и тесты',
+    nav_assignments: 'Назначения / Журнал',
+    nav_export: 'Экспорт в Excel',
+    nav_settings: 'Настройки',
+    nav_my_tests: 'Мои тесты',
+
+    role_superadmin: 'Суперадминистратор',
+    role_admin: 'Администратор (Инженер ТБ)',
+    role_employee: 'Сотрудник',
+
+    hint_last_protocol: 'Последний использованный номер протокола',
+    hint_last_cert: 'Последний выданный номер сертификата',
+    hint_next_cert: 'Следующий будет присвоен',
+
+    users_title: 'Сотрудники и администраторы',
+    add_user: 'Добавить пользователя',
+    import_excel: 'Импорт из Excel (.xlsx)',
+    last_name: 'Фамилия',
+    first_name: 'Имя',
+    object_field: 'Объект',
+    department_field: 'Отдел',
+    position_field: 'Должность',
+    role_field: 'Роль',
+    save: 'Сохранить',
+    cancel: 'Отмена',
+    edit: 'Изменить',
+    delete: 'Удалить',
+    actions: 'Действия',
+    confirm_delete: 'Удалить запись без возможности восстановления?',
+    search_placeholder: 'Поиск по фамилии, имени, логину...',
+    all_objects: 'Все объекты',
+    all_departments: 'Все отделы',
+
+    courses_title: 'Курсы и тестовые материалы',
+    add_course: 'Добавить курс',
+    course_title_ru: 'Название курса (RU)',
+    course_title_kz: 'Название курса (KZ)',
+    course_desc_ru: 'Описание (RU)',
+    course_desc_kz: 'Описание (KZ)',
+    video_url: 'Ссылка на видео (YouTube и т.д.)',
+    material_pdf: 'Материал (PDF)',
+    time_limit: 'Лимит времени (мин)',
+    pass_score: 'Проходной балл (%)',
+    validity: 'Срок действия сертификата (мес.)',
+    upload: 'Загрузить',
+    questions: 'Вопросы теста',
+    add_question: 'Добавить вопрос',
+    question_ru: 'Вопрос (RU)',
+    question_kz: 'Вопрос (KZ)',
+    option: 'Вариант ответа',
+    correct_answer: 'Правильный вариант',
+
+    assignments_title: 'Назначения тестов и журнал результатов',
+    assign_test: 'Назначить тест',
+    select_employee: 'Сотрудник',
+    select_course: 'Курс',
+    protocol_number: 'Номер протокола',
+    protocol_date: 'Дата протокола',
+    filter_status: 'Статус',
+    status_pending: 'Ожидает',
+    status_in_progress: 'В процессе',
+    status_passed: 'Пройден',
+    status_failed: 'Не пройден',
+    has_certificate: 'Наличие сертификата',
+    yes: 'Да',
+    no: 'Нет',
+    allow_retake: 'Разрешить пересдачу',
+    download_cert: 'Скачать сертификат',
+    score: 'Балл',
+    test_date: 'Дата прохождения',
+    next_test_date: 'Следующее прохождение',
+    apply_filters: 'Применить',
+    reset_filters: 'Сбросить',
+
+    export_title: 'Экспорт результатов в Excel',
+    export_desc: 'Выберите объект — файл будет сформирован с отдельным листом для каждого отдела.',
+    export_btn: 'Скачать Excel',
+
+    settings_title: 'Настройки компании и сертификатов',
+    company_name: 'Название компании',
+    chairman_name: 'ФИО председателя комиссии',
+    logo_upload: 'Логотип компании',
+    stamp_upload: 'Печать (изображение)',
+    signature_upload: 'Подпись председателя (изображение)',
+
+    my_tests_title: 'Мои назначенные тесты',
+    start_test: 'Пройти обучение и тест',
+    view_material: 'Материалы курса',
+    test_locked: 'Тест провален. Ожидайте разрешения пересдачи от администратора.',
+    test_passed_msg: 'Тест успешно пройден!',
+    already_passed: 'Курс успешно пройден. Сертификат действителен.',
+
+    test_screen_title: 'Тестирование',
+    time_left: 'Осталось времени',
+    submit_test: 'Завершить тест',
+    question_of: 'Вопрос',
+    warning_focus: 'Внимание! Не переключайтесь на другие вкладки и окна во время теста. Обнаружено переключений',
+    of_max: 'из',
+    test_terminated: 'Тест принудительно завершён из-за нарушения правил (переключение вкладок/окон более 3 раз).',
+    confirm_submit: 'Вы уверены, что хотите завершить тест? Повторная попытка возможна только с разрешения администратора.',
+    anti_cheat_notice: 'Копирование текста, выделение и переключение вкладок во время теста запрещены и фиксируются системой.',
+
+    result_title: 'Результат теста',
+    your_score: 'Ваш результат',
+    passed_label: 'Тест пройден',
+    failed_label: 'Тест не пройден',
+    back_to_list: 'Вернуться к списку',
+    cert_number: 'Номер сертификата',
+
+    loading: 'Загрузка...',
+    no_data: 'Нет данных',
+    required_field: 'Обязательное поле',
+    save_success: 'Сохранено',
+    error_generic: 'Произошла ошибка. Попробуйте снова.'
+  },
+  kz: {
+    app_title: 'ЕҚ / БиОТ бойынша оқыту және білім тексеру',
+    login: 'Жүйеге кіру',
+    login_field: 'Логин',
+    password_field: 'Құпия сөз',
+    login_btn: 'Кіру',
+    login_error: 'Логин немесе құпия сөз қате',
+    logout: 'Шығу',
+    lang_switch: 'РУС',
+
+    nav_dashboard: 'Басты бет',
+    nav_users: 'Қызметкерлер',
+    nav_courses: 'Курстар мен тесттер',
+    nav_assignments: 'Тағайындаулар / Журнал',
+    nav_export: 'Excel-ге экспорт',
+    nav_settings: 'Баптаулар',
+    nav_my_tests: 'Менің тесттерім',
+
+    role_superadmin: 'Супер әкімші',
+    role_admin: 'Әкімші (ЕҚ инженері)',
+    role_employee: 'Қызметкер',
+
+    hint_last_protocol: 'Соңғы қолданылған хаттама нөмірі',
+    hint_last_cert: 'Соңғы берілген сертификат нөмірі',
+    hint_next_cert: 'Келесі нөмір',
+
+    users_title: 'Қызметкерлер мен әкімшілер',
+    add_user: 'Пайдаланушы қосу',
+    import_excel: 'Excel-ден импорт (.xlsx)',
+    last_name: 'Тегі',
+    first_name: 'Аты',
+    object_field: 'Обьект',
+    department_field: 'Бөлім',
+    position_field: 'Лауазым',
+    role_field: 'Рөл',
+    save: 'Сақтау',
+    cancel: 'Бас тарту',
+    edit: 'Өзгерту',
+    delete: 'Жою',
+    actions: 'Әрекеттер',
+    confirm_delete: 'Жазбаны қайтарусыз жою керек пе?',
+    search_placeholder: 'Тегі, аты, логин бойынша іздеу...',
+    all_objects: 'Барлық обьектілер',
+    all_departments: 'Барлық бөлімдер',
+
+    courses_title: 'Курстар мен тест материалдары',
+    add_course: 'Курс қосу',
+    course_title_ru: 'Курс атауы (RU)',
+    course_title_kz: 'Курс атауы (KZ)',
+    course_desc_ru: 'Сипаттама (RU)',
+    course_desc_kz: 'Сипаттама (KZ)',
+    video_url: 'Видео сілтемесі (YouTube т.б.)',
+    material_pdf: 'Материал (PDF)',
+    time_limit: 'Уақыт шегі (мин)',
+    pass_score: 'Өту балы (%)',
+    validity: 'Сертификат мерзімі (ай)',
+    upload: 'Жүктеу',
+    questions: 'Тест сұрақтары',
+    add_question: 'Сұрақ қосу',
+    question_ru: 'Сұрақ (RU)',
+    question_kz: 'Сұрақ (KZ)',
+    option: 'Жауап нұсқасы',
+    correct_answer: 'Дұрыс нұсқа',
+
+    assignments_title: 'Тесттерді тағайындау және нәтижелер журналы',
+    assign_test: 'Тест тағайындау',
+    select_employee: 'Қызметкер',
+    select_course: 'Курс',
+    protocol_number: 'Хаттама нөмірі',
+    protocol_date: 'Хаттама күні',
+    filter_status: 'Мәртебе',
+    status_pending: 'Күтуде',
+    status_in_progress: 'Барысында',
+    status_passed: 'Өтті',
+    status_failed: 'Өтпеді',
+    has_certificate: 'Сертификат бар ма',
+    yes: 'Иә',
+    no: 'Жоқ',
+    allow_retake: 'Қайта тапсыруға рұқсат беру',
+    download_cert: 'Сертификатты жүктеу',
+    score: 'Балл',
+    test_date: 'Өту күні',
+    next_test_date: 'Келесі өту күні',
+    apply_filters: 'Қолдану',
+    reset_filters: 'Тазарту',
+
+    export_title: 'Нәтижелерді Excel-ге экспорттау',
+    export_desc: 'Обьектіні таңдаңыз — әр бөлім үшін жеке парақ жасалады.',
+    export_btn: 'Excel жүктеу',
+
+    settings_title: 'Компания және сертификат баптаулары',
+    company_name: 'Компания атауы',
+    chairman_name: 'Комиссия төрағасының аты-жөні',
+    logo_upload: 'Компания логотипі',
+    stamp_upload: 'Мөр (сурет)',
+    signature_upload: 'Төрағаның қолы (сурет)',
+
+    my_tests_title: 'Маған тағайындалған тесттер',
+    start_test: 'Оқу және тестілеуден өту',
+    view_material: 'Курс материалдары',
+    test_locked: 'Тест сәтсіз аяқталды. Әкімшінің қайта тапсыруға рұқсатын күтіңіз.',
+    test_passed_msg: 'Тест сәтті тапсырылды!',
+    already_passed: 'Курс сәтті аяқталды. Сертификат жарамды.',
+
+    test_screen_title: 'Тестілеу',
+    time_left: 'Қалған уақыт',
+    submit_test: 'Тестті аяқтау',
+    question_of: 'Сұрақ',
+    warning_focus: 'Назар аударыңыз! Тест кезінде басқа қойындыларға ауыспаңыз. Анықталған ауысулар',
+    of_max: '/',
+    test_terminated: 'Ережелерді бұзғаны үшін тест мәжбүрлі түрде аяқталды (қойындыны 3 реттен артық ауыстыру).',
+    confirm_submit: 'Тестті аяқтағыңыз келетініне сенімдісіз бе? Қайта әрекет тек әкімшінің рұқсатымен мүмкін.',
+    anti_cheat_notice: 'Тест кезінде мәтінді көшіру, белгілеу және қойындыларды ауыстыру тыйым салынған және жүйеде тіркеледі.',
+
+    result_title: 'Тест нәтижесі',
+    your_score: 'Сіздің нәтижеңіз',
+    passed_label: 'Тест тапсырылды',
+    failed_label: 'Тест тапсырылмады',
+    back_to_list: 'Тізімге оралу',
+    cert_number: 'Сертификат нөмірі',
+
+    loading: 'Жүктелуде...',
+    no_data: 'Деректер жоқ',
+    required_field: 'Міндетті өріс',
+    save_success: 'Сақталды',
+    error_generic: 'Қате орын алды. Қайталап көріңіз.'
+  }
+};
+
+let CURRENT_LANG = localStorage.getItem('lang') || 'ru';
+function t(key) { return (I18N[CURRENT_LANG] && I18N[CURRENT_LANG][key]) || key; }
+function setLang(lang) { CURRENT_LANG = lang; localStorage.setItem('lang', lang); }
+
+
+// --- STATE & API ---
+const state = {
+  token: localStorage.getItem('token') || null,
+  user: JSON.parse(localStorage.getItem('user') || 'null'),
+  tab: 'dashboard',
+  courses: [],
+  users: [],
+  assignments: [],
+  settings: {},
+  activeTest: null,
+  testTimer: null,
+  timeLeft: 0
+};
+
+const api = {
+  async req(url, opts = {}) {
+    opts.headers = opts.headers || {};
+    if (state.token) opts.headers['Authorization'] = 'Bearer ' + state.token;
+    if (opts.body && !(opts.body instanceof FormData)) {
+      opts.headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(opts.body);
+    }
+    const res = await fetch(url, opts);
+    if (res.status === 401) {
+      logout();
+      throw new Error('Unauthorized');
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Ошибка сервера' }));
+      throw new Error(err.error || 'Ошибка запроса');
+    }
+    const ct = res.headers.get('content-type');
+    if (ct && ct.includes('application/json')) return res.json();
+    return res;
+  },
+  login(login, password) { return this.req('/api/auth/login', { method: 'POST', body: { login, password } }); },
+  getUsers(params = '') { return this.req('/api/users' + params); },
+  saveUser(data, id) { return this.req(id ? '/api/users/' + id : '/api/users', { method: id ? 'PUT' : 'POST', body: data }); },
+  deleteUser(id) { return this.req('/api/users/' + id, { method: 'DELETE' }); },
+  getCourses() { return this.req('/api/courses'); },
+  getCourse(id) { return this.req('/api/courses/' + id); },
+  saveCourse(data, id) { return this.req(id ? '/api/courses/' + id : '/api/courses', { method: id ? 'PUT' : 'POST', body: data }); },
+  deleteCourse(id) { return this.req('/api/courses/' + id, { method: 'DELETE' }); },
+  addQuestion(cid, data) { return this.req('/api/courses/' + cid + '/questions', { method: 'POST', body: data }); },
+  deleteQuestion(qid) { return this.req('/api/courses/questions/' + qid, { method: 'DELETE' }); },
+  getAssignments() { return this.req('/api/assignments'); },
+  getMyAssignments() { return this.req('/api/assignments/mine'); },
+  createAssignment(data) { return this.req('/api/assignments', { method: 'POST', body: data }); },
+  deleteAssignment(id) { return this.req('/api/assignments/' + id, { method: 'DELETE' }); },
+  allowRetake(id) { return this.req('/api/assignments/' + id + '/allow-retake', { method: 'POST' }); },
+  startTest(id) { return this.req('/api/assignments/' + id + '/start', { method: 'POST' }); },
+  submitTest(id, answers) { return this.req('/api/assignments/' + id + '/submit', { method: 'POST', body: { answers } }); },
+  getSettings() { return this.req('/api/settings'); },
+  saveSettings(data) { return this.req('/api/settings', { method: 'PUT', body: data }); }
+};
+
+function logout() {
+  state.token = null;
+  state.user = null;
+  localStorage.removeItem('token');
+  localStorage.removeItem('user');
+  render();
+}
+
+function switchLang(l) {
+  setLang(l);
+  render();
+}
+
+// --- RENDER APP ---
+function render() {
+  const app = document.getElementById('app');
+  if (!state.token || !state.user) {
+    renderLogin(app);
+    return;
+  }
+  renderMain(app);
+}
+
+function renderLogin(app) {
+  app.innerHTML = `
+    <div class="min-h-screen flex items-center justify-center p-4">
+      <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-8 fade-in border border-slate-200">
+        <div class="flex justify-between items-center mb-6">
+          <span class="text-xs font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full">Safety & Health</span>
+          <button onclick="switchLang(CURRENT_LANG === 'ru' ? 'kz' : 'ru')" class="text-xs font-medium text-slate-600 hover:text-blue-600 border px-2 py-1 rounded">
+            ${CURRENT_LANG === 'ru' ? 'ҚАЗ' : 'РУС'}
+          </button>
+        </div>
+        <h1 class="text-2xl font-bold text-slate-900 mb-1">${t('login')}</h1>
+        <p class="text-sm text-slate-500 mb-6">${t('app_title')}</p>
+        
+        <form id="loginForm" onsubmit="handleLogin(event)" class="space-y-4">
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">${t('login_field')}</label>
+            <input type="text" id="loginInput" required placeholder="8888" class="w-full px-3.5 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">${t('password_field')}</label>
+            <input type="password" id="passInput" required class="w-full px-3.5 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+          </div>
+          <div id="loginError" class="text-sm text-red-600 hidden"></div>
+          <button type="submit" class="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow transition">
+            ${t('login_btn')}
+          </button>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
+async function handleLogin(e) {
+  e.preventDefault();
+  const errDiv = document.getElementById('loginError');
+  errDiv.classList.add('hidden');
+  const login = document.getElementById('loginInput').value.trim();
+  const pass = document.getElementById('passInput').value;
+  try {
+    const res = await api.login(login, pass);
+    state.token = res.token;
+    state.user = res.user;
+    localStorage.setItem('token', res.token);
+    localStorage.setItem('user', JSON.stringify(res.user));
+    state.tab = res.user.role === 'employee' ? 'my_tests' : 'dashboard';
+    render();
+  } catch (err) {
+    errDiv.textContent = err.message || t('login_error');
+    errDiv.classList.remove('hidden');
+  }
+}
+
+function renderMain(app) {
+  const isEmployee = state.user.role === 'employee';
+  const roleName = t('role_' + state.user.role) || state.user.role;
+
+  app.innerHTML = `
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-30">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center h-16">
+        <div class="flex items-center space-x-3">
+          <div class="w-9 h-9 bg-blue-600 text-white rounded-lg flex items-center justify-center font-bold text-lg">ТБ</div>
+          <div>
+            <h1 class="text-base font-bold text-slate-900 leading-tight">${t('app_title')}</h1>
+            <p class="text-xs text-slate-500">${state.user.last_name || ''} ${state.user.first_name || ''} (${roleName})</p>
+          </div>
+        </div>
+        <div class="flex items-center space-x-3">
+          <button onclick="switchLang(CURRENT_LANG === 'ru' ? 'kz' : 'ru')" class="text-xs font-semibold px-2.5 py-1.5 border rounded-lg text-slate-700 hover:bg-slate-50">
+            ${CURRENT_LANG === 'ru' ? 'ҚАЗ' : 'РУС'}
+          </button>
+          <button onclick="logout()" class="text-xs font-semibold px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition">
+            ${t('logout')}
+          </button>
+        </div>
+      </div>
+      <!-- Навигация -->
+      <nav class="bg-slate-50 border-t border-slate-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-1 sm:space-x-4 overflow-x-auto py-2">
+          ${!isEmployee ? `
+            <button onclick="setTab('dashboard')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'dashboard' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_dashboard')}</button>
+            <button onclick="setTab('users')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_users')}</button>
+            <button onclick="setTab('courses')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'courses' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_courses')}</button>
+            <button onclick="setTab('assignments')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'assignments' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_assignments')}</button>
+            <a href="/api/export/excel" target="_blank" class="px-3 py-1.5 text-xs font-semibold rounded-md text-emerald-700 hover:bg-emerald-50">📥 ${t('nav_export')}</a>
+            <button onclick="setTab('settings')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'settings' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_settings')}</button>
+          ` : `
+            <button onclick="setTab('my_tests')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'my_tests' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_my_tests')}</button>
+          `}
+        </div>
+      </nav>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <div id="tabContent"></div>
+    </main>
+  `;
+
+  loadTabContent();
+}
+
+function setTab(tname) {
+  state.tab = tname;
+  render();
+}
+
+async function loadTabContent() {
+  const container = document.getElementById('tabContent');
+  if (!container) return;
+
+  if (state.tab === 'dashboard') {
+    container.innerHTML = `
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+        <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-bold text-slate-500 uppercase">Сотрудники</div>
+          <div class="text-3xl font-black text-slate-900 mt-2" id="dashUsers">...</div>
+        </div>
+        <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-bold text-slate-500 uppercase">Курсы и тесты</div>
+          <div class="text-3xl font-black text-blue-600 mt-2" id="dashCourses">...</div>
+        </div>
+        <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-bold text-slate-500 uppercase">Назначено тестирований</div>
+          <div class="text-3xl font-black text-emerald-600 mt-2" id="dashAssignments">...</div>
+        </div>
+      </div>
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <h3 class="text-base font-bold mb-4">Быстрые действия</h3>
+        <div class="flex flex-wrap gap-3">
+          <button onclick="setTab('assignments')" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700">Назначить проверку знаний</button>
+          <button onclick="setTab('users')" class="px-4 py-2 bg-slate-100 text-slate-800 rounded-lg text-sm font-semibold hover:bg-slate-200">Добавить сотрудника</button>
+          <button onclick="setTab('courses')" class="px-4 py-2 bg-slate-100 text-slate-800 rounded-lg text-sm font-semibold hover:bg-slate-200">Создать курс</button>
+        </div>
+      </div>
+    `;
+    try {
+      const [u, c, a] = await Promise.all([api.getUsers(), api.getCourses(), api.getAssignments()]);
+      document.getElementById('dashUsers').textContent = u.length;
+      document.getElementById('dashCourses').textContent = c.length;
+      document.getElementById('dashAssignments').textContent = a.length;
+    } catch (e) {}
+  }
+
+  if (state.tab === 'users') {
+    container.innerHTML = `
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
+          <h2 class="text-lg font-bold text-slate-900">${t('users_title')}</h2>
+          <button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${t('add_user')}</button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">ФИО</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Логин</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Объект / Отдел</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Должность</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Роль</th>
+                <th class="px-4 py-3 text-right font-semibold text-slate-600">${t('actions')}</th>
+              </tr>
+            </thead>
+            <tbody id="usersTable" class="divide-y divide-slate-100"><tr><td colspan="6" class="p-4 text-center text-slate-400">Загрузка...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="userModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6">
+          <h3 class="text-lg font-bold mb-4" id="userModalTitle">Пользователь</h3>
+          <form onsubmit="saveUserForm(event)" class="space-y-3">
+            <input type="hidden" id="userId">
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="text-xs font-semibold text-slate-600">Фамилия</label><input id="uLastName" required class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Имя</label><input id="uFirstName" required class="w-full border p-2 rounded text-sm"></div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="text-xs font-semibold text-slate-600">Объект</label><input id="uObject" class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Отдел</label><input id="uDept" class="w-full border p-2 rounded text-sm"></div>
+            </div>
+            <div><label class="text-xs font-semibold text-slate-600">Должность</label><input id="uPos" class="w-full border p-2 rounded text-sm"></div>
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="text-xs font-semibold text-slate-600">Логин (табельный номер)</label><input id="uLogin" required class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Пароль</label><input type="password" id="uPass" placeholder="Не менять" class="w-full border p-2 rounded text-sm"></div>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Роль</label>
+              <select id="uRole" class="w-full border p-2 rounded text-sm">
+                <option value="employee">Сотрудник</option>
+                <option value="admin">Администратор (Инженер ТБ)</option>
+                <option value="superadmin">Суперадминистратор</option>
+              </select>
+            </div>
+            <div class="flex justify-end space-x-2 pt-3 border-t">
+              <button type="button" onclick="closeUserModal()" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
+              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+    loadUsersList();
+  }
+
+  if (state.tab === 'courses') {
+    container.innerHTML = `
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <div class="flex justify-between items-center mb-6">
+          <h2 class="text-lg font-bold text-slate-900">${t('courses_title')}</h2>
+          <button onclick="openCourseModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold">+ ${t('add_course')}</button>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="coursesList"><div class="p-4 text-slate-400">Загрузка курсов...</div></div>
+      </div>
+      <div id="courseModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6">
+          <h3 class="text-lg font-bold mb-4" id="courseModalTitle">Курс</h3>
+          <form onsubmit="saveCourseForm(event)" class="space-y-3">
+            <input type="hidden" id="courseId">
+            <div><label class="text-xs font-semibold text-slate-600">Название (RU)</label><input id="cTitleRu" required class="w-full border p-2 rounded text-sm"></div>
+            <div><label class="text-xs font-semibold text-slate-600">Название (KZ)</label><input id="cTitleKz" required class="w-full border p-2 rounded text-sm"></div>
+            <div class="grid grid-cols-3 gap-3">
+              <div><label class="text-xs font-semibold text-slate-600">Время (мин)</label><input type="number" id="cTime" value="20" class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Проходной (%)</label><input type="number" id="cPass" value="80" class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Срок (мес)</label><input type="number" id="cValid" value="12" class="w-full border p-2 rounded text-sm"></div>
+            </div>
+            <div><label class="text-xs font-semibold text-slate-600">Видео URL</label><input id="cVideo" placeholder="https://youtube.com/..." class="w-full border p-2 rounded text-sm"></div>
+            <div class="flex justify-end space-x-2 pt-3 border-t">
+              <button type="button" onclick="document.getElementById('courseModal').classList.add('hidden')" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
+              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+    loadCoursesList();
+  }
+
+  if (state.tab === 'assignments') {
+    container.innerHTML = `
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <div class="flex justify-between items-center mb-6">
+          <h2 class="text-lg font-bold text-slate-900">${t('nav_assignments')}</h2>
+          <button onclick="openAssignModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold">+ Назначить тест</button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Сотрудник</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Курс</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Протокол</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Статус</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Балл</th>
+                <th class="px-4 py-3 text-right font-semibold text-slate-600">Действия</th>
+              </tr>
+            </thead>
+            <tbody id="assignTable" class="divide-y divide-slate-100"><tr><td colspan="6" class="p-4 text-center text-slate-400">Загрузка...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="assignModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+          <h3 class="text-lg font-bold mb-4">Назначить тестирование</h3>
+          <form onsubmit="submitAssignForm(event)" class="space-y-3">
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Сотрудник</label>
+              <select id="asUserId" required class="w-full border p-2 rounded text-sm"></select>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Курс</label>
+              <select id="asCourseId" required class="w-full border p-2 rounded text-sm"></select>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="text-xs font-semibold text-slate-600">Номер протокола</label><input id="asProtNum" required class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Дата протокола</label><input type="date" id="asProtDate" required class="w-full border p-2 rounded text-sm"></div>
+            </div>
+            <div class="flex justify-end space-x-2 pt-3 border-t">
+              <button type="button" onclick="document.getElementById('assignModal').classList.add('hidden')" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
+              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Назначить</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+    loadAssignmentsList();
+  }
+
+  if (state.tab === 'my_tests') {
+    container.innerHTML = `
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <h2 class="text-lg font-bold text-slate-900 mb-6">${t('nav_my_tests')}</h2>
+        <div id="myTestsList" class="space-y-4"><div class="text-slate-400">Загрузка...</div></div>
+      </div>
+      <div id="testRunModal" class="fixed inset-0 bg-slate-900/60 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] flex flex-col p-6">
+          <div class="flex justify-between items-center pb-4 border-b">
+            <h3 class="text-lg font-bold text-slate-900" id="testRunTitle">Тестирование</h3>
+            <span id="testRunTimer" class="font-mono font-bold text-red-600 bg-red-50 px-3 py-1 rounded-lg text-sm">00:00</span>
+          </div>
+          <div id="testRunQuestions" class="flex-1 overflow-y-auto py-4 space-y-6"></div>
+          <div class="pt-4 border-t flex justify-end space-x-3">
+            <button onclick="finishTest()" class="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg">Завершить тест</button>
+          </div>
+        </div>
+      </div>
+    `;
+    loadMyTests();
+  }
+
+  if (state.tab === 'settings') {
+    container.innerHTML = `
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-w-xl">
+        <h2 class="text-lg font-bold text-slate-900 mb-4">${t('nav_settings')}</h2>
+        <form onsubmit="saveSettingsForm(event)" class="space-y-4">
+          <div>
+            <label class="text-xs font-semibold text-slate-600">Наименование организации (ТОО / АО)</label>
+            <input id="setComp" required class="w-full border p-2.5 rounded-lg text-sm">
+          </div>
+          <div>
+            <label class="text-xs font-semibold text-slate-600">Председатель комиссии (ФИО, должность)</label>
+            <input id="setChair" required class="w-full border p-2.5 rounded-lg text-sm">
+          </div>
+          <button type="submit" class="px-5 py-2.5 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить настройки</button>
+        </form>
+      </div>
+    `;
+    loadSettingsData();
+  }
+}
+
+// --- USERS LOGIC ---
+async function loadUsersList() {
+  const users = await api.getUsers();
+  state.users = users;
+  const tbody = document.getElementById('usersTable');
+  if (!tbody) return;
+  tbody.innerHTML = users.map(u => `
+    <tr class="hover:bg-slate-50">
+      <td class="px-4 py-3 font-medium text-slate-900">${u.last_name} ${u.first_name}</td>
+      <td class="px-4 py-3 font-mono text-slate-600">${u.login}</td>
+      <td class="px-4 py-3 text-slate-600">${u.object || '—'} / ${u.department || '—'}</td>
+      <td class="px-4 py-3 text-slate-600">${u.position || '—'}</td>
+      <td class="px-4 py-3"><span class="text-xs font-semibold px-2 py-0.5 rounded ${u.role === 'superadmin' ? 'bg-purple-100 text-purple-700' : u.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-700'}">${u.role}</span></td>
+      <td class="px-4 py-3 text-right space-x-2">
+        <button onclick="editUser(${u.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>
+        <button onclick="delUser(${u.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function openUserModal(u = null) {
+  document.getElementById('userId').value = u ? u.id : '';
+  document.getElementById('uLastName').value = u ? u.last_name : '';
+  document.getElementById('uFirstName').value = u ? u.first_name : '';
+  document.getElementById('uObject').value = u ? u.object : '';
+  document.getElementById('uDept').value = u ? u.department : '';
+  document.getElementById('uPos').value = u ? u.position : '';
+  document.getElementById('uLogin').value = u ? u.login : '';
+  document.getElementById('uPass').value = '';
+  document.getElementById('uRole').value = u ? u.role : 'employee';
+  document.getElementById('userModalTitle').textContent = u ? 'Редактировать сотрудника' : 'Добавить сотрудника';
+  document.getElementById('userModal').classList.remove('hidden');
+}
+
+function closeUserModal() {
+  document.getElementById('userModal').classList.add('hidden');
+}
+
+function editUser(id) {
+  const u = state.users.find(x => x.id === id);
+  if (u) openUserModal(u);
+}
+
+async function delUser(id) {
+  if (!confirm('Удалить пользователя?')) return;
+  await api.deleteUser(id);
+  loadUsersList();
+}
+
+async function saveUserForm(e) {
+  e.preventDefault();
+  const id = document.getElementById('userId').value;
+  const data = {
+    last_name: document.getElementById('uLastName').value.trim(),
+    first_name: document.getElementById('uFirstName').value.trim(),
+    object: document.getElementById('uObject').value.trim(),
+    department: document.getElementById('uDept').value.trim(),
+    position: document.getElementById('uPos').value.trim(),
+    login: document.getElementById('uLogin').value.trim(),
+    role: document.getElementById('uRole').value
+  };
+  const pass = document.getElementById('uPass').value;
+  if (pass) data.password = pass;
+  await api.saveUser(data, id);
+  closeUserModal();
+  loadUsersList();
+}
+
+// --- COURSES LOGIC ---
+async function loadCoursesList() {
+  const courses = await api.getCourses();
+  state.courses = courses;
+  const div = document.getElementById('coursesList');
+  if (!div) return;
+  div.innerHTML = courses.map(c => `
+    <div class="border border-slate-200 p-4 rounded-xl hover:shadow-sm transition bg-white flex flex-col justify-between">
+      <div>
+        <div class="flex justify-between items-start">
+          <h4 class="font-bold text-slate-900 text-base">${CURRENT_LANG === 'kz' ? c.title_kz : c.title_ru}</h4>
+          <span class="text-xs font-semibold bg-blue-50 text-blue-700 px-2 py-0.5 rounded">${c.time_limit_minutes} мин | ${c.pass_score_percent}%</span>
+        </div>
+        <p class="text-xs text-slate-500 mt-2">Вопросов в базе: ${c.questions_count || 0}</p>
+      </div>
+      <div class="mt-4 pt-3 border-t flex justify-end space-x-3 text-xs font-semibold">
+        <button onclick="delCourse(${c.id})" class="text-red-600 hover:underline">Удалить</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function openCourseModal() {
+  document.getElementById('courseId').value = '';
+  document.getElementById('cTitleRu').value = '';
+  document.getElementById('cTitleKz').value = '';
+  document.getElementById('cVideo').value = '';
+  document.getElementById('courseModal').classList.remove('hidden');
+}
+
+async function saveCourseForm(e) {
+  e.preventDefault();
+  const data = {
+    title_ru: document.getElementById('cTitleRu').value.trim(),
+    title_kz: document.getElementById('cTitleKz').value.trim(),
+    time_limit_minutes: parseInt(document.getElementById('cTime').value) || 20,
+    pass_score_percent: parseInt(document.getElementById('cPass').value) || 80,
+    validity_months: parseInt(document.getElementById('cValid').value) || 12,
+    video_url: document.getElementById('cVideo').value.trim()
+  };
+  await api.saveCourse(data);
+  document.getElementById('courseModal').classList.add('hidden');
+  loadCoursesList();
+}
+
+async function delCourse(id) {
+  if (!confirm('Удалить курс?')) return;
+  await api.deleteCourse(id);
+  loadCoursesList();
+}
+
+// --- ASSIGNMENTS LOGIC ---
+async function loadAssignmentsList() {
+  const list = await api.getAssignments();
+  state.assignments = list;
+  const tbody = document.getElementById('assignTable');
+  if (!tbody) return;
+  tbody.innerHTML = list.map(a => `
+    <tr class="hover:bg-slate-50">
+      <td class="px-4 py-3 font-medium">${a.last_name} ${a.first_name}<br><span class="text-xs text-slate-400">${a.position || ''}</span></td>
+      <td class="px-4 py-3">${CURRENT_LANG === 'kz' ? a.course_title_kz : a.course_title_ru}</td>
+      <td class="px-4 py-3 text-xs text-slate-600">№ ${a.protocol_number}<br>${a.protocol_date}</td>
+      <td class="px-4 py-3">
+        <span class="text-xs font-bold px-2 py-1 rounded ${a.status === 'passed' ? 'bg-emerald-100 text-emerald-800' : a.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}">
+          ${a.status === 'passed' ? 'СДАЛ' : a.status === 'failed' ? 'НЕ СДАЛ' : 'НАЗНАЧЕН'}
+        </span>
+      </td>
+      <td class="px-4 py-3 font-bold">${a.score_percent !== null ? a.score_percent + '%' : '—'}</td>
+      <td class="px-4 py-3 text-right space-x-2">
+        ${a.status === 'passed' && a.certificate_number ? `<a href="/api/certificates/${a.id}" target="_blank" class="text-blue-600 hover:underline text-xs font-semibold">Сертификат</a>` : ''}
+        ${a.status === 'failed' ? `<button onclick="allowRetake(${a.id})" class="text-amber-600 hover:underline text-xs">Пересдача</button>` : ''}
+        <button onclick="delAssign(${a.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function openAssignModal() {
+  const [users, courses] = await Promise.all([api.getUsers(), api.getCourses()]);
+  const uSel = document.getElementById('asUserId');
+  const cSel = document.getElementById('asCourseId');
+  uSel.innerHTML = users.filter(u => u.role === 'employee').map(u => `<option value="${u.id}">${u.last_name} ${u.first_name} (${u.login})</option>`).join('');
+  cSel.innerHTML = courses.map(c => `<option value="${c.id}">${c.title_ru}</option>`).join('');
+  document.getElementById('asProtNum').value = '1';
+  document.getElementById('asProtDate').value = new Date().toISOString().split('T')[0];
+  document.getElementById('assignModal').classList.remove('hidden');
+}
+
+async function submitAssignForm(e) {
+  e.preventDefault();
+  const data = {
+    user_id: document.getElementById('asUserId').value,
+    course_id: document.getElementById('asCourseId').value,
+    protocol_number: document.getElementById('asProtNum').value.trim(),
+    protocol_date: document.getElementById('asProtDate').value
+  };
+  await api.createAssignment(data);
+  document.getElementById('assignModal').classList.add('hidden');
+  loadAssignmentsList();
+}
+
+async function allowRetake(id) {
+  await api.allowRetake(id);
+  loadAssignmentsList();
+}
+
+async function delAssign(id) {
+  if (!confirm('Удалить назначение?')) return;
+  await api.deleteAssignment(id);
+  loadAssignmentsList();
+}
+
+// --- MY TESTS (EMPLOYEE) ---
+async function loadMyTests() {
+  const list = await api.getMyAssignments();
+  const div = document.getElementById('myTestsList');
+  if (!div) return;
+  if (!list.length) {
+    div.innerHTML = '<div class="p-6 text-center text-slate-500">У вас нет назначенных тестов.</div>';
+    return;
+  }
+  div.innerHTML = list.map(a => `
+    <div class="p-5 border border-slate-200 rounded-xl bg-white flex flex-wrap justify-between items-center gap-4">
+      <div>
+        <h4 class="text-base font-bold text-slate-900">${CURRENT_LANG === 'kz' ? a.course_title_kz : a.course_title_ru}</h4>
+        <p class="text-xs text-slate-500 mt-1">Протокол № ${a.protocol_number} от ${a.protocol_date}</p>
+      </div>
+      <div class="flex items-center space-x-3">
+        ${a.status === 'passed' ? `
+          <span class="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg">Сдано (${a.score_percent}%)</span>
+          <a href="/api/certificates/${a.id}" target="_blank" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold">Скачать сертификат</a>
+        ` : a.status === 'failed' && !a.retake_allowed ? `
+          <span class="text-xs font-bold text-red-700 bg-red-50 px-3 py-1.5 rounded-lg">Не сдано (${a.score_percent}%)</span>
+        ` : `
+          <button onclick="runTest(${a.id}, '${CURRENT_LANG === 'kz' ? a.course_title_kz : a.course_title_ru}')" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-sm shadow">
+            ${a.retake_allowed ? 'Пересдать тест' : 'Начать тестирование'}
+          </button>
+        `}
+      </div>
+    </div>
+  `).join('');
+}
+
+async function runTest(assignmentId, title) {
+  const data = await api.startTest(assignmentId);
+  state.activeTest = { id: assignmentId, questions: data.questions, answers: {} };
+  document.getElementById('testRunTitle').textContent = title;
+  
+  const qDiv = document.getElementById('testRunQuestions');
+  qDiv.innerHTML = data.questions.map((q, idx) => `
+    <div class="p-4 border rounded-xl bg-slate-50">
+      <div class="font-bold text-slate-900 mb-3 text-sm">${idx + 1}. ${CURRENT_LANG === 'kz' ? q.question_kz : q.question_ru}</div>
+      <div class="space-y-2">
+        ${(CURRENT_LANG === 'kz' ? q.options_kz : q.options_ru).map((opt, optIdx) => `
+          <label class="flex items-center space-x-3 p-2 bg-white rounded-lg border hover:border-blue-400 cursor-pointer text-sm">
+            <input type="radio" name="q_${q.id}" value="${optIdx}" onchange="state.activeTest.answers[${q.id}] = ${optIdx}" class="text-blue-600">
+            <span>${opt}</span>
+          </label>
+        `).join('')}
+      </div>
+    </div>
+  `).join('');
+
+  document.getElementById('testRunModal').classList.remove('hidden');
+}
+
+async function finishTest() {
+  if (!confirm('Вы уверены, что хотите завершить тест?')) return;
+  const res = await api.submitTest(state.activeTest.id, state.activeTest.answers);
+  document.getElementById('testRunModal').classList.add('hidden');
+  alert(res.passed ? `Поздравляем! Тест сдан (${res.score_percent}%)` : `К сожалению, тест не сдан (${res.score_percent}%)`);
+  loadMyTests();
+}
+
+// --- SETTINGS LOGIC ---
+async function loadSettingsData() {
+  const data = await api.getSettings();
+  document.getElementById('setComp').value = data.company_name || '';
+  document.getElementById('setChair').value = data.chairman_name || '';
+}
+
+async function saveSettingsForm(e) {
+  e.preventDefault();
+  await api.saveSettings({
+    company_name: document.getElementById('setComp').value.trim(),
+    chairman_name: document.getElementById('setChair').value.trim()
+  });
+  alert('Настройки успешно сохранены!');
+}
+
+// Init app
+render();
+</script>
 </body>
 </html>
