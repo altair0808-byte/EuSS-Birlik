@@ -1,7 +1,10 @@
 const express = require('express');
+const router = express.Router();
 const db = require('../db');
-const { authMiddleware, requireRole } = require('./auth');
-const upload = require('../upload');
+const { authRequired, requireRole } = require('./auth');
+const { makeUploader } = require('../upload'); // <-- ДОБАВИТЬ ЭТУ СТРОКУ
+
+const uploadMaterial = makeUploader('materials');
 
 const router = express.Router();
 const uploadLogo = makeUploader('logo');
