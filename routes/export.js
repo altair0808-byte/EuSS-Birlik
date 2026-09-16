@@ -1,7 +1,7 @@
 const express = require('express');
 const ExcelJS = require('exceljs');
 const db = require('../db');
-const { authRequired, requireRole } = require('../middleware/auth');
+const { authMiddleware, requireRole } = require('./auth');
 
 const router = express.Router();
 
