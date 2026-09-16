@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const ExcelJS = require('exceljs');
 const db = require('../db');
 const { authMiddleware, requireRole } = require('./auth');
-const { makeUploader } = require('../utils/upload');
+const upload = require('../upload');
 
 const router = express.Router();
 const upload = makeUploader('imports');
