@@ -357,7 +357,7 @@ router.post('/:id/questions/import', authRequired, requireRole('admin', 'superad
       res.json({ imported: rows.length, skipped: errors.length, errors, mode });
     } catch (e) {
       console.error('Import questions error:', e);
-      res.status(500).json({ error: 'import_failed', details: e.message });
+      res.status(500).json({ error: 'import_failed', message: e.message });
     }
   });
 });
