@@ -1,11 +1,9 @@
 const express = require('express');
-const bcrypt = require('bcryptjs');
-const ExcelJS = require('exceljs');
-const db = require('../db');
-const { authMiddleware, requireRole } = require('./auth');
-const upload = require('../upload');
-
 const router = express.Router();
+const db = require('../db');
+const { authRequired, requireRole } = require('./auth'); // <-- ВОТ ЭТА СТРОКА
+const { makeUploader } = require('../upload');
+
 // List users (admin/superadmin only), with optional filters
 router.get('/', authRequired, requireRole('admin', 'superadmin'), (req, res) => {
   const { object, department, role, q } = req.query;
