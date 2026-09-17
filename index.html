@@ -1632,7 +1632,7 @@ async function loadAssignmentsList() {
         </td>
         <td class="px-4 py-3 font-bold">${a.score_percent !== null ? a.score_percent + '%' : '—'}</td>
         <td class="px-4 py-3 text-right space-x-2">
-          ${a.status === 'passed' && a.certificate_number ? `<a href="/api/certificates/${a.id}" target="_blank" class="text-blue-600 hover:underline text-xs font-semibold">Сертификат</a>` : ''}
+          ${a.status === 'passed' && a.certificate_number ? `<a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="text-blue-600 hover:underline text-xs font-semibold">Сертификат</a>` : ''}
           ${a.status === 'failed' ? `<button onclick="allowRetake(${a.id})" class="text-amber-600 hover:underline text-xs">Пересдача</button>` : ''}
           <button onclick="delAssign(${a.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
         </td>
