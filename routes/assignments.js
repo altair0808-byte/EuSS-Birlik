@@ -310,8 +310,8 @@ router.post('/:id/submit', authRequired, async (req, res) => {
     // Считаем результат только по вопросам того билета (варианта), который был выдан при старте попытки.
     // Для старых попыток без привязки к варианту (assigned_variant пуст) используем все вопросы курса, как раньше.
     const qRes = a.assigned_variant
-      ? await query('SELECT * FROM questions WHERE course_id = $1 AND variant_number = $2', [a.course_id, a.assigned_variant])
-      : await query('SELECT * FROM questions WHERE course_id = $1', [a.course_id]);
+  ? await query('SELECT * FROM questions WHERE course_id = $1 AND variant_number = $2', [a.course_id, a.assigned_variant])
+  : await query('SELECT * FROM questions WHERE course_id = $1', [a.course_id]);
     const questions = qRes.rows;
 
     const { answers, focus_violations } = req.body;
