@@ -121,7 +121,7 @@ function generateCertificatePdf(res, data) {
 }
 
 // Route GET /api/certificates/:id
-router.get('/:id', async (req, res) => {
+router.get('/:id', authRequired, async (req, res) => {
   try {
     const aRes = await query('SELECT * FROM assignments WHERE id = $1', [req.params.id]);
     const assignment = aRes.rows[0];

@@ -31,14 +31,55 @@ router.get('/last-numbers', authRequired, requireRole('admin', 'superadmin'), as
   }
 });
 
+// Заполняет недостающие исторические поля (дату следующего прохождения, номер
+// сертификата), когда админ вносит уже пройденное ранее (до внедрения системы)
+// обучение сотрудника, а не создаёт новое назначение теста.
+async function buildHistoricalFields(course_id, hist) {
+  const cRes = await query('SELECT validity_months FROM courses WHERE id = $1', [course_id]);
+  const validityMonths = cRes.rows[0]?.validity_months || 12;
+
+  const testDate = hist.test_date;
+  let nextTestDate = hist.next_test_date;
+  if (!nextTestDate && testDate) {
+    const d = new Date(testDate);
+    d.setMonth(d.getMonth() + validityMonths);
+    nextTestDate = d.toISOString();
+  }
+  let certNumber = hist.certificate_number;
+  if (!certNumber) certNumber = await getNextCertNumber();
+
+  return {
+    status: 'passed',
+    score_percent: hist.score_percent !== undefined && hist.score_percent !== null && hist.score_percent !== ''
+      ? Number(hist.score_percent) : 100,
+    test_date: testDate,
+    next_test_date: nextTestDate,
+    certificate_number: certNumber
+  };
+}
+
 // Create assignment
 router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { user_id, course_id, protocol_number, protocol_date } = req.body;
+  const { user_id, course_id, protocol_number, protocol_date, historical, test_date, next_test_date, certificate_number, score_percent } = req.body;
   if (!user_id || !course_id || !protocol_number || !protocol_date) {
     return res.status(400).json({ error: 'missing_fields' });
   }
+  if (historical && !test_date) {
+    return res.status(400).json({ error: 'missing_fields', message: 'Для исторической записи укажите дату прохождения' });
+  }
 
   try {
+    if (historical) {
+      const h = await buildHistoricalFields(course_id, { test_date, next_test_date, certificate_number, score_percent });
+      const result = await query(`
+        INSERT INTO assignments (user_id, course_id, protocol_number, protocol_date, assigned_by,
+          status, score_percent, test_date, next_test_date, certificate_number)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id
+      `, [user_id, course_id, protocol_number, protocol_date, req.user.id,
+          h.status, h.score_percent, h.test_date, h.next_test_date, h.certificate_number]);
+      return res.json({ id: result.rows[0].id });
+    }
+
     const result = await query(`
       INSERT INTO assignments (user_id, course_id, protocol_number, protocol_date, assigned_by)
       VALUES ($1, $2, $3, $4, $5) RETURNING id
@@ -52,11 +93,16 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
 // Bulk create assignments — один протокол/курс/дата на группу сотрудников сразу.
 // Один и тот же protocol_number намеренно проставляется всем строкам: на практике
 // один протокол комиссии обычно покрывает сразу нескольких проверяемых сотрудников.
+// historical=true — внесение уже пройденного ранее обучения (старые данные сотрудников),
+// без прохождения теста в системе: сразу проставляется статус "passed".
 router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { user_ids, course_id, protocol_number, protocol_date } = req.body;
+  const { user_ids, course_id, protocol_number, protocol_date, historical, test_date, next_test_date, score_percent } = req.body;
 
   if (!Array.isArray(user_ids) || user_ids.length === 0 || !course_id || !protocol_number || !protocol_date) {
     return res.status(400).json({ error: 'missing_fields' });
+  }
+  if (historical && !test_date) {
+    return res.status(400).json({ error: 'missing_fields', message: 'Для исторической записи укажите дату прохождения' });
   }
 
   // На всякий случай убираем дубликаты id, которые мог прислать фронт
@@ -81,6 +127,19 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (re
     const createdIds = [];
     for (const userId of uniqueUserIds) {
       if (!validIds.has(userId)) continue;
+      if (historical) {
+        // Каждому сотруднику отдельный номер сертификата (getNextCertNumber читает
+        // максимум из БД на каждый вызов — работает корректно и в цикле).
+        const h = await buildHistoricalFields(course_id, { test_date, next_test_date, score_percent });
+        const result = await client.query(`
+          INSERT INTO assignments (user_id, course_id, protocol_number, protocol_date, assigned_by,
+            status, score_percent, test_date, next_test_date, certificate_number)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id
+        `, [userId, course_id, protocol_number, protocol_date, req.user.id,
+            h.status, h.score_percent, h.test_date, h.next_test_date, h.certificate_number]);
+        createdIds.push(result.rows[0].id);
+        continue;
+      }
       const result = await client.query(`
         INSERT INTO assignments (user_id, course_id, protocol_number, protocol_date, assigned_by)
         VALUES ($1, $2, $3, $4, $5) RETURNING id
