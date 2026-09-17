@@ -107,7 +107,7 @@ function generateCertificatePdf(res, data) {
   if (settings.stamp_path) {
     const stampFile = path.join(__dirname, '..', settings.stamp_path.replace(/^\//, ''));
     if (fs.existsSync(stampFile)) {
-      try { doc.image(stampFile, 480, sigY - 30, { width: 110, height: 110, fit: [110, 110], opacity: 0.9 }); } catch (e) {}
+      doc.image(stampFile, 480, sigY - 30, { width: 110, height: 110, fit: [110, 110] });
     }
   }
 
