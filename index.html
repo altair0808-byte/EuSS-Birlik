@@ -396,6 +396,36 @@ const api = {
   saveSettings(data) { return this.req('/api/settings', { method: 'PUT', body: data }); }
 };
 
+// Скачивание/открытие защищённых файлов (требующих Authorization),
+// которые нельзя открыть обычной ссылкой <a href target="_blank">,
+// т.к. браузер не добавляет заголовок Authorization при обычной навигации.
+async function downloadAuthed(url, filename) {
+  try {
+    const res = await fetch(url, { headers: state.token ? { 'Authorization': 'Bearer ' + state.token } : {} });
+    if (res.status === 401) { logout(); return; }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Ошибка сервера' }));
+      alert(err.message || err.error || 'Не удалось скачать файл');
+      return;
+    }
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    if (filename) {
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } else {
+      window.open(blobUrl, '_blank');
+    }
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
+  } catch (e) {
+    alert('Не удалось скачать файл: ' + e.message);
+  }
+}
+
 // Экранирование текста перед вставкой в innerHTML (защита от XSS в ФИО/названиях)
 function esc(str) {
   return String(str ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -508,7 +538,7 @@ function renderMain(app) {
             <button onclick="setTab('courses')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'courses' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_courses')}</button>
             <button onclick="setTab('assignments')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'assignments' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_assignments')}</button>
             <button onclick="setTab('calendar')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'calendar' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_calendar')}</button>
-            <a href="/api/export/excel" target="_blank" class="px-3 py-1.5 text-xs font-semibold rounded-md text-emerald-700 hover:bg-emerald-50">📥 ${t('nav_export')}</a>
+            <a href="#" onclick="downloadAuthed('/api/export/excel','journal_export.xlsx');return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-emerald-700 hover:bg-emerald-50">📥 ${t('nav_export')}</a>
             <button onclick="setTab('settings')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'settings' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_settings')}</button>
           ` : `
             <button onclick="setTab('my_tests')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'my_tests' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_my_tests')}</button>
@@ -546,8 +576,26 @@ async function loadTabContent() {
           <div class="text-3xl font-black text-blue-600 mt-2" id="dashCourses">...</div>
         </div>
         <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-          <div class="text-xs font-bold text-slate-500 uppercase">Назначено тестирований</div>
+          <div class="text-xs font-bold text-slate-500 uppercase">Назначено тестирований (всего)</div>
           <div class="text-3xl font-black text-emerald-600 mt-2" id="dashAssignments">...</div>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-bold text-slate-500 uppercase">Ожидают прохождения</div>
+          <div class="text-2xl font-black text-amber-600 mt-1" id="dashPending">...</div>
+        </div>
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-bold text-slate-500 uppercase">Пройдено (сдано/не сдано)</div>
+          <div class="text-2xl font-black text-slate-700 mt-1" id="dashCompleted">...</div>
+        </div>
+        <div class="bg-white p-4 rounded-xl border border-red-200 bg-red-50/40 shadow-sm">
+          <div class="text-xs font-bold text-red-700 uppercase">Просрочено</div>
+          <div class="text-2xl font-black text-red-600 mt-1" id="dashOverdue">...</div>
+        </div>
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-bold text-slate-500 uppercase">В норме (срок не истёк)</div>
+          <div class="text-2xl font-black text-emerald-600 mt-1" id="dashValid">...</div>
         </div>
       </div>
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
@@ -568,6 +616,20 @@ async function loadTabContent() {
       document.getElementById('dashUsers').textContent = u.length;
       document.getElementById('dashCourses').textContent = c.length;
       document.getElementById('dashAssignments').textContent = a.length;
+
+      // Разбивка по статусам. "Назначено тестирований" — это общее число записей
+      // (созданных протоколов), оно не уменьшается после прохождения теста —
+      // тест просто меняет статус конкретной записи с "pending" на "passed"/"failed".
+      // Отдельно считаем просроченные (next_test_date уже прошёл) и действующие (в норме).
+      const now = new Date();
+      const pending = a.filter(x => x.status === 'pending' || x.status === 'in_progress').length;
+      const completed = a.filter(x => x.status === 'passed' || x.status === 'failed').length;
+      const overdue = a.filter(x => x.status === 'passed' && x.next_test_date && new Date(x.next_test_date) < now).length;
+      const valid = a.filter(x => x.status === 'passed' && x.next_test_date && new Date(x.next_test_date) >= now).length;
+      document.getElementById('dashPending').textContent = pending;
+      document.getElementById('dashCompleted').textContent = completed;
+      document.getElementById('dashOverdue').textContent = overdue;
+      document.getElementById('dashValid').textContent = valid;
     } catch (e) {}
     loadExpiringWidget();
   }
@@ -807,6 +869,18 @@ async function loadTabContent() {
               <div><label class="text-xs font-semibold text-slate-600">Дата протокола</label><input type="date" id="asProtDate" required class="w-full border p-2 rounded text-sm"></div>
             </div>
             <div class="text-[11px] text-slate-500 -mt-1">Один номер протокола будет присвоен всем выбранным ниже сотрудникам.</div>
+            <div class="border-t pt-3">
+              <label class="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                <input type="checkbox" id="asHistorical" onchange="onAsHistoricalToggle()">
+                Внести уже пройденное ранее обучение (старые данные, без сдачи теста в системе)
+              </label>
+              <div id="asHistoricalFields" class="hidden grid grid-cols-2 gap-3 mt-2">
+                <div><label class="text-xs font-semibold text-slate-600">Дата прохождения</label><input type="date" id="asTestDate" class="w-full border p-2 rounded text-sm"></div>
+                <div><label class="text-xs font-semibold text-slate-600">Дата след. прохождения</label><input type="date" id="asNextTestDate" class="w-full border p-2 rounded text-sm"></div>
+                <div><label class="text-xs font-semibold text-slate-600">Результат, % (по умолчанию 100)</label><input type="number" min="0" max="100" id="asScorePercent" class="w-full border p-2 rounded text-sm"></div>
+                <div class="text-[11px] text-slate-500 self-end pb-2">Номер сертификата будет присвоен автоматически. Если дату след. прохождения не указать, она рассчитается по сроку действия курса.</div>
+              </div>
+            </div>
             <div class="border-t pt-3">
               <div class="flex items-center justify-between mb-2">
                 <label class="text-xs font-semibold text-slate-600">Сотрудники <span id="asSelectedCount" class="text-blue-600 font-bold"></span></label>
@@ -1585,6 +1659,12 @@ async function openAssignModal() {
   document.getElementById('asFilterObject').innerHTML = `<option value="">${t('all_objects')}</option>` + objects.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('');
   document.getElementById('asFilterDept').innerHTML = `<option value="">${t('all_departments')}</option>` + departments.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('');
   document.getElementById('asFilterQ').value = '';
+  document.getElementById('asHistorical').checked = false;
+  document.getElementById('asHistoricalFields').classList.add('hidden');
+  document.getElementById('asTestDate').value = '';
+  document.getElementById('asTestDate').required = false;
+  document.getElementById('asNextTestDate').value = '';
+  document.getElementById('asScorePercent').value = '';
 
   document.getElementById('asProtDate').value = toLocalDateStr(new Date());
   try {
@@ -1656,10 +1736,21 @@ function updateAsSelectedCount() {
   if (span) span.textContent = asSelectedIds.size ? `(${asSelectedIds.size})` : '';
 }
 
+function onAsHistoricalToggle() {
+  const on = document.getElementById('asHistorical').checked;
+  document.getElementById('asHistoricalFields').classList.toggle('hidden', !on);
+  document.getElementById('asTestDate').required = on;
+}
+
 async function submitAssignForm(e) {
   e.preventDefault();
   if (asSelectedIds.size === 0) {
     alert('Выберите хотя бы одного сотрудника.');
+    return;
+  }
+  const historical = document.getElementById('asHistorical').checked;
+  if (historical && !document.getElementById('asTestDate').value) {
+    alert('Укажите дату прохождения для исторической записи.');
     return;
   }
   const data = {
@@ -1668,6 +1759,12 @@ async function submitAssignForm(e) {
     protocol_number: document.getElementById('asProtNum').value.trim(),
     protocol_date: document.getElementById('asProtDate').value
   };
+  if (historical) {
+    data.historical = true;
+    data.test_date = document.getElementById('asTestDate').value;
+    data.next_test_date = document.getElementById('asNextTestDate').value || undefined;
+    data.score_percent = document.getElementById('asScorePercent').value || undefined;
+  }
   const res = await api.createAssignmentsBulk(data);
   document.getElementById('assignModal').classList.add('hidden');
   if (res.skipped) {
@@ -1727,7 +1824,7 @@ async function loadUserProfile(userId) {
           </div>
           <div class="flex gap-2">
             <button onclick="editUserFromProfile(${user.id})" class="px-4 py-2 border rounded-lg text-sm font-semibold hover:bg-slate-50">${t('edit')}</button>
-            <a href="/api/export/excel" target="_blank" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold">📥 ${t('download_report')}</a>
+            <a href="#" onclick="downloadAuthed('/api/export/excel','journal_export.xlsx');return false;" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold">📥 ${t('download_report')}</a>
           </div>
         </div>
       </div>
@@ -1758,7 +1855,7 @@ async function loadUserProfile(userId) {
                   <td class="px-4 py-3 font-bold">${a.score_percent !== null ? a.score_percent + '%' : '—'}</td>
                   <td class="px-4 py-3 text-xs text-slate-600">${a.next_test_date ? new Date(a.next_test_date).toLocaleDateString('ru-RU') : '—'}</td>
                   <td class="px-4 py-3 text-right">
-                    ${a.status === 'passed' && a.certificate_number ? `<a href="/api/assignments/${a.id}/certificate.pdf" target="_blank" class="text-blue-600 hover:underline text-xs font-semibold">${t('download_cert')}</a>` : '—'}
+                    ${a.status === 'passed' && a.certificate_number ? `<a href="#" onclick="downloadAuthed('/api/assignments/${a.id}/certificate.pdf');return false;" class="text-blue-600 hover:underline text-xs font-semibold">${t('download_cert')}</a>` : '—'}
                   </td>
                 </tr>
               `).join('') : `<tr><td colspan="6" class="p-4 text-center text-slate-400">${t('no_data')}</td></tr>`}
@@ -1888,7 +1985,7 @@ async function loadMyTests() {
       <div class="flex items-center space-x-3">
         ${a.status === 'passed' ? `
           <span class="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg">Сдано (${a.score_percent}%)</span>
-          <a href="/api/certificates/${a.id}" target="_blank" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold">Скачать сертификат</a>
+          <a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold">Скачать сертификат</a>
         ` : a.status === 'failed' && !a.retake_allowed ? `
           <span class="text-xs font-bold text-red-700 bg-red-50 px-3 py-1.5 rounded-lg">Не сдано (${a.score_percent}%)</span>
         ` : `
