@@ -4,7 +4,7 @@ const fs = require('fs');
 
 // options: { maxSizeMB, fileFilter(req, file, cb) }
 function makeUploader(subdir, options = {}) {
-  const dest = path.join(__dirname, '..', 'uploads', subdir);
+ const dest = path.join(__dirname, 'uploads', subdir);
   if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
   const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, dest),
