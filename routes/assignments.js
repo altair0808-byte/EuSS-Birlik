@@ -1,29 +1,55 @@
 const express = require('express');
 const router = express.Router();
+const ExcelJS = require('exceljs');
 const { query, pool } = require('../db');
 const { authRequired, requireRole } = require('./auth');
 const { generateCertificatePdf } = require('./certificate');
+const { makeUploader } = require('../upload');
 
-async function getNextCertNumber() {
-  const result = await query(`SELECT certificate_number FROM assignments WHERE certificate_number IS NOT NULL`);
-  let maxNum = 0;
-  for (const r of result.rows) {
-    const match = (r.certificate_number || '').match(/^CERT-(\d+)$/i);
-    if (match) {
-      const n = parseInt(match[1], 10);
-      if (n > maxNum) maxNum = n;
-    }
-  }
-  return `CERT-${String(maxNum + 1).padStart(4, '0')}`;
+const uploadImport = makeUploader('imports');
+
+// Независимая нумерация сертификатов: следующий номер и формат (префикс +
+// количество цифр) хранятся в settings и настраиваются администратором —
+// это позволяет продолжить нумерацию с номера из существующего Excel-реестра,
+// а не зависеть от того, что уже есть в таблице assignments.
+// dbClient — необязательный клиент транзакции (для использования внутри bulk/import).
+async function getNextCertNumber(dbClient) {
+  const runner = dbClient || { query };
+  const q = dbClient ? (text, params) => dbClient.query(text, params) : query;
+  const result = await q(
+    `UPDATE settings SET certificate_next_number = certificate_next_number + 1
+     WHERE id = 1 RETURNING certificate_next_number - 1 AS used_number, certificate_prefix, certificate_digits`
+  );
+  const row = result.rows[0];
+  if (!row) return `CERT-0001`;
+  const digits = row.certificate_digits || 4;
+  return `${row.certificate_prefix || ''}${String(row.used_number).padStart(digits, '0')}`;
+}
+
+// Та же идея для номера протокола — используется только как подсказка на
+// фронтенде (само поле остаётся текстовым и редактируемым вручную, т.к.
+// формат протокола может отличаться от последовательного счётчика).
+async function peekNextProtocolNumber() {
+  const result = await query(`SELECT protocol_prefix, protocol_next_number FROM settings WHERE id = 1`);
+  const row = result.rows[0];
+  if (!row) return '1';
+  return `${row.protocol_prefix || ''}${row.protocol_next_number}`;
+}
+
+async function advanceProtocolCounter(dbClient) {
+  const q = dbClient ? (text, params) => dbClient.query(text, params) : query;
+  await q(`UPDATE settings SET protocol_next_number = protocol_next_number + 1 WHERE id = 1`);
 }
 
 // Last numbers
 router.get('/last-numbers', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
-    const lastProtocol = await query(`SELECT protocol_number FROM assignments ORDER BY id DESC LIMIT 1`);
-    const nextCert = await getNextCertNumber();
+    const nextProtocol = await peekNextProtocolNumber();
+    const sRes = await query('SELECT certificate_prefix, certificate_digits, certificate_next_number FROM settings WHERE id = 1');
+    const s = sRes.rows[0] || {};
+    const nextCert = `${s.certificate_prefix || ''}${String(s.certificate_next_number || 1).padStart(s.certificate_digits || 4, '0')}`;
     res.json({
-      last_protocol_number: lastProtocol.rows[0]?.protocol_number || '—',
+      next_protocol_number: nextProtocol,
       next_certificate_number: nextCert
     });
   } catch (e) {
