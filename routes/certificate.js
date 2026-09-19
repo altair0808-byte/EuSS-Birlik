@@ -12,11 +12,12 @@ const FONT_BOLD = path.join(__dirname, '..', 'assets', 'fonts', 'DejaVuSans-Bold
 function fmtDate(d) {
   if (!d) return '';
   const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return '';
   return dt.toLocaleDateString('ru-RU');
 }
 
 /**
- * Generates a PDF certificate and streams it to `res`.
+ * Generates a single-page, formal-looking PDF certificate and streams it to `res`.
  * @param {object} res - Express response object (PDF piped directly to it)
  * @param {object} data - { assignment, user, course, settings, lang }
  */
@@ -24,98 +25,155 @@ function generateCertificatePdf(res, data) {
   const { assignment, user, course, settings, lang } = data;
   const isKz = lang === 'kz';
 
-  const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 40 });
+  // margin:0 — рамку и всю раскладку считаем сами в абсолютных координатах,
+  // чтобы гарантированно не спровоцировать у pdfkit автоматическое добавление
+  // второй страницы. Все текстовые блоки ниже ограничены явной шириной и
+  // высотой (с ellipsis), поэтому документ всегда остаётся на одном листе.
+  const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 0, autoFirstPage: true, bufferPages: true });
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `inline; filename="certificate_${assignment.certificate_number}.pdf"`);
   doc.pipe(res);
 
-  if (fs.existsSync(FONT_REG)) doc.registerFont('base', FONT_REG);
-  if (fs.existsSync(FONT_BOLD)) doc.registerFont('bold', FONT_BOLD);
+  const hasBold = fs.existsSync(FONT_BOLD);
+  const hasReg = fs.existsSync(FONT_REG);
+  if (hasReg) doc.registerFont('base', FONT_REG);
+  if (hasBold) doc.registerFont('bold', FONT_BOLD);
+  const useFont = (name) => { try { doc.font(name === 'bold' && hasBold ? 'bold' : (hasReg ? 'base' : 'Helvetica')); } catch (e) {} };
 
-  const pageWidth = doc.page.width;
-  const pageHeight = doc.page.height;
+  const pageWidth = doc.page.width;   // 841.89
+  const pageHeight = doc.page.height; // 595.28
+  const M = 34; // внешний отступ рамки
 
-  // Decorative border
-  doc.lineWidth(2).strokeColor('#1e3a8a')
-    .rect(20, 20, pageWidth - 40, pageHeight - 40).stroke();
-  doc.lineWidth(0.75).strokeColor('#93c5fd')
-    .rect(28, 28, pageWidth - 56, pageHeight - 56).stroke();
+  // ---------- Декоративная официальная рамка ----------
+  const NAVY = '#12235c';
+  const GOLD = '#b8934a';
+  const SLATE = '#334155';
+  const MUTED = '#64748b';
 
-  // Logo
+  doc.save();
+  doc.lineWidth(2.4).strokeColor(NAVY).rect(M, M, pageWidth - M * 2, pageHeight - M * 2).stroke();
+  doc.lineWidth(0.9).strokeColor(GOLD).rect(M + 7, M + 7, pageWidth - (M + 7) * 2, pageHeight - (M + 7) * 2).stroke();
+  doc.lineWidth(0.6).strokeColor('#c7d2fe').rect(M + 12, M + 12, pageWidth - (M + 12) * 2, pageHeight - (M + 12) * 2).stroke();
+  doc.restore();
+
+  const innerX = M + 30;
+  const innerW = pageWidth - innerX * 2;
+
+  // ---------- Шапка: логотип + название организации ----------
+  let headerTop = 46;
   if (settings.logo_path) {
     const logoFile = path.join(__dirname, '..', settings.logo_path.replace(/^\//, ''));
     if (fs.existsSync(logoFile)) {
-      try { doc.image(logoFile, pageWidth / 2 - 40, 40, { width: 80, height: 80, fit: [80, 80] }); } catch (e) {}
+      try { doc.image(logoFile, pageWidth / 2 - 26, headerTop, { width: 52, height: 52, fit: [52, 52] }); } catch (e) {}
     }
   }
+  const afterLogoY = headerTop + (settings.logo_path ? 58 : 0);
 
-  try { if (fs.existsSync(FONT_BOLD)) doc.font('bold'); } catch (e) {}
-  doc.fontSize(11).fillColor('#334155')
-    .text(settings.company_name || '', 0, 130, { align: 'center' });
+  useFont('bold');
+  doc.fontSize(12).fillColor(SLATE)
+    .text(settings.company_name || '', innerX, afterLogoY, { width: innerW, align: 'center', height: 18, ellipsis: true });
 
-  doc.fontSize(26).fillColor('#1e3a8a')
-    .text(isKz ? 'СЕРТИФИКАТ' : 'СЕРТИФИКАТ', 0, 155, { align: 'center' });
+  useFont('bold');
+  doc.fontSize(30).fillColor(NAVY)
+    .text('СЕРТИФИКАТ', innerX, afterLogoY + 22, { width: innerW, align: 'center', height: 40, characterSpacing: 2 });
 
-  try { if (fs.existsSync(FONT_REG)) doc.font('base'); } catch (e) {}
-  doc.fontSize(12).fillColor('#475569')
-    .text(isKz ? `№ ${assignment.certificate_number}` : `№ ${assignment.certificate_number}`, 0, 190, { align: 'center' });
+  useFont('base');
+  doc.fontSize(11).fillColor(GOLD)
+    .text(`№ ${assignment.certificate_number || ''}`, innerX, afterLogoY + 60, { width: innerW, align: 'center', height: 16, ellipsis: true });
 
-  const fullName = `${user.last_name || ''} ${user.first_name || ''}`;
-  try { if (fs.existsSync(FONT_BOLD)) doc.font('bold'); } catch (e) {}
-  doc.fontSize(20).fillColor('#0f172a')
-    .text(fullName, 0, 225, { align: 'center' });
+  // ---------- Тело сертификата ----------
+  const bodyTop = afterLogoY + 84;
+  useFont('base');
+  doc.fontSize(11).fillColor(MUTED)
+    .text(isKz ? 'осымен куәландырылады, аты-жөні' : 'настоящим удостоверяется, что',
+      innerX, bodyTop, { width: innerW, align: 'center', height: 16 });
+
+  const fullName = `${user.last_name || ''} ${user.first_name || ''}`.trim();
+  useFont('bold');
+  doc.fontSize(22).fillColor('#0f172a')
+    .text(fullName, innerX, bodyTop + 18, { width: innerW, align: 'center', height: 30, ellipsis: true });
 
   const infoLine = isKz
-    ? `Объект/Обьект: ${user.object || '-'}   Бөлім: ${user.department || '-'}   Лауазым: ${user.position || '-'}`
-    : `Объект: ${user.object || '-'}   Отдел: ${user.department || '-'}   Должность: ${user.position || '-'}`;
-  try { if (fs.existsSync(FONT_REG)) doc.font('base'); } catch (e) {}
-  doc.fontSize(11).fillColor('#334155')
-    .text(infoLine, 0, 255, { align: 'center' });
+    ? `Объект: ${user.object || '-'}   |   Бөлім: ${user.department || '-'}   |   Лауазым: ${user.position || '-'}`
+    : `Объект: ${user.object || '-'}   |   Отдел: ${user.department || '-'}   |   Должность: ${user.position || '-'}`;
+  useFont('base');
+  doc.fontSize(10.5).fillColor(SLATE)
+    .text(infoLine, innerX, bodyTop + 50, { width: innerW, align: 'center', height: 16, ellipsis: true });
 
-  const courseTitle = isKz ? (course.title_kz || course.title_ru) : course.title_ru;
+  const courseTitle = isKz ? (course.title_kz || course.title_ru || '') : (course.title_ru || '');
   const bodyText = isKz
-    ? `аталған қызметкердің «${courseTitle}» курсы бойынша оқыту мен білім тексеруден сәтті өткенін растайды.`
-    : `подтверждает, что указанный сотрудник успешно прошёл обучение и проверку знаний по курсу «${courseTitle}».`;
-  doc.fontSize(13).fillColor('#1e293b')
-    .text(bodyText, 100, 290, { align: 'center', width: pageWidth - 200 });
+    ? `«${courseTitle}» курсы бойынша оқыту мен білім тексеруден сәтті өткенін растайды.`
+    : `успешно прошёл(а) обучение и проверку знаний по курсу «${courseTitle}».`;
+  useFont('base');
+  doc.fontSize(12.5).fillColor('#1e293b')
+    .text(bodyText, innerX + 60, bodyTop + 74, { width: innerW - 120, align: 'center', height: 44, ellipsis: true });
 
   const protocolLine = isKz
     ? `Хаттама № ${assignment.protocol_number || '—'} от ${fmtDate(assignment.protocol_date)}`
     : `Протокол № ${assignment.protocol_number || '—'} от ${fmtDate(assignment.protocol_date)}`;
-  doc.fontSize(11).fillColor('#475569')
-    .text(protocolLine, 0, 340, { align: 'center' });
+  useFont('base');
+  doc.fontSize(10.5).fillColor(MUTED)
+    .text(protocolLine, innerX, bodyTop + 124, { width: innerW, align: 'center', height: 14, ellipsis: true });
 
   const datesLine = isKz
     ? `Өту күні: ${fmtDate(assignment.test_date)}      Келесі өту күні: ${fmtDate(assignment.next_test_date)}`
     : `Дата прохождения: ${fmtDate(assignment.test_date)}      Дата следующего прохождения: ${fmtDate(assignment.next_test_date)}`;
-  doc.fontSize(11).fillColor('#475569')
-    .text(datesLine, 0, 360, { align: 'center' });
+  useFont('base');
+  doc.fontSize(10.5).fillColor(MUTED)
+    .text(datesLine, innerX, bodyTop + 142, { width: innerW, align: 'center', height: 14, ellipsis: true });
 
-  // Signature + Stamp block
-  const sigY = pageHeight - 140;
-  doc.fontSize(11).fillColor('#0f172a')
-    .text(isKz ? 'Комиссия төрағасы:' : 'Председатель комиссии:', 120, sigY, { continued: false });
-  try { if (fs.existsSync(FONT_BOLD)) doc.font('bold'); } catch (e) {}
-  doc.fontSize(11).text(settings.chairman_name || '', 120, sigY + 16);
+  // ---------- Блок комиссии: председатель + 2 члена ----------
+  const commission = [
+    { label: isKz ? 'Комиссия төрағасы' : 'Председатель комиссии', name: settings.chairman_name || '', signature: settings.signature_path, stamp: settings.stamp_path },
+    { label: isKz ? 'Комиссия мүшесі' : 'Член комиссии', name: settings.member2_name || '' },
+    { label: isKz ? 'Комиссия мүшесі' : 'Член комиссии', name: settings.member3_name || '' }
+  ];
 
-  if (settings.signature_path) {
-    const sigFile = path.join(__dirname, '..', settings.signature_path.replace(/^\//, ''));
-    if (fs.existsSync(sigFile)) {
-      try { doc.image(sigFile, 320, sigY - 10, { width: 100, height: 50, fit: [100, 50] }); } catch (e) {}
+  const sigBlockTop = pageHeight - M - 118;
+  const colGap = 18;
+  const colW = (innerW - colGap * 2) / 3;
+
+  commission.forEach((member, i) => {
+    const colX = innerX + i * (colW + colGap);
+    const lineY = sigBlockTop + 46;
+
+    // Печать/подпись председателя рисуются над линией его колонки
+    if (i === 0) {
+      if (member.stamp) {
+        const stampFile = path.join(__dirname, '..', member.stamp.replace(/^\//, ''));
+        if (fs.existsSync(stampFile)) {
+          try { doc.opacity(0.9).image(stampFile, colX + colW - 58, sigBlockTop - 34, { width: 70, height: 70, fit: [70, 70] }); doc.opacity(1); } catch (e) {}
+        }
+      }
+      if (member.signature) {
+        const sigFile = path.join(__dirname, '..', member.signature.replace(/^\//, ''));
+        if (fs.existsSync(sigFile)) {
+          try { doc.image(sigFile, colX + 6, lineY - 30, { width: colW - 20, height: 28, fit: [colW - 20, 28] }); } catch (e) {}
+        }
+      }
     }
-  }
-  if (settings.stamp_path) {
-    const stampFile = path.join(__dirname, '..', settings.stamp_path.replace(/^\//, ''));
-    if (fs.existsSync(stampFile)) {
-      doc.image(stampFile, 480, sigY - 30, { width: 110, height: 110, fit: [110, 110] });
-    }
-  }
 
-  try { if (fs.existsSync(FONT_REG)) doc.font('base'); } catch (e) {}
-  doc.fontSize(8).fillColor('#94a3b8')
-    .text(isKz ? `Құжат жүйеде автоматты түрде жасалды. Сертификат № ${assignment.certificate_number}`
-               : `Документ сформирован автоматически системой. Сертификат № ${assignment.certificate_number}`,
-      0, pageHeight - 34, { align: 'center' });
+    doc.lineWidth(0.8).strokeColor('#94a3b8')
+      .moveTo(colX, lineY).lineTo(colX + colW, lineY).stroke();
+
+    useFont('base');
+    doc.fontSize(8.5).fillColor(MUTED)
+      .text(member.label, colX, lineY + 4, { width: colW, align: 'center', height: 12, ellipsis: true });
+
+    useFont('bold');
+    doc.fontSize(9.5).fillColor('#0f172a')
+      .text(member.name, colX, lineY + 16, { width: colW, align: 'center', height: 14, ellipsis: true });
+  });
+
+  // ---------- Подвал ----------
+  useFont('base');
+  doc.fontSize(7.5).fillColor('#94a3b8')
+    .text(
+      isKz
+        ? `Құжат жүйеде автоматты түрде жасалды. Сертификат № ${assignment.certificate_number || ''}`
+        : `Документ сформирован автоматически системой. Сертификат № ${assignment.certificate_number || ''}`,
+      innerX, pageHeight - M - 18, { width: innerW, align: 'center', height: 12, ellipsis: true }
+    );
 
   doc.end();
 }

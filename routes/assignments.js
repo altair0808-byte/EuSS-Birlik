@@ -36,9 +36,25 @@ async function peekNextProtocolNumber() {
   return `${row.protocol_prefix || ''}${row.protocol_next_number}`;
 }
 
-async function advanceProtocolCounter(dbClient) {
+// Продвигает счётчик номеров протоколов на основании фактически введённого
+// номера (а не просто +1), чтобы подсказка на фронтенде оставалась верной,
+// даже если администратор вручную поправил предложенный номер или продолжил
+// нумерацию с номера из бумажного журнала. Если номер протокола не является
+// простым числом (например, содержит произвольный текст), счётчик не трогаем.
+async function advanceProtocolCounter(protocolNumberUsed, dbClient) {
   const q = dbClient ? (text, params) => dbClient.query(text, params) : query;
-  await q(`UPDATE settings SET protocol_next_number = protocol_next_number + 1 WHERE id = 1`);
+  const sRes = await q(`SELECT protocol_prefix, protocol_next_number FROM settings WHERE id = 1`);
+  const s = sRes.rows[0];
+  if (!s || !protocolNumberUsed) return;
+
+  let numStr = String(protocolNumberUsed).trim();
+  const prefix = s.protocol_prefix || '';
+  if (prefix && numStr.startsWith(prefix)) numStr = numStr.slice(prefix.length);
+
+  const parsed = parseInt(numStr, 10);
+  if (Number.isFinite(parsed) && parsed >= (s.protocol_next_number || 1)) {
+    await q(`UPDATE settings SET protocol_next_number = $1 WHERE id = 1`, [parsed + 1]);
+  }
 }
 
 // Last numbers
@@ -103,6 +119,7 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id
       `, [user_id, course_id, protocol_number, protocol_date, req.user.id,
           h.status, h.score_percent, h.test_date, h.next_test_date, h.certificate_number]);
+      await advanceProtocolCounter(protocol_number);
       return res.json({ id: result.rows[0].id });
     }
 
@@ -110,6 +127,7 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
       INSERT INTO assignments (user_id, course_id, protocol_number, protocol_date, assigned_by)
       VALUES ($1, $2, $3, $4, $5) RETURNING id
     `, [user_id, course_id, protocol_number, protocol_date, req.user.id]);
+    await advanceProtocolCounter(protocol_number);
     res.json({ id: result.rows[0].id });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
@@ -173,6 +191,7 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (re
       createdIds.push(result.rows[0].id);
     }
 
+    await advanceProtocolCounter(protocol_number, client);
     await client.query('COMMIT');
     res.json({ created: createdIds.length, ids: createdIds, skipped: skippedIds.length });
   } catch (e) {
