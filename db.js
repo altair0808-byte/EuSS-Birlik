@@ -99,9 +99,16 @@ async function initDb() {
       id INT PRIMARY KEY CHECK (id = 1),
       company_name TEXT DEFAULT 'ТОО «Компания»',
       chairman_name TEXT DEFAULT '',
+      member2_name TEXT DEFAULT '',
+      member3_name TEXT DEFAULT '',
       logo_path TEXT,
       stamp_path TEXT,
-      signature_path TEXT
+      signature_path TEXT,
+      protocol_prefix TEXT DEFAULT '',
+      protocol_next_number INT DEFAULT 1,
+      certificate_prefix TEXT DEFAULT '',
+      certificate_digits INT DEFAULT 4,
+      certificate_next_number INT DEFAULT 1
     );
 
     INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
@@ -114,6 +121,16 @@ async function initDb() {
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS video_path TEXT;
     ALTER TABLE assignments ADD COLUMN IF NOT EXISTS assigned_variant INT;
     CREATE INDEX IF NOT EXISTS idx_questions_course_variant ON questions(course_id, variant_number);
+
+    -- Нумерация протоколов/сертификатов и 2 доп. члена комиссии (для БД,
+    -- созданных более ранней версией схемы, где этих колонок ещё не было)
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS member2_name TEXT DEFAULT '';
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS member3_name TEXT DEFAULT '';
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS protocol_prefix TEXT DEFAULT '';
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS protocol_next_number INT DEFAULT 1;
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS certificate_prefix TEXT DEFAULT '';
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS certificate_digits INT DEFAULT 4;
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS certificate_next_number INT DEFAULT 1;
   `);
 
   // Создание учетной записи суперадмина
