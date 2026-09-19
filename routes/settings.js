@@ -1,132 +1,135 @@
-import express from 'express';
-import { query } from '../db.js';
-import { authenticateToken, requireSuperAdmin } from '../routes/auth.js';
-import { upload } from '../upload.js';
-import fs from 'fs';
-
+const express = require('express');
 const router = express.Router();
+const fs = require('fs');
+const { query } = require('../db');
+const { authRequired, requireRole } = require('./auth');
+const { makeUploader } = require('../upload');
 
-function fileToBase64(file) {
+const uploadLogo = makeUploader('logo');
+const uploadStamp = makeUploader('stamp');
+const uploadSignature = makeUploader('signature');
+
+function fileToDataUrl(file) {
   if (!file || !file.path) return null;
-  try {
-    const data = fs.readFileSync(file.path);
-    const mime = file.mimetype || 'image/png';
-    return `data:${mime};base64,${data.toString('base64')}`;
-  } catch (e) {
-    console.error('Error reading uploaded file:', e);
-    return null;
-  }
+  const mime = file.mimetype || 'image/png';
+  const b64 = fs.readFileSync(file.path).toString('base64');
+  return 'data:' + mime + ';base64,' + b64;
 }
 
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', authRequired, async (req, res) => {
   try {
     const result = await query('SELECT * FROM settings WHERE id = 1');
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Настройки не найдены' });
-    }
-    const s = result.rows[0];
-    res.json({
-      ...s,
-      logo_url: s.logo_data || s.logo_url,
-      stamp_url: s.stamp_data || s.stamp_url,
-      chairman1_signature: s.chairman1_signature || s.chairman_signature_url,
-      chairman_signature_url: s.chairman1_signature || s.chairman_signature_url
-    });
-  } catch (err) {
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.json(result.rows[0] || {});
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
   }
 });
 
-router.put('/', authenticateToken, requireSuperAdmin, upload.fields([
-  { name: 'logo', maxCount: 1 },
-  { name: 'stamp', maxCount: 1 },
-  { name: 'chairman_signature', maxCount: 1 },
-  { name: 'chairman1_signature_file', maxCount: 1 },
-  { name: 'chairman2_signature_file', maxCount: 1 }
-]), async (req, res) => {
+router.get('/public', async (req, res) => {
   try {
-    const current = await query('SELECT * FROM settings WHERE id = 1');
-    const existing = current.rows[0] || {};
-
-    const {
-      company_name, bin, training_center_name, training_center_address, license_info,
-      chairman_name, chairman_position,
-      chairman1_name, chairman1_position,
-      chairman2_name, chairman2_position,
-      active_chairman,
-      protocol_prefix, protocol_next_number,
-      cert_prefix, cert_next_number
-    } = req.body;
-
-    let logo_data = existing.logo_data;
-    let stamp_data = existing.stamp_data;
-    let chairman1_sig = existing.chairman1_signature || existing.chairman_signature_url;
-    let chairman2_sig = existing.chairman2_signature;
-
-    if (req.files && req.files['logo']) {
-      logo_data = fileToBase64(req.files['logo'][0]);
-    }
-    if (req.files && req.files['stamp']) {
-      stamp_data = fileToBase64(req.files['stamp'][0]);
-    }
-    if (req.files && req.files['chairman_signature']) {
-      chairman1_sig = fileToBase64(req.files['chairman_signature'][0]);
-    }
-    if (req.files && req.files['chairman1_signature_file']) {
-      chairman1_sig = fileToBase64(req.files['chairman1_signature_file'][0]);
-    }
-    if (req.files && req.files['chairman2_signature_file']) {
-      chairman2_sig = fileToBase64(req.files['chairman2_signature_file'][0]);
-    }
-
-    const c1_name = chairman1_name || chairman_name || existing.chairman1_name || existing.chairman_name;
-    const c1_pos = chairman1_position || chairman_position || existing.chairman1_position || existing.chairman_position;
-    const act_chair = parseInt(active_chairman, 10) === 2 ? 2 : 1;
-
-    const updateQuery = `
-      UPDATE settings SET
-        company_name = COALESCE($1, company_name),
-        bin = COALESCE($2, bin),
-        training_center_name = COALESCE($3, training_center_name),
-        training_center_address = COALESCE($4, training_center_address),
-        license_info = COALESCE($5, license_info),
-        chairman_name = $6,
-        chairman_position = $7,
-        chairman1_name = $6,
-        chairman1_position = $7,
-        chairman2_name = COALESCE($8, chairman2_name),
-        chairman2_position = COALESCE($9, chairman2_position),
-        active_chairman = $10,
-        logo_data = COALESCE($11, logo_data),
-        stamp_data = COALESCE($12, stamp_data),
-        chairman1_signature = COALESCE($13, chairman1_signature),
-        chairman2_signature = COALESCE($14, chairman2_signature),
-        protocol_prefix = COALESCE($15, protocol_prefix),
-        protocol_next_number = COALESCE($16, protocol_next_number),
-        cert_prefix = COALESCE($17, cert_prefix),
-        cert_next_number = COALESCE($18, cert_next_number)
-      WHERE id = 1
-      RETURNING *;
-    `;
-
-    const values = [
-      company_name, bin, training_center_name, training_center_address, license_info,
-      c1_name, c1_pos,
-      chairman2_name, chairman2_position,
-      act_chair,
-      logo_data, stamp_data, chairman1_sig, chairman2_sig,
-      protocol_prefix,
-      protocol_next_number ? parseInt(protocol_next_number, 10) : null,
-      cert_prefix,
-      cert_next_number ? parseInt(cert_next_number, 10) : null
-    ];
-
-    const updated = await query(updateQuery, values);
-    res.json(updated.rows[0]);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Ошибка при сохранении настроек' });
+    const result = await query('SELECT company_name, logo_path, logo_data FROM settings WHERE id = 1');
+    res.json(result.rows[0] || {});
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
   }
 });
 
-export default router;
+router.put('/', authRequired, requireRole('superadmin'), async (req, res) => {
+  const {
+    company_name, chairman_name, member2_name, member3_name,
+    chairman1_name, chairman1_position,
+    chairman2_name, chairman2_position,
+    active_chairman,
+    protocol_prefix, protocol_next_number,
+    certificate_prefix, certificate_digits, certificate_next_number
+  } = req.body;
+
+  try {
+    const actChair = parseInt(active_chairman, 10) === 2 ? 2 : 1;
+    const cName = (actChair === 2 ? chairman2_name : (chairman1_name || chairman_name)) || '';
+
+    const result = await query(
+      `UPDATE settings SET
+        company_name = COALESCE($1, company_name),
+        chairman_name = COALESCE($2, chairman_name),
+        member2_name = COALESCE($3, member2_name),
+        member3_name = COALESCE($4, member3_name),
+        chairman1_name = COALESCE($5, chairman1_name),
+        chairman1_position = COALESCE($6, chairman1_position),
+        chairman2_name = COALESCE($7, chairman2_name),
+        chairman2_position = COALESCE($8, chairman2_position),
+        active_chairman = $9,
+        protocol_prefix = COALESCE($10, protocol_prefix),
+        protocol_next_number = COALESCE($11, protocol_next_number),
+        certificate_prefix = COALESCE($12, certificate_prefix),
+        certificate_digits = COALESCE($13, certificate_digits),
+        certificate_next_number = COALESCE($14, certificate_next_number)
+      WHERE id = 1
+      RETURNING *`,
+      [
+        company_name, cName, member2_name, member3_name,
+        chairman1_name || chairman_name, chairman1_position,
+        chairman2_name, chairman2_position,
+        actChair,
+        protocol_prefix,
+        protocol_next_number !== undefined ? Number(protocol_next_number) : null,
+        certificate_prefix,
+        certificate_digits !== undefined ? Number(certificate_digits) : null,
+        certificate_next_number !== undefined ? Number(certificate_next_number) : null
+      ]
+    );
+    res.json(result.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
+router.post('/logo', authRequired, requireRole('superadmin'), uploadLogo.single('logo'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'no_file' });
+  const dataUrl = fileToDataUrl(req.file);
+  const webPath = '/uploads/logo/' + req.file.filename;
+  try {
+    const result = await query(
+      'UPDATE settings SET logo_path = $1, logo_data = $2 WHERE id = 1 RETURNING *',
+      [webPath, dataUrl]
+    );
+    res.json(result.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
+router.post('/stamp', authRequired, requireRole('superadmin'), uploadStamp.single('stamp'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'no_file' });
+  const dataUrl = fileToDataUrl(req.file);
+  const webPath = '/uploads/stamp/' + req.file.filename;
+  try {
+    const result = await query(
+      'UPDATE settings SET stamp_path = $1, stamp_data = $2 WHERE id = 1 RETURNING *',
+      [webPath, dataUrl]
+    );
+    res.json(result.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
+router.post('/signature', authRequired, requireRole('superadmin'), uploadSignature.single('signature'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'no_file' });
+  const dataUrl = fileToDataUrl(req.file);
+  const webPath = '/uploads/signature/' + req.file.filename;
+  const chairNum = req.query.chairman === '2' ? 2 : 1;
+  const colSig = chairNum === 2 ? 'chairman2_signature' : 'chairman1_signature';
+
+  try {
+    const result = await query(
+      `UPDATE settings SET signature_path = $1, ${colSig} = $2 WHERE id = 1 RETURNING *`,
+      [webPath, dataUrl]
+    );
+    res.json(result.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
+module.exports = router;
