@@ -1,185 +1,184 @@
-import express from 'express';
-import PDFDocument from 'pdfkit';
-import path from 'path';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
-import { query } from '../db.js';
-import { authenticateToken } from './auth.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
+const express = require('express');
 const router = express.Router();
+const PDFDocument = require('pdfkit');
+const path = require('path');
+const fs = require('fs');
+const { query } = require('../db');
+const { authRequired } = require('./auth');
 
-function parseBase64Image(dataString) {
-  if (!dataString || typeof dataString !== 'string') return null;
-  const matches = dataString.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-  if (matches && matches.length === 3) {
-    return Buffer.from(matches[2], 'base64');
+const FONT_REG = path.join(__dirname, '..', 'assets', 'fonts', 'DejaVuSans.ttf');
+const FONT_BOLD = path.join(__dirname, '..', 'assets', 'fonts', 'DejaVuSans-Bold.ttf');
+
+function fmtDate(d) {
+  if (!d) return '';
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return '';
+  return dt.toLocaleDateString('ru-RU');
+}
+
+function resolveImageBuffer(imgVal) {
+  if (!imgVal) return null;
+  try {
+    if (imgVal.startsWith('data:image')) {
+      const idx = imgVal.indexOf('base64,');
+      if (idx !== -1) {
+        return Buffer.from(imgVal.slice(idx + 7), 'base64');
+      }
+    }
+    const localPath = path.join(__dirname, '..', imgVal.replace(/^\//, ''));
+    if (fs.existsSync(localPath)) {
+      return fs.readFileSync(localPath);
+    }
+  } catch (e) {
+    console.error('Error resolving image buffer:', e);
   }
   return null;
 }
 
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/:id', authRequired, async (req, res) => {
+  const assignmentId = req.params.id;
   try {
-    const assignmentId = req.params.id;
+    const aRes = await query(
+      `SELECT a.*,
+              u.last_name, u.first_name, u.position as user_position, u.department, u.object,
+              c.title_ru, c.title_kz, c.validity_months
+       FROM assignments a
+       JOIN users u ON a.user_id = u.id
+       JOIN courses c ON a.course_id = c.id
+       WHERE a.id = $1`,
+      [assignmentId]
+    );
+    if (aRes.rows.length === 0) {
+      return res.status(404).json({ error: 'not_found' });
+    }
+    const a = aRes.rows[0];
 
-    const sql = `
-      SELECT 
-        a.*,
-        u.first_name, u.last_name, u.middle_name, u.iin, u.organization, u.position,
-        c.title as course_title, c.validity_period_years,
-        s.company_name, s.bin, s.training_center_name, s.training_center_address, s.license_info,
-        s.chairman_name, s.chairman_position, s.chairman_signature_url,
-        s.chairman1_name, s.chairman1_position, s.chairman1_signature,
-        s.chairman2_name, s.chairman2_position, s.chairman2_signature,
-        s.active_chairman,
-        s.logo_url, s.stamp_url, s.logo_data, s.stamp_data
-      FROM assignments a
-      JOIN users u ON a.user_id = u.id
-      JOIN courses c ON a.course_id = c.id
-      LEFT JOIN settings s ON s.id = 1
-      WHERE a.id = $1
-    `;
-    const result = await query(sql, [assignmentId]);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Назначение не найдено' });
+    if (req.user.role === 'employee' && Number(req.user.id) !== Number(a.user_id)) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+    if (a.status !== 'passed') {
+      return res.status(400).json({ error: 'not_passed' });
     }
 
-    const data = result.rows[0];
-
-    if (data.status !== 'passed') {
-      return res.status(400).json({ error: 'Сертификат доступен только после успешной сдачи теста' });
-    }
+    const sRes = await query('SELECT * FROM settings WHERE id = 1');
+    const s = sRes.rows[0] || {};
 
     const doc = new PDFDocument({
       size: 'A4',
       layout: 'landscape',
-      margin: 40
+      margins: { top: 30, bottom: 30, left: 35, right: 35 }
     });
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename=Certificate_${data.certificate_number || assignmentId}.pdf`);
-
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="certificate_${encodeURIComponent(a.certificate_number || a.id)}.pdf"`
+    );
     doc.pipe(res);
 
-    const fontRegular = path.join(__dirname, '../assets/fonts/DejaVuSans.ttf');
-    const fontBold = path.join(__dirname, '../assets/fonts/DejaVuSans-Bold.ttf');
+    if (fs.existsSync(FONT_REG)) doc.registerFont('DejaVu', FONT_REG);
+    if (fs.existsSync(FONT_BOLD)) doc.registerFont('DejaVu-Bold', FONT_BOLD);
+    const hasFonts = fs.existsSync(FONT_REG);
 
-    if (fs.existsSync(fontRegular)) {
-      doc.registerFont('DejaVu', fontRegular);
-      doc.font('DejaVu');
-    }
-    if (fs.existsSync(fontBold)) {
-      doc.registerFont('DejaVu-Bold', fontBold);
-    }
+    const fRegular = (size = 11) => {
+      if (hasFonts) doc.font('DejaVu').fontSize(size);
+      else doc.fontSize(size);
+    };
+    const fBold = (size = 11) => {
+      if (hasFonts && fs.existsSync(FONT_BOLD)) doc.font('DejaVu-Bold').fontSize(size);
+      else doc.fontSize(size);
+    };
 
     // Рамка документа
-    doc.lineWidth(3).strokeColor('#1e3a8a').rect(20, 20, 802, 555).stroke();
-    doc.lineWidth(1).strokeColor('#93c5fd').rect(25, 25, 792, 545).stroke();
+    doc.rect(20, 20, 802, 555).lineWidth(2).strokeColor('#0f3b6c').stroke();
+    doc.rect(25, 25, 792, 545).lineWidth(0.8).strokeColor('#8aa8c8').stroke();
 
-    // Логотип (увеличенный размер 90x54)
-    let logoBuffer = parseBase64Image(data.logo_data);
-    if (!logoBuffer && data.logo_url && fs.existsSync(data.logo_url)) {
-      logoBuffer = fs.readFileSync(data.logo_url);
-    }
-    if (logoBuffer) {
+    // Логотип (увеличенный размер)
+    const logoBuf = resolveImageBuffer(s.logo_data || s.logo_path);
+    if (logoBuf) {
       try {
-        doc.image(logoBuffer, 50, 40, { width: 90, height: 54, fit: [90, 54] });
+        doc.image(logoBuf, 50, 40, { width: 90, height: 55, fit: [90, 55] });
       } catch (e) {
-        console.error('Ошибка вставки логотипа:', e);
+        console.error('Ошибка вставки логотипа в PDF:', e);
       }
     }
 
-    doc.fontSize(16).fillColor('#1e3a8a');
-    if (fs.existsSync(fontBold)) doc.font('DejaVu-Bold');
-    doc.text(data.company_name || 'УЧЕБНЫЙ ЦЕНТР', 150, 48, { align: 'center', width: 540 });
+    fBold(15);
+    doc.fillColor('#0f3b6c');
+    doc.text(s.company_name || 'ТОО «Компания»', 150, 48, { align: 'center', width: 540 });
 
-    doc.fontSize(9).fillColor('#475569');
-    if (fs.existsSync(fontRegular)) doc.font('DejaVu');
-    const licenseText = data.license_info ? `Лицензия: ${data.license_info}` : '';
-    const binText = data.bin ? `БИН: ${data.bin}` : '';
-    doc.text([licenseText, binText].filter(Boolean).join(' | '), 150, 72, { align: 'center', width: 540 });
+    fBold(24);
+    doc.fillColor('#1b365d');
+    doc.text('СЕРТИФИКАТ / СЕРТИФИКАТЫ', 0, 120, { align: 'center' });
 
-    doc.moveDown(2);
+    fBold(12);
+    doc.fillColor('#333333');
+    doc.text(`№ ${a.certificate_number || '—'}`, 0, 155, { align: 'center' });
 
-    doc.fontSize(28).fillColor('#0f172a');
-    if (fs.existsSync(fontBold)) doc.font('DejaVu-Bold');
-    doc.text('СЕРТИФИКАТ', 0, 125, { align: 'center' });
+    fRegular(11);
+    doc.fillColor('#444444');
+    doc.text('Настоящим подтверждается, что / Осы арқылы расталады:', 0, 185, { align: 'center' });
 
-    doc.fontSize(11).fillColor('#64748b');
-    if (fs.existsSync(fontRegular)) doc.font('DejaVu');
-    doc.text(`№ ${data.certificate_number || 'б/н'}`, 0, 160, { align: 'center' });
+    fBold(19);
+    doc.fillColor('#000000');
+    doc.text(`${a.last_name || ''} ${a.first_name || ''}`.trim(), 0, 210, { align: 'center' });
 
-    doc.fontSize(12).fillColor('#334155');
-    doc.text('Настоящий сертификат подтверждает, что', 0, 195, { align: 'center' });
+    fRegular(10.5);
+    doc.fillColor('#555555');
+    const empDetails = [a.position || a.user_position, a.department, a.object].filter(Boolean).join(' • ');
+    if (empDetails) {
+      doc.text(empDetails, 0, 238, { align: 'center' });
+    }
 
-    const fullName = [data.last_name, data.first_name, data.middle_name].filter(Boolean).join(' ');
-    doc.fontSize(22).fillColor('#1e3a8a');
-    if (fs.existsSync(fontBold)) doc.font('DejaVu-Bold');
-    doc.text(fullName.toUpperCase(), 0, 222, { align: 'center' });
+    fRegular(11);
+    doc.fillColor('#444444');
+    doc.text('успешно прошел(ла) проверку знаний по курсу / келесі курс бойынша білімін сәтті тексеруден өтті:', 0, 268, { align: 'center' });
 
-    doc.fontSize(11).fillColor('#475569');
-    if (fs.existsSync(fontRegular)) doc.font('DejaVu');
-    const iinLine = data.iin ? `ИИН: ${data.iin}` : '';
-    const orgLine = data.organization ? `Организация: ${data.organization}` : '';
-    doc.text([iinLine, orgLine].filter(Boolean).join('   •   '), 0, 255, { align: 'center' });
+    fBold(13.5);
+    doc.fillColor('#0f3b6c');
+    const courseTitle = a.title_ru || a.title_kz || 'Курс';
+    doc.text(`«${courseTitle}»`, 60, 292, { align: 'center', width: 722 });
 
-    doc.fontSize(12).fillColor('#334155');
-    doc.text('успешно прошел(ла) проверку знаний по курсу:', 0, 285, { align: 'center' });
+    fRegular(9.5);
+    doc.fillColor('#333333');
+    const issueDateStr = fmtDate(a.test_date || a.protocol_date);
+    const validUntilStr = fmtDate(a.next_test_date);
+    const protStr = a.protocol_number ? `Протокол № ${a.protocol_number}` : '';
+    doc.text(`Дата выдачи: ${issueDateStr}     Действителен до: ${validUntilStr}     ${protStr}`, 0, 345, { align: 'center' });
 
-    doc.fontSize(16).fillColor('#0f172a');
-    if (fs.existsSync(fontBold)) doc.font('DejaVu-Bold');
-    doc.text(`«${data.course_title}»`, 60, 312, { align: 'center', width: 722 });
+    // Блок председателя (сменщик 1 или 2 на вахте)
+    const isShift2 = parseInt(s.active_chairman, 10) === 2;
+    const chairName = isShift2 ? (s.chairman2_name || s.chairman1_name) : (s.chairman1_name || s.chairman_name || 'Председатель комиссии');
+    const chairPos = isShift2 ? (s.chairman2_position || 'Председатель комиссии') : (s.chairman1_position || 'Председатель комиссии');
+    const chairSigData = isShift2 ? (s.chairman2_signature || s.chairman1_signature) : (s.chairman1_signature || s.signature_path);
 
-    const testDateStr = data.test_date ? new Date(data.test_date).toLocaleDateString('ru-RU') : '—';
-    const nextDateStr = data.next_test_date ? new Date(data.next_test_date).toLocaleDateString('ru-RU') : '—';
-    const protocolStr = data.protocol_number ? `Протокол № ${data.protocol_number}` : '';
-
-    doc.fontSize(10).fillColor('#475569');
-    if (fs.existsSync(fontRegular)) doc.font('DejaVu');
-    doc.text(`Дата выдачи: ${testDateStr}        Действителен до: ${nextDateStr}        ${protocolStr}`, 0, 365, { align: 'center' });
-
-    // Блок председателя на вахте (1 или 2 сменщик)
-    const isShift2 = parseInt(data.active_chairman, 10) === 2;
-    const chairName = isShift2 ? (data.chairman2_name || data.chairman1_name) : (data.chairman1_name || data.chairman_name || 'Председатель комиссии');
-    const chairPos = isShift2 ? (data.chairman2_position || 'Председатель комиссии') : (data.chairman1_position || data.chairman_position || 'Председатель комиссии');
-    const chairSigData = isShift2 ? (data.chairman2_signature || data.chairman1_signature) : (data.chairman1_signature || data.chairman_signature_url);
-
-    const signBaseY = 430;
-    doc.fontSize(10).fillColor('#1e293b');
-    if (fs.existsSync(fontBold)) doc.font('DejaVu-Bold');
+    const signBaseY = 415;
+    fBold(10);
+    doc.fillColor('#000000');
     doc.text(chairPos, 80, signBaseY);
 
-    if (fs.existsSync(fontRegular)) doc.font('DejaVu');
+    fRegular(10);
     doc.text(chairName, 520, signBaseY, { width: 240, align: 'right' });
 
-    doc.moveTo(270, signBaseY + 12).lineTo(510, signBaseY + 12).strokeColor('#cbd5e1').lineWidth(1).stroke();
+    doc.moveTo(270, signBaseY + 12).lineTo(510, signBaseY + 12).strokeColor('#888888').lineWidth(0.8).stroke();
 
-    // Подпись
-    let sigBuffer = parseBase64Image(chairSigData);
-    if (!sigBuffer && chairSigData && fs.existsSync(chairSigData)) {
-      sigBuffer = fs.readFileSync(chairSigData);
-    }
-    if (sigBuffer) {
+    // Подпись руководителя
+    const sigBuf = resolveImageBuffer(chairSigData);
+    if (sigBuf) {
       try {
-        doc.image(sigBuffer, 320, signBaseY - 26, { width: 130, height: 42, fit: [130, 42] });
+        doc.image(sigBuf, 320, signBaseY - 26, { width: 130, height: 42, fit: [130, 42] });
       } catch (e) {
         console.error('Ошибка вставки подписи:', e);
       }
     }
 
-    // Печать (частично накладывается на край подписи)
-    let stampBuffer = parseBase64Image(data.stamp_data);
-    if (!stampBuffer && data.stamp_url && fs.existsSync(data.stamp_url)) {
-      stampBuffer = fs.readFileSync(data.stamp_url);
-    }
-    if (stampBuffer) {
+    // Печать (накладывается частично на подпись)
+    const stampBuf = resolveImageBuffer(s.stamp_data || s.stamp_path);
+    if (stampBuf) {
       try {
         doc.save();
         doc.opacity(0.88);
-        doc.image(stampBuffer, 410, signBaseY - 45, { width: 105, height: 105, fit: [105, 105] });
+        doc.image(stampBuf, 410, signBaseY - 45, { width: 105, height: 105, fit: [105, 105] });
         doc.restore();
       } catch (e) {
         console.error('Ошибка вставки печати:', e);
@@ -187,10 +186,12 @@ router.get('/:id', authenticateToken, async (req, res) => {
     }
 
     doc.end();
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Ошибка генерации сертификата' });
+  } catch (e) {
+    console.error('Certificate generation error:', e);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'cert_error', details: e.message });
+    }
   }
 });
 
-export default router;
+module.exports = router;
