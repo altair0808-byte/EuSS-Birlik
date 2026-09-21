@@ -37,6 +37,22 @@ async function initDb() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS permanent_certificate_number TEXT;
   `);
 
+  // Протоколы комиссии: администратор "открывает" протокол на диапазон дат —
+  // всем сотрудникам, кто пройдёт проверку знаний внутри этого диапазона,
+  // номер протокола присваивается автоматически (см. routes/protocols.js
+  // и POST /api/assignments/:id/submit в routes/assignments.js).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS protocols (
+      id BIGSERIAL PRIMARY KEY,
+      protocol_number TEXT NOT NULL,
+      open_date DATE NOT NULL,
+      close_date DATE NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed')),
+      created_by BIGINT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
   // Если таблица settings была создана ранее без колонки id, пересоздаем ее с правильной структурой
   await pool.query(`
     DO $$
