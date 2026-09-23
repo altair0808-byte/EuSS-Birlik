@@ -34,7 +34,20 @@ async function initDb() {
     ALTER TABLE assignments ADD COLUMN IF NOT EXISTS protocol_open_date DATE;
     ALTER TABLE assignments ADD COLUMN IF NOT EXISTS protocol_close_date DATE;
     ALTER TABLE assignments ADD COLUMN IF NOT EXISTS user_answers JSONB;
+    ALTER TABLE assignments ADD COLUMN IF NOT EXISTS protocol_id BIGINT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS permanent_certificate_number TEXT;
+
+    -- Материалы и видео курса отдельно на русском и казахском языке (п.3 запроса):
+    -- раньше был один файл на курс, теперь администратор может загрузить свою
+    -- методичку/презентацию и своё видео для каждого языка отдельно.
+    -- Старые колонки material_pdf_path / video_path / video_url оставлены как есть
+    -- (используются как запасной вариант для курсов, созданных до этого обновления).
+    ALTER TABLE courses ADD COLUMN IF NOT EXISTS material_pdf_path_ru TEXT;
+    ALTER TABLE courses ADD COLUMN IF NOT EXISTS material_pdf_path_kz TEXT;
+    ALTER TABLE courses ADD COLUMN IF NOT EXISTS video_path_ru TEXT;
+    ALTER TABLE courses ADD COLUMN IF NOT EXISTS video_path_kz TEXT;
+    ALTER TABLE courses ADD COLUMN IF NOT EXISTS video_url_ru TEXT;
+    ALTER TABLE courses ADD COLUMN IF NOT EXISTS video_url_kz TEXT;
   `);
 
   // Сотрудника можно создать/импортировать только по ФИО, без логина и пароля,

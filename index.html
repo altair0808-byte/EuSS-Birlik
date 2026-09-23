@@ -343,7 +343,9 @@ const state = {
   assignFilter: { status: '', object: '', department: '', q: '', date_from: '', date_to: '' },
   meta: { objects: [], departments: [] },
   profileUserId: null,
-  calendarDate: new Date()
+  calendarDate: new Date(),
+  protocols: [],
+  activeProtocols: []
 };
 
 function qs(obj) {
@@ -398,7 +400,27 @@ const api = {
   submitTest(id, answers, focus_violations) { return this.req('/api/assignments/' + id + '/submit', { method: 'POST', body: { answers, focus_violations } }); },
   getSettings() { return this.req('/api/settings'); },
   saveSettings(data) { return this.req('/api/settings', { method: 'PUT', body: data }); },
-  getPublicSettings() { return this.req('/api/settings/public'); }
+  getPublicSettings() { return this.req('/api/settings/public'); },
+  getAssignmentAnswers(id) { return this.req('/api/assignments/' + id + '/answers'); },
+  // Протоколы (открытие/закрытие, п.1 и п.4)
+  getProtocols() { return this.req('/api/protocols'); },
+  getActiveProtocols() { return this.req('/api/protocols/active'); },
+  openProtocol(data) { return this.req('/api/protocols', { method: 'POST', body: data }); },
+  updateProtocol(id, data) { return this.req('/api/protocols/' + id, { method: 'PATCH', body: data }); },
+  closeProtocol(id) { return this.req('/api/protocols/' + id + '/close', { method: 'POST' }); },
+  reopenProtocol(id) { return this.req('/api/protocols/' + id + '/reopen', { method: 'POST' }); },
+  deleteProtocol(id) { return this.req('/api/protocols/' + id, { method: 'DELETE' }); },
+  // Материалы/видео курса отдельно RU/KZ (п.3)
+  uploadMaterial(courseId, lang, file) {
+    const fd = new FormData(); fd.append('file', file);
+    return this.req('/api/courses/' + courseId + '/material/' + lang, { method: 'POST', body: fd });
+  },
+  deleteMaterial(courseId, lang) { return this.req('/api/courses/' + courseId + '/material/' + lang, { method: 'DELETE' }); },
+  uploadVideo(courseId, lang, file) {
+    const fd = new FormData(); fd.append('file', file);
+    return this.req('/api/courses/' + courseId + '/video/' + lang, { method: 'POST', body: fd });
+  },
+  deleteVideo(courseId, lang) { return this.req('/api/courses/' + courseId + '/video/' + lang, { method: 'DELETE' }); }
 };
 
 // Публичные настройки бренда (название компании + логотип), доступные без
@@ -562,6 +584,7 @@ function renderMain(app) {
             <button onclick="setTab('users')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_users')}</button>
             <button onclick="setTab('courses')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'courses' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_courses')}</button>
             <button onclick="setTab('assignments')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'assignments' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_assignments')}</button>
+            <button onclick="setTab('protocols')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'protocols' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">Протоколы</button>
             <button onclick="setTab('calendar')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'calendar' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_calendar')}</button>
             <a href="#" onclick="downloadAuthed('/api/export/excel','journal_export.xlsx');return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-emerald-700 hover:bg-emerald-50">📥 ${t('nav_export')}</a>
             <button onclick="setTab('settings')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'settings' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_settings')}</button>
@@ -715,6 +738,11 @@ async function loadTabContent() {
               <div><label class="text-xs font-semibold text-slate-600">Логин (табельный номер)</label><input id="uLogin" placeholder="Можно назначить позже" class="w-full border p-2 rounded text-sm"></div>
               <div><label class="text-xs font-semibold text-slate-600">Пароль</label><input type="password" id="uPass" placeholder="Не менять" class="w-full border p-2 rounded text-sm"></div>
             </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">№ сертификата (уникальный номер сотрудника)</label>
+              <input id="uCertNumber" placeholder="Например, 0125" class="w-full border p-2 rounded text-sm">
+              <p class="text-[11px] text-slate-400 mt-1">Можно исправить вручную в любой момент — история пройденных тестов сотрудника при этом не меняется.</p>
+            </div>
             <p class="text-xs text-slate-400 -mt-1">Логин и пароль можно не указывать сейчас, а добавить позже — просто откройте карточку сотрудника ещё раз и нажмите «Изменить». При указании логина обязательно укажите и пароль.</p>
             <div id="roleFieldWrapper">
               <label class="text-xs font-semibold text-slate-600">Роль</label>
@@ -766,21 +794,48 @@ async function loadTabContent() {
               <div><label class="text-xs font-semibold text-slate-600">Срок (мес)</label><input type="number" id="cValid" value="12" class="w-full border p-2 rounded text-sm"></div>
             </div>
             <div class="border-t pt-3">
-              <label class="text-xs font-semibold text-slate-600">Материалы курса (презентация PPT/PPTX или PDF) — отдельный файл</label>
-              <div class="flex items-center gap-2 mt-1">
-                <input type="file" id="cMaterialFile" accept=".pdf,.ppt,.pptx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="w-full border p-2 rounded text-sm">
-                <button type="button" onclick="uploadCourseMaterial()" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить</button>
+              <label class="text-xs font-semibold text-slate-600">Материалы курса (презентация PPT/PPTX или PDF) — отдельно на русском и казахском</label>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-1">
+                <div>
+                  <p class="text-[11px] font-semibold text-slate-500 mb-1">🇷🇺 На русском</p>
+                  <div class="flex items-center gap-2">
+                    <input type="file" id="cMaterialFileRu" accept=".pdf,.ppt,.pptx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="w-full border p-2 rounded text-sm">
+                    <button type="button" onclick="uploadCourseMaterial('ru')" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить</button>
+                  </div>
+                  <div id="cMaterialStatusRu" class="text-xs text-slate-500 mt-1"></div>
+                </div>
+                <div>
+                  <p class="text-[11px] font-semibold text-slate-500 mb-1">🇰🇿 На казахском</p>
+                  <div class="flex items-center gap-2">
+                    <input type="file" id="cMaterialFileKz" accept=".pdf,.ppt,.pptx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="w-full border p-2 rounded text-sm">
+                    <button type="button" onclick="uploadCourseMaterial('kz')" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить</button>
+                  </div>
+                  <div id="cMaterialStatusKz" class="text-xs text-slate-500 mt-1"></div>
+                </div>
               </div>
-              <div id="cMaterialStatus" class="text-xs text-slate-500 mt-1"></div>
             </div>
             <div class="border-t pt-3">
-              <label class="text-xs font-semibold text-slate-600">Видео курса (необязательно) — файл или ссылка</label>
-              <input id="cVideo" placeholder="https://youtube.com/..." class="w-full border p-2 rounded text-sm mt-1">
-              <div class="flex items-center gap-2 mt-2">
-                <input type="file" id="cVideoFile" accept="video/*,.mp4,.webm,.mov,.avi,.mkv" class="w-full border p-2 rounded text-sm">
-                <button type="button" onclick="uploadCourseVideo()" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить</button>
+              <label class="text-xs font-semibold text-slate-600">Видео курса (необязательно) — файл или ссылка, отдельно на русском и казахском</label>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-1">
+                <div>
+                  <p class="text-[11px] font-semibold text-slate-500 mb-1">🇷🇺 На русском</p>
+                  <input id="cVideoRu" placeholder="https://youtube.com/..." class="w-full border p-2 rounded text-sm">
+                  <div class="flex items-center gap-2 mt-2">
+                    <input type="file" id="cVideoFileRu" accept="video/*,.mp4,.webm,.mov,.avi,.mkv" class="w-full border p-2 rounded text-sm">
+                    <button type="button" onclick="uploadCourseVideo('ru')" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить</button>
+                  </div>
+                  <div id="cVideoStatusRu" class="text-xs text-slate-500 mt-1"></div>
+                </div>
+                <div>
+                  <p class="text-[11px] font-semibold text-slate-500 mb-1">🇰🇿 На казахском</p>
+                  <input id="cVideoKz" placeholder="https://youtube.com/..." class="w-full border p-2 rounded text-sm">
+                  <div class="flex items-center gap-2 mt-2">
+                    <input type="file" id="cVideoFileKz" accept="video/*,.mp4,.webm,.mov,.avi,.mkv" class="w-full border p-2 rounded text-sm">
+                    <button type="button" onclick="uploadCourseVideo('kz')" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить</button>
+                  </div>
+                  <div id="cVideoStatusKz" class="text-xs text-slate-500 mt-1"></div>
+                </div>
               </div>
-              <div id="cVideoStatus" class="text-xs text-slate-500 mt-1"></div>
               <p class="text-[11px] text-slate-400 mt-1">Видео может отсутствовать — курс можно сохранить без него.</p>
             </div>
             <div class="flex justify-end space-x-2 pt-3 border-t">
@@ -896,6 +951,7 @@ async function loadTabContent() {
               <div><label class="text-xs font-semibold text-slate-600">Дата протокола</label><input type="date" id="asProtDate" required class="w-full border p-2 rounded text-sm"></div>
             </div>
             <div class="text-[11px] text-slate-500 -mt-1">Один номер протокола будет присвоен всем выбранным ниже сотрудникам. Номер подставлен автоматически по счётчику из настроек — при необходимости его можно исправить вручную.</div>
+            <div id="asActiveProtocolHint" class="text-[11px] text-emerald-700 font-semibold -mt-1"></div>
             <div id="asNextCertHint" class="text-[11px] text-blue-600 font-semibold -mt-1"></div>
             <div class="border-t pt-3">
               <label class="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
@@ -933,6 +989,57 @@ async function loadTabContent() {
       </div>
     `;
     loadAssignmentsList();
+  }
+
+  if (state.tab === 'protocols') {
+    container.innerHTML = `
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-lg font-bold text-slate-900">Протоколы комиссии</h2>
+          <button onclick="openProtocolModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold">+ Открыть протокол</button>
+        </div>
+        <p class="text-xs text-slate-500 mb-4">
+          Откройте протокол — укажите его номер и период (дату открытия и дату закрытия).
+          Пока протокол открыт и сегодняшняя дата попадает в этот период, каждому сотруднику,
+          который сдаст тест в эти дни, номер этого протокола присвоится автоматически —
+          вручную вводить номер протокола при назначении теста не обязательно.
+        </p>
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">№ протокола</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Дата открытия</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Дата закрытия</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Статус</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Сотрудников присвоено</th>
+                <th class="px-4 py-3 text-right font-semibold text-slate-600">Действия</th>
+              </tr>
+            </thead>
+            <tbody id="protocolsTable" class="divide-y divide-slate-100"><tr><td colspan="6" class="p-4 text-center text-slate-400">Загрузка...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="protocolModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+          <h3 class="text-lg font-bold mb-4" id="protocolModalTitle">Открыть протокол</h3>
+          <form onsubmit="saveProtocolForm(event)" class="space-y-3">
+            <input type="hidden" id="protocolId">
+            <div><label class="text-xs font-semibold text-slate-600">Номер протокола</label><input id="protoNumber" required class="w-full border p-2 rounded text-sm" placeholder="Например, 1"></div>
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="text-xs font-semibold text-slate-600">Дата открытия</label><input type="date" id="protoOpenDate" required class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Дата закрытия</label><input type="date" id="protoCloseDate" required class="w-full border p-2 rounded text-sm"></div>
+            </div>
+            <p class="text-[11px] text-slate-500">Всем сотрудникам, кто сдаст тест в этот период, номер протокола присвоится автоматически.</p>
+            <div class="flex justify-end space-x-2 pt-3 border-t">
+              <button type="button" onclick="document.getElementById('protocolModal').classList.add('hidden')" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
+              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+    loadProtocolsList();
   }
 
   if (state.tab === 'calendar') {
@@ -1213,6 +1320,7 @@ function openUserModal(u = null) {
   document.getElementById('uPos').value = u ? u.position : '';
   document.getElementById('uLogin').value = u ? u.login : '';
   document.getElementById('uPass').value = '';
+  document.getElementById('uCertNumber').value = u ? (u.permanent_certificate_number || '') : '';
   document.getElementById('uRole').value = u ? u.role : 'employee';
   const roleWrapper = document.getElementById('roleFieldWrapper');
   if (roleWrapper) {
@@ -1251,7 +1359,8 @@ async function saveUserForm(e) {
     department: document.getElementById('uDept').value.trim(),
     position: document.getElementById('uPos').value.trim(),
     login: document.getElementById('uLogin').value.trim(),
-    role: document.getElementById('uRole').value
+    role: document.getElementById('uRole').value,
+    permanent_certificate_number: document.getElementById('uCertNumber').value.trim()
   };
   const pass = document.getElementById('uPass').value;
   if (pass) data.password = pass;
@@ -1275,8 +1384,10 @@ async function loadCoursesList() {
         </div>
         <p class="text-xs text-slate-500 mt-2">Вопросов в базе: ${c.questions_count || 0}</p>
         <div class="flex flex-wrap gap-1.5 mt-2">
-          ${c.material_pdf_path ? '<span class="text-[11px] font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">📄 материалы</span>' : '<span class="text-[11px] font-semibold bg-amber-50 text-amber-600 px-2 py-0.5 rounded">📄 нет материалов</span>'}
-          ${(c.video_path || c.video_url) ? '<span class="text-[11px] font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">🎬 видео</span>' : '<span class="text-[11px] font-semibold bg-slate-100 text-slate-400 px-2 py-0.5 rounded">видео не добавлено</span>'}
+          ${(c.material_pdf_path_ru || c.material_pdf_path) ? '<span class="text-[11px] font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">📄 RU материалы</span>' : '<span class="text-[11px] font-semibold bg-amber-50 text-amber-600 px-2 py-0.5 rounded">📄 нет RU материалов</span>'}
+          ${c.material_pdf_path_kz ? '<span class="text-[11px] font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">📄 KZ материалы</span>' : '<span class="text-[11px] font-semibold bg-amber-50 text-amber-600 px-2 py-0.5 rounded">📄 нет KZ материалов</span>'}
+          ${(c.video_path_ru || c.video_url_ru || c.video_path || c.video_url) ? '<span class="text-[11px] font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">🎬 RU видео</span>' : '<span class="text-[11px] font-semibold bg-slate-100 text-slate-400 px-2 py-0.5 rounded">RU видео не добавлено</span>'}
+          ${(c.video_path_kz || c.video_url_kz) ? '<span class="text-[11px] font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">🎬 KZ видео</span>' : '<span class="text-[11px] font-semibold bg-slate-100 text-slate-400 px-2 py-0.5 rounded">KZ видео не добавлено</span>'}
         </div>
       </div>
       <div class="mt-4 pt-3 border-t flex justify-end space-x-3 text-xs font-semibold">
@@ -1289,10 +1400,12 @@ async function loadCoursesList() {
 }
 
 async function openCourseModal(id) {
-  document.getElementById('cMaterialStatus').textContent = '';
-  document.getElementById('cMaterialFile').value = '';
-  document.getElementById('cVideoStatus').textContent = '';
-  document.getElementById('cVideoFile').value = '';
+  ['Ru', 'Kz'].forEach(L => {
+    document.getElementById('cMaterialStatus' + L).textContent = '';
+    document.getElementById('cMaterialFile' + L).value = '';
+    document.getElementById('cVideoStatus' + L).textContent = '';
+    document.getElementById('cVideoFile' + L).value = '';
+  });
   if (id) {
     const { course } = await api.getCourse(id);
     document.getElementById('courseId').value = course.id;
@@ -1303,9 +1416,13 @@ async function openCourseModal(id) {
     document.getElementById('cTime').value = course.time_limit_minutes;
     document.getElementById('cPass').value = course.pass_score_percent;
     document.getElementById('cValid').value = course.validity_months;
-    document.getElementById('cVideo').value = course.video_url || '';
-    renderMaterialStatus(course.material_pdf_path);
-    renderVideoStatus(course.video_path);
+    // video_url_ru/kz — новые поля; video_url — старое поле для курсов, созданных до этого обновления
+    document.getElementById('cVideoRu').value = course.video_url_ru || course.video_url || '';
+    document.getElementById('cVideoKz').value = course.video_url_kz || '';
+    renderMaterialStatus('ru', course.material_pdf_path_ru || course.material_pdf_path);
+    renderMaterialStatus('kz', course.material_pdf_path_kz);
+    renderVideoStatus('ru', course.video_path_ru || course.video_path);
+    renderVideoStatus('kz', course.video_path_kz);
     document.getElementById('courseModalTitle').textContent = 'Редактировать курс';
   } else {
     document.getElementById('courseId').value = '';
@@ -1316,23 +1433,30 @@ async function openCourseModal(id) {
     document.getElementById('cTime').value = 20;
     document.getElementById('cPass').value = 80;
     document.getElementById('cValid').value = 12;
-    document.getElementById('cVideo').value = '';
+    document.getElementById('cVideoRu').value = '';
+    document.getElementById('cVideoKz').value = '';
+    renderMaterialStatus('ru', null);
+    renderMaterialStatus('kz', null);
+    renderVideoStatus('ru', null);
+    renderVideoStatus('kz', null);
     document.getElementById('courseModalTitle').textContent = 'Новый курс';
   }
   document.getElementById('courseModal').classList.remove('hidden');
 }
 
-function renderMaterialStatus(path) {
-  const el = document.getElementById('cMaterialStatus');
+function renderMaterialStatus(lang, path) {
+  const el = document.getElementById('cMaterialStatus' + (lang === 'kz' ? 'Kz' : 'Ru'));
+  if (!el) return;
   el.innerHTML = path
-    ? `Текущий файл: <a href="${path}" target="_blank" class="text-blue-600 underline">открыть</a> · <button type="button" onclick="deleteCourseMaterial()" class="text-red-600 underline">удалить</button>`
+    ? `Текущий файл: <a href="${path}" target="_blank" class="text-blue-600 underline">открыть</a> · <button type="button" onclick="deleteCourseMaterial('${lang}')" class="text-red-600 underline">удалить</button>`
     : 'Материалы пока не загружены.';
 }
 
-function renderVideoStatus(path) {
-  const el = document.getElementById('cVideoStatus');
+function renderVideoStatus(lang, path) {
+  const el = document.getElementById('cVideoStatus' + (lang === 'kz' ? 'Kz' : 'Ru'));
+  if (!el) return;
   el.innerHTML = path
-    ? `Текущий видеофайл: <a href="${path}" target="_blank" class="text-blue-600 underline">открыть</a> · <button type="button" onclick="deleteCourseVideo()" class="text-red-600 underline">удалить</button>`
+    ? `Текущий видеофайл: <a href="${path}" target="_blank" class="text-blue-600 underline">открыть</a> · <button type="button" onclick="deleteCourseVideo('${lang}')" class="text-red-600 underline">удалить</button>`
     : 'Видеофайл не загружен (можно указать только ссылку выше или оставить пустым).';
 }
 
@@ -1347,72 +1471,65 @@ async function saveCourseForm(e) {
     time_limit_minutes: parseInt(document.getElementById('cTime').value) || 20,
     pass_score_percent: parseInt(document.getElementById('cPass').value) || 80,
     validity_months: parseInt(document.getElementById('cValid').value) || 12,
-    video_url: document.getElementById('cVideo').value.trim()
+    video_url_ru: document.getElementById('cVideoRu').value.trim(),
+    video_url_kz: document.getElementById('cVideoKz').value.trim()
   };
   const saved = await api.saveCourse(data, id);
   const courseId = id || saved.id;
-  const materialFile = document.getElementById('cMaterialFile').files[0];
-  if (materialFile) {
-    const fd = new FormData();
-    fd.append('file', materialFile);
-    await api.req('/api/courses/' + courseId + '/material', { method: 'POST', body: fd });
-  }
-  const videoFile = document.getElementById('cVideoFile').files[0];
-  if (videoFile) {
-    const fd = new FormData();
-    fd.append('file', videoFile);
-    await api.req('/api/courses/' + courseId + '/video', { method: 'POST', body: fd });
-  }
+  const materialFileRu = document.getElementById('cMaterialFileRu').files[0];
+  if (materialFileRu) await api.uploadMaterial(courseId, 'ru', materialFileRu);
+  const materialFileKz = document.getElementById('cMaterialFileKz').files[0];
+  if (materialFileKz) await api.uploadMaterial(courseId, 'kz', materialFileKz);
+  const videoFileRu = document.getElementById('cVideoFileRu').files[0];
+  if (videoFileRu) await api.uploadVideo(courseId, 'ru', videoFileRu);
+  const videoFileKz = document.getElementById('cVideoFileKz').files[0];
+  if (videoFileKz) await api.uploadVideo(courseId, 'kz', videoFileKz);
   document.getElementById('courseModal').classList.add('hidden');
   loadCoursesList();
 }
 
-async function uploadCourseMaterial() {
+async function uploadCourseMaterial(lang) {
   const id = document.getElementById('courseId').value;
-  const file = document.getElementById('cMaterialFile').files[0];
+  const file = document.getElementById('cMaterialFile' + (lang === 'kz' ? 'Kz' : 'Ru')).files[0];
   if (!id) { alert('Сначала сохраните курс, затем загрузите материалы.'); return; }
   if (!file) { alert('Выберите файл (PDF, PPT или PPTX).'); return; }
   try {
-    const fd = new FormData();
-    fd.append('file', file);
-    const res = await api.req('/api/courses/' + id + '/material', { method: 'POST', body: fd });
-    renderMaterialStatus(res.material_pdf_path);
+    const res = await api.uploadMaterial(id, lang, file);
+    renderMaterialStatus(lang, res['material_pdf_path_' + lang]);
     loadCoursesList();
   } catch (e) {
     alert('Не удалось загрузить файл: ' + e.message);
   }
 }
 
-async function deleteCourseMaterial() {
+async function deleteCourseMaterial(lang) {
   const id = document.getElementById('courseId').value;
   if (!id || !confirm('Удалить материалы курса?')) return;
-  await api.req('/api/courses/' + id + '/material', { method: 'DELETE' });
-  renderMaterialStatus(null);
+  await api.deleteMaterial(id, lang);
+  renderMaterialStatus(lang, null);
   loadCoursesList();
 }
 
-async function uploadCourseVideo() {
+async function uploadCourseVideo(lang) {
   const id = document.getElementById('courseId').value;
-  const file = document.getElementById('cVideoFile').files[0];
+  const file = document.getElementById('cVideoFile' + (lang === 'kz' ? 'Kz' : 'Ru')).files[0];
   if (!id) { alert('Сначала сохраните курс, затем загрузите видео.'); return; }
   if (!file) { alert('Выберите видеофайл.'); return; }
   try {
-    const fd = new FormData();
-    fd.append('file', file);
-    const res = await api.req('/api/courses/' + id + '/video', { method: 'POST', body: fd });
-    renderVideoStatus(res.video_path);
+    const res = await api.uploadVideo(id, lang, file);
+    renderVideoStatus(lang, res['video_path_' + lang]);
     loadCoursesList();
   } catch (e) {
     alert('Не удалось загрузить видео: ' + e.message);
   }
 }
 
-async function deleteCourseVideo() {
+async function deleteCourseVideo(lang) {
   const id = document.getElementById('courseId').value;
   if (!id || !confirm('Удалить видео курса (файл и ссылку)?')) return;
-  await api.req('/api/courses/' + id + '/video', { method: 'DELETE' });
-  document.getElementById('cVideo').value = '';
-  renderVideoStatus(null);
+  await api.deleteVideo(id, lang);
+  document.getElementById('cVideo' + (lang === 'kz' ? 'Kz' : 'Ru')).value = '';
+  renderVideoStatus(lang, null);
   loadCoursesList();
 }
 
@@ -1761,6 +1878,21 @@ async function openAssignModal() {
     document.getElementById('asProtNum').value = '1';
   }
 
+  // Если сегодня действует открытый протокол (вкладка "Протоколы"), предупреждаем
+  // администратора: итоговый номер будет присвоен автоматически при сдаче теста
+  // сотрудником в период действия этого протокола, независимо от того, что введено ниже.
+  const activeHint = document.getElementById('asActiveProtocolHint');
+  if (activeHint) {
+    activeHint.textContent = '';
+    try {
+      const active = await api.getActiveProtocols();
+      if (active.length) {
+        const p = active[0];
+        activeHint.textContent = `Сейчас открыт протокол № ${p.protocol_number} (до ${fmtDate(p.close_date)}) — если сотрудник сдаст тест сегодня, ему автоматически будет присвоен именно этот номер.`;
+      }
+    } catch (e) {}
+  }
+
   renderAssignEmployeeList();
   document.getElementById('assignModal').classList.remove('hidden');
 }
@@ -1870,6 +2002,107 @@ async function delAssign(id) {
   loadAssignmentsList();
 }
 
+// --- ПРОТОКОЛЫ (открытие/закрытие, п.1 и п.4) ---
+function fmtDate(d) {
+  if (!d) return '—';
+  // Поле приходит как YYYY-MM-DD (DATE в postgres) — просто переставляем местами
+  const s = String(d).slice(0, 10);
+  const parts = s.split('-');
+  return parts.length === 3 ? `${parts[2]}.${parts[1]}.${parts[0]}` : s;
+}
+
+async function loadProtocolsList() {
+  const tbody = document.getElementById('protocolsTable');
+  if (!tbody) return;
+  try {
+    const list = await api.getProtocols();
+    state.protocols = list;
+    if (!list.length) {
+      tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-slate-400">Пока нет ни одного протокола</td></tr>`;
+      return;
+    }
+    const todayStr = toLocalDateStr(new Date());
+    tbody.innerHTML = list.map(p => {
+      const isActiveNow = p.status === 'open' && String(p.open_date).slice(0,10) <= todayStr && todayStr <= String(p.close_date).slice(0,10);
+      return `
+      <tr class="hover:bg-slate-50">
+        <td class="px-4 py-3 font-bold text-slate-900">№ ${esc(p.protocol_number)}</td>
+        <td class="px-4 py-3 text-slate-600">${fmtDate(p.open_date)}</td>
+        <td class="px-4 py-3 text-slate-600">${fmtDate(p.close_date)}</td>
+        <td class="px-4 py-3">
+          <span class="text-xs font-bold px-2 py-1 rounded ${p.status === 'open' ? (isActiveNow ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800') : 'bg-slate-100 text-slate-600'}">
+            ${p.status === 'open' ? (isActiveNow ? 'ОТКРЫТ (действует сегодня)' : 'ОТКРЫТ') : 'ЗАКРЫТ'}
+          </span>
+        </td>
+        <td class="px-4 py-3 text-slate-600">${p.assignments_count || 0}</td>
+        <td class="px-4 py-3 text-right space-x-2 whitespace-nowrap">
+          <button onclick="editProtocol(${p.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>
+          ${p.status === 'open'
+            ? `<button onclick="closeProtocolAction(${p.id})" class="text-amber-600 hover:underline text-xs">Закрыть</button>`
+            : `<button onclick="reopenProtocolAction(${p.id})" class="text-emerald-600 hover:underline text-xs">Открыть снова</button>`}
+          <button onclick="deleteProtocolAction(${p.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
+        </td>
+      </tr>
+    `;
+    }).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-red-500">${t('error_generic')}</td></tr>`;
+  }
+}
+
+function openProtocolModal(p = null) {
+  document.getElementById('protocolId').value = p ? p.id : '';
+  document.getElementById('protoNumber').value = p ? p.protocol_number : '';
+  document.getElementById('protoOpenDate').value = p ? String(p.open_date).slice(0, 10) : toLocalDateStr(new Date());
+  document.getElementById('protoCloseDate').value = p ? String(p.close_date).slice(0, 10) : toLocalDateStr(new Date());
+  document.getElementById('protocolModalTitle').textContent = p ? 'Изменить протокол' : 'Открыть протокол';
+  document.getElementById('protocolModal').classList.remove('hidden');
+}
+
+function editProtocol(id) {
+  const p = (state.protocols || []).find(x => x.id === id);
+  if (p) openProtocolModal(p);
+}
+
+async function saveProtocolForm(e) {
+  e.preventDefault();
+  const id = document.getElementById('protocolId').value;
+  const data = {
+    protocol_number: document.getElementById('protoNumber').value.trim(),
+    open_date: document.getElementById('protoOpenDate').value,
+    close_date: document.getElementById('protoCloseDate').value
+  };
+  try {
+    if (id) await api.updateProtocol(id, data);
+    else await api.openProtocol(data);
+    document.getElementById('protocolModal').classList.add('hidden');
+    loadProtocolsList();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+async function closeProtocolAction(id) {
+  if (!confirm('Закрыть протокол? Новые сотрудники, сдавшие тест позже, больше не будут автоматически получать этот номер.')) return;
+  await api.closeProtocol(id);
+  loadProtocolsList();
+}
+
+async function reopenProtocolAction(id) {
+  await api.reopenProtocol(id);
+  loadProtocolsList();
+}
+
+async function deleteProtocolAction(id) {
+  if (!confirm('Удалить протокол?')) return;
+  try {
+    await api.deleteProtocol(id);
+    loadProtocolsList();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
 // --- USER PROFILE (АДМИН/СУПЕРАДМИН СМОТРИТ КАРТОЧКУ СОТРУДНИКА) ---
 function openUserProfile(userId) {
   state.profileUserId = userId;
@@ -1907,6 +2140,7 @@ async function loadUserProfile(userId) {
             <h2 class="text-xl font-bold text-slate-900">${esc(user.last_name)} ${esc(user.first_name)}</h2>
             <p class="text-sm text-slate-500 mt-1">${esc(user.position || '—')} · ${esc(user.object || '—')} / ${esc(user.department || '—')}</p>
             <p class="text-xs text-slate-400 mt-1">${t('login_field')}: <span class="font-mono">${user.login ? esc(user.login) : 'не назначен'}</span> · ${esc(roleName)}</p>
+            <p class="text-xs text-slate-400 mt-1">№ сертификата: <span class="font-mono font-semibold text-slate-600">${user.permanent_certificate_number ? esc(user.permanent_certificate_number) : 'не присвоен'}</span></p>
           </div>
           <div class="flex gap-2">
             <button onclick="editUserFromProfile(${user.id})" class="px-4 py-2 border rounded-lg text-sm font-semibold hover:bg-slate-50">${t('edit')}</button>
@@ -1940,8 +2174,9 @@ async function loadUserProfile(userId) {
                   </td>
                   <td class="px-4 py-3 font-bold">${a.score_percent !== null ? a.score_percent + '%' : '—'}</td>
                   <td class="px-4 py-3 text-xs text-slate-600">${a.next_test_date ? new Date(a.next_test_date).toLocaleDateString('ru-RU') : '—'}</td>
-                  <td class="px-4 py-3 text-right">
-                    ${a.status === 'passed' && a.certificate_number ? `<a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="text-blue-600 hover:underline text-xs font-semibold">${t('download_cert')}</a>` : '—'}
+                  <td class="px-4 py-3 text-right whitespace-nowrap space-x-2">
+                    ${a.user_answers ? `<button onclick="openAnswersModal(${a.id})" class="text-slate-600 hover:underline text-xs font-semibold">Подробнее</button>` : ''}
+                    ${a.status === 'passed' && a.certificate_number ? `<a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="text-blue-600 hover:underline text-xs font-semibold">${t('download_cert')}</a>` : ''}
                   </td>
                 </tr>
               `).join('') : `<tr><td colspan="6" class="p-4 text-center text-slate-400">${t('no_data')}</td></tr>`}
@@ -1949,9 +2184,56 @@ async function loadUserProfile(userId) {
           </table>
         </div>
       </div>
+      <div id="answersModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[85vh] flex flex-col">
+          <div class="flex justify-between items-center mb-3">
+            <h3 class="text-lg font-bold">Ответы на вопросы</h3>
+            <button onclick="document.getElementById('answersModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-700 text-xl leading-none">&times;</button>
+          </div>
+          <div id="answersModalBody" class="space-y-2 overflow-y-auto flex-1"></div>
+        </div>
+      </div>
     `;
   } catch (e) {
     div.innerHTML = `<div class="text-red-600 text-sm">${t('error_generic')}</div>`;
+  }
+}
+
+// Показывает, на какие вопросы сотрудник ответил верно/неверно в конкретной попытке (п.2 запроса)
+async function openAnswersModal(assignmentId) {
+  const modal = document.getElementById('answersModal');
+  const body = document.getElementById('answersModalBody');
+  if (!modal || !body) return;
+  body.innerHTML = `<div class="text-slate-400 text-sm">${t('loading')}</div>`;
+  modal.classList.remove('hidden');
+  try {
+    const { questions } = await api.getAssignmentAnswers(assignmentId);
+    if (!questions.length) {
+      body.innerHTML = `<div class="text-slate-400 text-sm">${t('no_data')}</div>`;
+      return;
+    }
+    body.innerHTML = questions.map((q, i) => {
+      const opts = parseOpts(CURRENT_LANG === 'kz' ? q.options_kz : q.options_ru);
+      const qText = CURRENT_LANG === 'kz' ? q.question_kz : q.question_ru;
+      return `
+        <div class="border rounded-lg p-3 ${q.is_correct ? 'border-emerald-200 bg-emerald-50/40' : 'border-red-200 bg-red-50/40'}">
+          <p class="text-sm font-semibold text-slate-800 mb-2">${i + 1}. ${esc(qText)} ${q.is_correct ? '<span class="text-emerald-600">✓</span>' : '<span class="text-red-600">✗</span>'}</p>
+          <div class="space-y-1">
+            ${opts.map((o, idx) => {
+              let cls = 'text-slate-600';
+              let mark = '';
+              if (idx === q.correct_index) { cls = 'text-emerald-700 font-semibold'; mark = ' ✓ верный ответ'; }
+              if (idx === q.chosen_index && idx !== q.correct_index) { cls = 'text-red-700 font-semibold'; mark = ' ✗ выбран сотрудником'; }
+              else if (idx === q.chosen_index && idx === q.correct_index) { mark = ' ✓ выбран сотрудником и верный'; }
+              return `<div class="text-xs ${cls}">${esc(o)}${mark}</div>`;
+            }).join('')}
+            ${q.chosen_index === null ? '<div class="text-xs text-slate-400 italic">Сотрудник не ответил на этот вопрос</div>' : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch (e) {
+    body.innerHTML = `<div class="text-red-600 text-sm">${t('error_generic')}</div>`;
   }
 }
 
@@ -2056,15 +2338,21 @@ async function loadMyTests() {
     div.innerHTML = '<div class="p-6 text-center text-slate-500">У вас нет назначенных тестов.</div>';
     return;
   }
-  div.innerHTML = list.map(a => `
+  div.innerHTML = list.map(a => {
+    const isKz = CURRENT_LANG === 'kz';
+    // Материалы/видео на языке интерфейса сотрудника; если для этого языка не загружено — берём другой язык, затем старые (legacy) поля
+    const materialPath = (isKz ? a.material_pdf_path_kz : a.material_pdf_path_ru) || a.material_pdf_path_ru || a.material_pdf_path_kz || a.material_pdf_path;
+    const videoPath = (isKz ? a.video_path_kz : a.video_path_ru) || a.video_path_ru || a.video_path_kz || a.video_path;
+    const videoUrl = (isKz ? a.video_url_kz : a.video_url_ru) || a.video_url_ru || a.video_url_kz || a.video_url;
+    return `
     <div class="p-5 border border-slate-200 rounded-xl bg-white flex flex-wrap justify-between items-center gap-4">
       <div>
         <h4 class="text-base font-bold text-slate-900">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</h4>
         <p class="text-xs text-slate-500 mt-1">Протокол № ${esc(a.protocol_number)} от ${esc(a.protocol_date)}</p>
-        ${(a.material_pdf_path || a.video_url || a.video_path) ? `
+        ${(materialPath || videoPath || videoUrl) ? `
           <div class="mt-2 space-x-3 text-xs font-semibold">
-            ${a.material_pdf_path ? `<a href="${a.material_pdf_path}" target="_blank" class="text-blue-600 hover:underline">📄 Материалы курса</a>` : ''}
-            ${a.video_path ? `<a href="${a.video_path}" target="_blank" class="text-blue-600 hover:underline">🎬 Видео</a>` : (a.video_url ? `<a href="${a.video_url}" target="_blank" class="text-blue-600 hover:underline">🎬 Видео</a>` : '')}
+            ${materialPath ? `<a href="${materialPath}" target="_blank" class="text-blue-600 hover:underline">📄 Материалы курса</a>` : ''}
+            ${videoPath ? `<a href="${videoPath}" target="_blank" class="text-blue-600 hover:underline">🎬 Видео</a>` : (videoUrl ? `<a href="${videoUrl}" target="_blank" class="text-blue-600 hover:underline">🎬 Видео</a>` : '')}
           </div>
         ` : ''}
       </div>
@@ -2081,7 +2369,8 @@ async function loadMyTests() {
         `}
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 function parseOpts(raw) {
