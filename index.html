@@ -665,7 +665,7 @@ async function loadTabContent() {
         <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
           <h2 class="text-lg font-bold text-slate-900">${t('users_title')}</h2>
           <div class="flex gap-2">
-            <input type="file" id="importFile" accept=".xlsx,.xls" class="hidden" onchange="handleImportFile(this)">
+            <input type="file" id="importFile" accept=".xlsx" class="hidden" onchange="handleImportFile(this)">
             <button onclick="downloadUsersTemplate()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">⬇ Скачать бланк</button>
             <button onclick="document.getElementById('importFile').click()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">📥 ${t('import_excel')}</button>
             <button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${t('add_user')}</button>
@@ -712,9 +712,10 @@ async function loadTabContent() {
             </div>
             <div><label class="text-xs font-semibold text-slate-600">Должность</label><input id="uPos" class="w-full border p-2 rounded text-sm"></div>
             <div class="grid grid-cols-2 gap-3">
-              <div><label class="text-xs font-semibold text-slate-600">Логин (табельный номер)</label><input id="uLogin" required class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Логин (табельный номер)</label><input id="uLogin" placeholder="Можно назначить позже" class="w-full border p-2 rounded text-sm"></div>
               <div><label class="text-xs font-semibold text-slate-600">Пароль</label><input type="password" id="uPass" placeholder="Не менять" class="w-full border p-2 rounded text-sm"></div>
             </div>
+            <p class="text-xs text-slate-400 -mt-1">Логин и пароль можно не указывать сейчас, а добавить позже — просто откройте карточку сотрудника ещё раз и нажмите «Изменить». При указании логина обязательно укажите и пароль.</p>
             <div id="roleFieldWrapper">
               <label class="text-xs font-semibold text-slate-600">Роль</label>
               <select id="uRole" class="w-full border p-2 rounded text-sm">
@@ -1190,7 +1191,7 @@ async function loadUsersList() {
       <td class="px-4 py-3 font-medium text-slate-900">
         <button onclick="openUserProfile(${u.id})" class="hover:text-blue-600 hover:underline text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>
       </td>
-      <td class="px-4 py-3 font-mono text-slate-600">${esc(u.login)}</td>
+      <td class="px-4 py-3 font-mono text-slate-600">${u.login ? esc(u.login) : '<span class="text-slate-400 italic font-sans">не назначен</span>'}</td>
       <td class="px-4 py-3 text-slate-600">${esc(u.object || '—')} / ${esc(u.department || '—')}</td>
       <td class="px-4 py-3 text-slate-600">${esc(u.position || '—')}</td>
       <td class="px-4 py-3"><span class="text-xs font-semibold px-2 py-0.5 rounded ${u.role === 'superadmin' ? 'bg-purple-100 text-purple-700' : u.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-700'}">${esc(u.role)}</span></td>
@@ -1905,7 +1906,7 @@ async function loadUserProfile(userId) {
           <div>
             <h2 class="text-xl font-bold text-slate-900">${esc(user.last_name)} ${esc(user.first_name)}</h2>
             <p class="text-sm text-slate-500 mt-1">${esc(user.position || '—')} · ${esc(user.object || '—')} / ${esc(user.department || '—')}</p>
-            <p class="text-xs text-slate-400 mt-1">${t('login_field')}: <span class="font-mono">${esc(user.login)}</span> · ${esc(roleName)}</p>
+            <p class="text-xs text-slate-400 mt-1">${t('login_field')}: <span class="font-mono">${user.login ? esc(user.login) : 'не назначен'}</span> · ${esc(roleName)}</p>
           </div>
           <div class="flex gap-2">
             <button onclick="editUserFromProfile(${user.id})" class="px-4 py-2 border rounded-lg text-sm font-semibold hover:bg-slate-50">${t('edit')}</button>

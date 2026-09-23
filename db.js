@@ -37,6 +37,13 @@ async function initDb() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS permanent_certificate_number TEXT;
   `);
 
+  // Сотрудника можно создать/импортировать только по ФИО, без логина и пароля,
+  // и назначить их позже через карточку профиля — поэтому эти поля больше не обязательны.
+  await pool.query(`
+    ALTER TABLE users ALTER COLUMN login DROP NOT NULL;
+    ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+  `);
+
   // Протоколы комиссии: администратор "открывает" протокол на диапазон дат —
   // всем сотрудникам, кто пройдёт проверку знаний внутри этого диапазона,
   // номер протокола присваивается автоматически (см. routes/protocols.js
@@ -77,8 +84,8 @@ async function initDb() {
       object TEXT NOT NULL DEFAULT '',
       department TEXT NOT NULL DEFAULT '',
       position TEXT NOT NULL DEFAULT '',
-      login TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL,
+      login TEXT UNIQUE,
+      password_hash TEXT,
       role TEXT NOT NULL CHECK(role IN ('superadmin','admin','employee')),
       active SMALLINT NOT NULL DEFAULT 1,
       created_at TIMESTAMPTZ DEFAULT NOW()
