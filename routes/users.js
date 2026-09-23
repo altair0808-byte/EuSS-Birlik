@@ -17,7 +17,7 @@ const upload = makeUploader('imports');
 router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
     const { object, department, role, q } = req.query;
-    let sql = `SELECT id, last_name, first_name, object, department, position, login, role, active, created_at
+    let sql = `SELECT id, last_name, first_name, object, department, position, login, role, active, created_at, permanent_certificate_number
                FROM users WHERE role != 'superadmin'`;
     const params = [];
     if (object) { params.push(object); sql += ` AND object = $${params.length}`; }
@@ -320,7 +320,7 @@ router.get('/meta/objects', authRequired, requireRole('admin', 'superadmin'), as
 router.get('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
     const result = await query(
-      `SELECT id, last_name, first_name, object, department, position, login, role, active, created_at
+      `SELECT id, last_name, first_name, object, department, position, login, role, active, created_at, permanent_certificate_number
        FROM users WHERE id = $1 AND role != 'superadmin'`,
       [req.params.id]
     );
@@ -388,7 +388,7 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
       return res.status(403).json({ error: 'forbidden', message: 'Администратор может редактировать только обычных сотрудников' });
     }
 
-    const { last_name, first_name, object, department, position, login, password, active, role } = req.body;
+    const { last_name, first_name, object, department, position, login, password, active, role, permanent_certificate_number } = req.body;
     const fields = [];
     const params = [];
 
@@ -410,6 +410,15 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
     if (object !== undefined) { params.push(object); fields.push(`object = $${params.length}`); }
     if (department !== undefined) { params.push(department); fields.push(`department = $${params.length}`); }
     if (position !== undefined) { params.push(position); fields.push(`position = $${params.length}`); }
+
+    // Уникальный номер сотрудника (№ сертификата) — редактируется вручную в карточке
+    // профиля (п.2 запроса). Это отдельное поле таблицы users и никак не связано с
+    // записями таблицы assignments, поэтому вся история тестирования сотрудника
+    // (пройденные курсы, баллы, ответы) сохраняется без изменений при его правке.
+    if (permanent_certificate_number !== undefined) {
+      params.push(String(permanent_certificate_number).trim() || null);
+      fields.push(`permanent_certificate_number = $${params.length}`);
+    }
 
     // Логин можно оставить пустым (сотрудник без доступа) или назначить/сменить в любой момент.
     // Пустая строка трактуется как "убрать логин" (сохраняется как NULL — так уникальность

@@ -131,15 +131,16 @@ router.get('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
 
 // Create course
 router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { title_ru, title_kz, description_ru, description_kz, video_url, time_limit_minutes, pass_score_percent, validity_months } = req.body;
+  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months } = req.body;
   if (!title_ru || !title_kz) return res.status(400).json({ error: 'missing_title' });
 
   try {
     const result = await query(`
-      INSERT INTO courses (title_ru, title_kz, description_ru, description_kz, video_url, time_limit_minutes, pass_score_percent, validity_months, created_by)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id
+      INSERT INTO courses (title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, created_by)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id
     `, [
       title_ru, title_kz, description_ru || '', description_kz || '', video_url || '',
+      video_url_ru || '', video_url_kz || '',
       time_limit_minutes || 20, pass_score_percent || 80, validity_months || 12, req.user.id
     ]);
     res.json({ id: result.rows[0].id });
@@ -150,14 +151,16 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
 
 // Update course
 router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { title_ru, title_kz, description_ru, description_kz, video_url, time_limit_minutes, pass_score_percent, validity_months } = req.body;
+  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months } = req.body;
   try {
     await query(`
       UPDATE courses
-      SET title_ru=$1, title_kz=$2, description_ru=$3, description_kz=$4, video_url=$5, time_limit_minutes=$6, pass_score_percent=$7, validity_months=$8
-      WHERE id=$9
+      SET title_ru=$1, title_kz=$2, description_ru=$3, description_kz=$4, video_url=$5,
+          video_url_ru=$6, video_url_kz=$7, time_limit_minutes=$8, pass_score_percent=$9, validity_months=$10
+      WHERE id=$11
     `, [
-      title_ru, title_kz, description_ru, description_kz, video_url, time_limit_minutes, pass_score_percent, validity_months, req.params.id
+      title_ru, title_kz, description_ru, description_kz, video_url,
+      video_url_ru || '', video_url_kz || '', time_limit_minutes, pass_score_percent, validity_months, req.params.id
     ]);
     res.json({ ok: true });
   } catch (e) {
@@ -175,54 +178,64 @@ router.delete('/:id', authRequired, requireRole('superadmin'), async (req, res) 
   }
 });
 
-// ===================== Материалы (презентация/PDF) =====================
+// ===================== Материалы (презентация/PDF), отдельно RU и KZ =====================
 
-// Upload material file
-router.post('/:id/material', authRequired, requireRole('admin', 'superadmin'), (req, res) => {
+function langCol(base, lang) {
+  // lang должен быть 'ru' или 'kz' — иначе используем legacy-колонку без языка
+  return (lang === 'ru' || lang === 'kz') ? `${base}_${lang}` : base;
+}
+
+// Upload material file. :lang = ru|kz — материалы на разных языках грузятся отдельно (п.3 запроса)
+router.post('/:id/material/:lang', authRequired, requireRole('admin', 'superadmin'), (req, res) => {
   uploadMaterial.single('file')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: 'bad_file_type', message: 'Допустимы файлы PDF, PPT или PPTX' });
     if (!req.file) return res.status(400).json({ error: 'no_file' });
+    const col = langCol('material_pdf_path', req.params.lang);
     const p = `/uploads/materials/${req.file.filename}`;
     try {
-      await query('UPDATE courses SET material_pdf_path = $1 WHERE id = $2', [p, req.params.id]);
-      res.json({ material_pdf_path: p });
+      await query(`UPDATE courses SET ${col} = $1 WHERE id = $2`, [p, req.params.id]);
+      res.json({ [col]: p });
     } catch (e) {
       res.status(500).json({ error: 'db_error', details: e.message });
     }
   });
 });
 
-// Remove material file (course can exist without materials)
-router.delete('/:id/material', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+// Remove material file for a given language (course can exist without materials)
+router.delete('/:id/material/:lang', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+  const col = langCol('material_pdf_path', req.params.lang);
   try {
-    await query('UPDATE courses SET material_pdf_path = NULL WHERE id = $1', [req.params.id]);
+    await query(`UPDATE courses SET ${col} = NULL WHERE id = $1`, [req.params.id]);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }
 });
 
-// ===================== Видео (файл или ссылка, необязательно) =====================
+// ===================== Видео (файл или ссылка, необязательно), отдельно RU и KZ =====================
 
-// Upload video file
-router.post('/:id/video', authRequired, requireRole('admin', 'superadmin'), (req, res) => {
+// Upload video file. :lang = ru|kz
+router.post('/:id/video/:lang', authRequired, requireRole('admin', 'superadmin'), (req, res) => {
   uploadVideo.single('file')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: 'bad_file_type', message: 'Допустимы видеофайлы (mp4, webm, mov и т.п.)' });
     if (!req.file) return res.status(400).json({ error: 'no_file' });
+    const col = langCol('video_path', req.params.lang);
     const p = `/uploads/videos/${req.file.filename}`;
     try {
-      await query('UPDATE courses SET video_path = $1 WHERE id = $2', [p, req.params.id]);
-      res.json({ video_path: p });
+      await query(`UPDATE courses SET ${col} = $1 WHERE id = $2`, [p, req.params.id]);
+      res.json({ [col]: p });
     } catch (e) {
       res.status(500).json({ error: 'db_error', details: e.message });
     }
   });
 });
 
-// Remove video (file and/or link) — video is optional and may simply not exist
-router.delete('/:id/video', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+// Remove video (file and/or link) for a given language — video is optional and may simply not exist
+router.delete('/:id/video/:lang', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+  const pathCol = langCol('video_path', req.params.lang);
+  const urlCol = langCol('video_url', req.params.lang);
   try {
-    await query('UPDATE courses SET video_path = NULL, video_url = \'\' WHERE id = $1', [req.params.id]);
+    await query(`UPDATE courses SET ${pathCol} = NULL, ${urlCol} = '' WHERE id = $1`, [req.params.id]);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });

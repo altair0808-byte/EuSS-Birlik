@@ -4,6 +4,7 @@ const ExcelJS = require('exceljs');
 const { query, pool } = require('../db');
 const { authRequired, requireRole } = require('./auth');
 const { makeUploader } = require('../upload');
+const { findActiveProtocol } = require('./protocols');
 
 const uploadImport = makeUploader('imports');
 
@@ -206,7 +207,9 @@ router.get('/mine', authRequired, async (req, res) => {
   try {
     const result = await query(`
       SELECT a.*, c.title_ru, c.title_kz, c.time_limit_minutes, c.pass_score_percent,
-             c.material_pdf_path, c.video_url, c.video_path, c.description_ru, c.description_kz
+             c.material_pdf_path, c.video_url, c.video_path, c.description_ru, c.description_kz,
+             c.material_pdf_path_ru, c.material_pdf_path_kz,
+             c.video_path_ru, c.video_path_kz, c.video_url_ru, c.video_url_kz
       FROM assignments a
       JOIN courses c ON c.id = a.course_id
       WHERE a.user_id = $1
@@ -351,14 +354,77 @@ router.post('/:id/submit', authRequired, async (req, res) => {
     const testDate = now.toISOString();
     const nextDate = new Date(now.setMonth(now.getMonth() + (course.validity_months || 12))).toISOString();
 
+    // Автоматическое присвоение номера протокола (п.1 запроса): если сегодня
+    // действует открытый администратором протокол (дата попадает в диапазон
+    // open_date..close_date), то именно его номер и дата открытия проставляются
+    // сотруднику, который в этот период сдал тест — независимо от того, что было
+    // введено вручную при назначении теста.
+    let protocolNumber = a.protocol_number;
+    let protocolDate = a.protocol_date;
+    let protocolId = a.protocol_id;
+    if (passed) {
+      const todayStr = testDate.slice(0, 10);
+      const activeProtocol = await findActiveProtocol(todayStr);
+      if (activeProtocol) {
+        protocolNumber = activeProtocol.protocol_number;
+        protocolDate = activeProtocol.open_date instanceof Date
+          ? activeProtocol.open_date.toISOString().slice(0, 10)
+          : String(activeProtocol.open_date);
+        protocolId = activeProtocol.id;
+      }
+    }
+
+    // Сохраняем ответы сотрудника (что выбрал на каждый вопрос) — нужно для
+    // истории тестирования в карточке профиля (п.2 запроса): видно, на что
+    // ответил правильно, а на что нет, даже после смены его номера сертификата.
+    const answersJson = answers ? JSON.stringify(answers) : null;
+
     await query(`
       UPDATE assignments
       SET status = $1, score_percent = $2, focus_violations = $3,
-          certificate_number = $4, test_date = $5, next_test_date = $6
-      WHERE id = $7
-    `, [passed ? 'passed' : 'failed', scorePercent, focus_violations || 0, certNum, testDate, nextDate, a.id]);
+          certificate_number = $4, test_date = $5, next_test_date = $6,
+          protocol_number = $7, protocol_date = $8, protocol_id = $9, user_answers = $10
+      WHERE id = $11
+    `, [passed ? 'passed' : 'failed', scorePercent, focus_violations || 0, certNum, testDate, nextDate,
+        protocolNumber, protocolDate, protocolId, answersJson, a.id]);
 
-    res.json({ passed, scorePercent, certificate_number: certNum });
+    res.json({ passed, scorePercent, certificate_number: certNum, protocol_number: protocolNumber });
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
+// Детализация попытки — какие вопросы были заданы, что ответил сотрудник и
+// какой ответ был правильным (п.2 запроса: история тестирования в профиле).
+router.get('/:id/answers', authRequired, async (req, res) => {
+  try {
+    const aRes = await query('SELECT * FROM assignments WHERE id = $1', [req.params.id]);
+    const a = aRes.rows[0];
+    if (!a) return res.status(404).json({ error: 'not_found' });
+    if (req.user.role === 'employee' && a.user_id !== req.user.id) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+    if (!a.user_answers) return res.json({ questions: [] });
+
+    const qRes = a.assigned_variant
+      ? await query('SELECT * FROM questions WHERE course_id = $1 AND variant_number = $2 ORDER BY sort_order, id', [a.course_id, a.assigned_variant])
+      : await query('SELECT * FROM questions WHERE course_id = $1 ORDER BY sort_order, id', [a.course_id]);
+
+    const userAnswers = a.user_answers; // JSONB -> объект {question_id: chosen_index}
+    const questions = qRes.rows.map(q => {
+      const chosen = userAnswers[q.id] !== undefined ? userAnswers[q.id] : (userAnswers[String(q.id)] !== undefined ? userAnswers[String(q.id)] : null);
+      return {
+        id: q.id,
+        question_ru: q.question_ru,
+        question_kz: q.question_kz,
+        options_ru: q.options_ru,
+        options_kz: q.options_kz,
+        correct_index: q.correct_index,
+        chosen_index: chosen === null ? null : Number(chosen),
+        is_correct: chosen !== null && Number(chosen) === q.correct_index
+      };
+    });
+    res.json({ questions });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }
