@@ -105,6 +105,53 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
   }
 });
 
+// Excel-шаблон (бланк) для массовой загрузки сотрудников
+// Должен быть объявлен раньше '/:id', иначе Express примет "import-template.xlsx" за id
+router.get('/import-template.xlsx', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+  try {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Сотрудники');
+    ws.columns = [
+      { header: 'Фамилия', key: 'last_name', width: 20 },
+      { header: 'Имя', key: 'first_name', width: 20 },
+      { header: 'Объект', key: 'object', width: 20 },
+      { header: 'Отдел', key: 'department', width: 20 },
+      { header: 'Должность', key: 'position', width: 22 },
+      { header: 'Логин', key: 'login', width: 16 },
+      { header: 'Пароль', key: 'password', width: 16 }
+    ];
+    ws.getRow(1).font = { bold: true };
+    ws.addRow({
+      last_name: 'Иванов', first_name: 'Иван', object: 'Объект 1', department: 'Отдел ОТ',
+      position: 'Инженер', login: '10001', password: ''
+    });
+    ws.addRow({
+      last_name: 'Петрова', first_name: 'Анна', object: 'Объект 2', department: 'Производство',
+      position: 'Мастер', login: '10002', password: 'MyPass123'
+    });
+
+    const notes = wb.addWorksheet('Инструкция');
+    notes.columns = [{ key: 'a', width: 100 }];
+    [
+      'Инструкция по заполнению файла для массовой загрузки сотрудников:',
+      '1. Заполните лист "Сотрудники", по одной строке на каждого сотрудника.',
+      '2. Обязательные колонки: Фамилия, Имя, Логин. Логин (или табельный номер) должен быть уникальным.',
+      '3. Колонки Объект, Отдел, Должность, Пароль — необязательные.',
+      '4. Если оставить колонку "Пароль" пустой, система сгенерирует случайный пароль автоматически.',
+      '5. Все загруженные сотрудники получают роль "Сотрудник" (employee).',
+      '6. Удалите строки-примеры перед загрузкой своего списка.',
+      '7. Загрузите готовый файл на вкладке "Сотрудники" кнопкой "Импорт из Excel (.xlsx)".'
+    ].forEach(line => notes.addRow([line]));
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="users_import_template.xlsx"');
+    await wb.xlsx.write(res);
+    res.end();
+  } catch (e) {
+    res.status(500).json({ error: 'template_failed', details: e.message });
+  }
+});
+
 // Meta
 router.get('/meta/objects', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {

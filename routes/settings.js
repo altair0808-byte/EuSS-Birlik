@@ -84,52 +84,61 @@ router.put('/', authRequired, requireRole('superadmin'), async (req, res) => {
   }
 });
 
-router.post('/logo', authRequired, requireRole('superadmin'), uploadLogo.single('logo'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'no_file' });
-  const dataUrl = fileToDataUrl(req.file);
-  const webPath = '/uploads/logo/' + req.file.filename;
-  try {
-    const result = await query(
-      'UPDATE settings SET logo_path = $1, logo_data = $2 WHERE id = 1 RETURNING *',
-      [webPath, dataUrl]
-    );
-    res.json(result.rows[0]);
-  } catch (e) {
-    res.status(500).json({ error: 'db_error', details: e.message });
-  }
+router.post('/logo', authRequired, requireRole('superadmin'), (req, res) => {
+  uploadLogo.single('file')(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: 'bad_file', message: err.message || 'Не удалось загрузить файл' });
+    if (!req.file) return res.status(400).json({ error: 'no_file', message: 'Файл не выбран' });
+    const dataUrl = fileToDataUrl(req.file);
+    const webPath = '/uploads/logo/' + req.file.filename;
+    try {
+      const result = await query(
+        'UPDATE settings SET logo_path = $1, logo_data = $2 WHERE id = 1 RETURNING *',
+        [webPath, dataUrl]
+      );
+      res.json(result.rows[0]);
+    } catch (e) {
+      res.status(500).json({ error: 'db_error', details: e.message });
+    }
+  });
 });
 
-router.post('/stamp', authRequired, requireRole('superadmin'), uploadStamp.single('stamp'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'no_file' });
-  const dataUrl = fileToDataUrl(req.file);
-  const webPath = '/uploads/stamp/' + req.file.filename;
-  try {
-    const result = await query(
-      'UPDATE settings SET stamp_path = $1, stamp_data = $2 WHERE id = 1 RETURNING *',
-      [webPath, dataUrl]
-    );
-    res.json(result.rows[0]);
-  } catch (e) {
-    res.status(500).json({ error: 'db_error', details: e.message });
-  }
+router.post('/stamp', authRequired, requireRole('superadmin'), (req, res) => {
+  uploadStamp.single('file')(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: 'bad_file', message: err.message || 'Не удалось загрузить файл' });
+    if (!req.file) return res.status(400).json({ error: 'no_file', message: 'Файл не выбран' });
+    const dataUrl = fileToDataUrl(req.file);
+    const webPath = '/uploads/stamp/' + req.file.filename;
+    try {
+      const result = await query(
+        'UPDATE settings SET stamp_path = $1, stamp_data = $2 WHERE id = 1 RETURNING *',
+        [webPath, dataUrl]
+      );
+      res.json(result.rows[0]);
+    } catch (e) {
+      res.status(500).json({ error: 'db_error', details: e.message });
+    }
+  });
 });
 
-router.post('/signature', authRequired, requireRole('superadmin'), uploadSignature.single('signature'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'no_file' });
-  const dataUrl = fileToDataUrl(req.file);
-  const webPath = '/uploads/signature/' + req.file.filename;
-  const chairNum = req.query.chairman === '2' ? 2 : 1;
-  const colSig = chairNum === 2 ? 'chairman2_signature' : 'chairman1_signature';
+router.post('/signature', authRequired, requireRole('superadmin'), (req, res) => {
+  uploadSignature.single('file')(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: 'bad_file', message: err.message || 'Не удалось загрузить файл' });
+    if (!req.file) return res.status(400).json({ error: 'no_file', message: 'Файл не выбран' });
+    const dataUrl = fileToDataUrl(req.file);
+    const webPath = '/uploads/signature/' + req.file.filename;
+    const chairNum = req.query.chairman === '2' ? 2 : 1;
+    const colSig = chairNum === 2 ? 'chairman2_signature' : 'chairman1_signature';
 
-  try {
-    const result = await query(
-      `UPDATE settings SET signature_path = $1, ${colSig} = $2 WHERE id = 1 RETURNING *`,
-      [webPath, dataUrl]
-    );
-    res.json(result.rows[0]);
-  } catch (e) {
-    res.status(500).json({ error: 'db_error', details: e.message });
-  }
+    try {
+      const result = await query(
+        `UPDATE settings SET signature_path = $1, ${colSig} = $2 WHERE id = 1 RETURNING *`,
+        [webPath, dataUrl]
+      );
+      res.json(result.rows[0]);
+    } catch (e) {
+      res.status(500).json({ error: 'db_error', details: e.message });
+    }
+  });
 });
 
 module.exports = router;
