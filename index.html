@@ -2454,7 +2454,7 @@ async function loadMyTests() {
         ` : a.status === 'failed' && !a.retake_allowed ? `
           <span class="text-xs font-bold text-red-700 bg-red-50 px-3 py-1.5 rounded-lg">Не сдано (${a.score_percent}%)</span>
         ` : `
-          <button onclick="runTest(${a.id}, '${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}', ${a.time_limit_minutes})" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-sm shadow">
+          <button type="button" onclick="runTest(${a.id}, '${jsAttrEsc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}', ${a.time_limit_minutes || 20})" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-sm shadow">
             ${a.retake_allowed ? 'Пересдать тест' : 'Начать тестирование'}
           </button>
         `}
@@ -2478,9 +2478,20 @@ function onTestVisibilityChange() {
 let currentTestIndex = 0;
 
 async function runTest(assignmentId, title, timeLimitMinutes) {
-  const data = await api.startTest(assignmentId);
+  let data;
+  try {
+    data = await api.startTest(assignmentId);
+  } catch (e) {
+    console.error('startTest failed', e);
+    alert('Не удалось начать тестирование: ' + (e && e.message ? e.message : 'ошибка сервера'));
+    return;
+  }
   // Ограничиваем строго 10 вопросами
-  const questions = (data.questions || []).slice(0, 10);
+  const questions = (data && data.questions || []).slice(0, 10);
+  if (!questions.length) {
+    alert('Для этого курса пока нет вопросов. Обратитесь к администратору.');
+    return;
+  }
 
   state.activeTest = {
     id: assignmentId,
