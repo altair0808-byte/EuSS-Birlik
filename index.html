@@ -666,6 +666,7 @@ async function loadTabContent() {
           <h2 class="text-lg font-bold text-slate-900">${t('users_title')}</h2>
           <div class="flex gap-2">
             <input type="file" id="importFile" accept=".xlsx,.xls" class="hidden" onchange="handleImportFile(this)">
+            <button onclick="downloadUsersTemplate()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">⬇ Скачать бланк</button>
             <button onclick="document.getElementById('importFile').click()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">📥 ${t('import_excel')}</button>
             <button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${t('add_user')}</button>
           </div>
@@ -1116,6 +1117,23 @@ async function loadExpiringWidget() {
 }
 
 // --- USERS LOGIC ---
+async function downloadUsersTemplate() {
+  try {
+    const res = await api.req('/api/users/import-template.xlsx');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'users_import_template.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('Не удалось скачать бланк: ' + e.message);
+  }
+}
+
 async function handleImportFile(input) {
   const file = input.files[0];
   if (!file) return;
@@ -2258,15 +2276,22 @@ async function uploadBrandingFile(kind) {
   const input = document.getElementById('set_' + kind + '_file');
   const file = input.files[0];
   if (!file) { alert('Выберите файл.'); return; }
-  const fd = new FormData();
-  fd.append('file', file);
-  const res = await api.req('/api/settings/' + kind, { method: 'POST', body: fd });
-  const pathField = { logo: 'logo_path', stamp: 'stamp_path', signature: 'signature_path' };
-  document.getElementById('set_' + kind + '_status').innerHTML = `Загружено: <a href="${res[pathField[kind]]}" target="_blank" class="text-blue-600 underline">открыть</a>`;
-  if (kind === 'logo') {
-    // Логотип теперь должен отображаться и в шапке сайта, и на экране входа
-    PUBLIC_SETTINGS.logo_path = res.logo_path;
-    render();
+  const statusEl = document.getElementById('set_' + kind + '_status');
+  try {
+    if (statusEl) statusEl.textContent = 'Загрузка...';
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await api.req('/api/settings/' + kind, { method: 'POST', body: fd });
+    const pathField = { logo: 'logo_path', stamp: 'stamp_path', signature: 'signature_path' };
+    if (statusEl) statusEl.innerHTML = `Загружено: <a href="${res[pathField[kind]]}" target="_blank" class="text-blue-600 underline">открыть</a>`;
+    if (kind === 'logo') {
+      // Логотип теперь должен отображаться и в шапке сайта, и на экране входа
+      PUBLIC_SETTINGS.logo_path = res.logo_path;
+      render();
+    }
+  } catch (e) {
+    if (statusEl) statusEl.textContent = '';
+    alert('Не удалось загрузить файл: ' + e.message);
   }
 }
 
