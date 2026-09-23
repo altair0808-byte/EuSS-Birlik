@@ -2,6 +2,10 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const ExcelJS = require('exceljs');
+const XLSX = require('xlsx'); // для ЧТЕНИЯ загружаемых файлов — заметно терпимее ExcelJS
+                               // к файлам, созданным не Microsoft Excel (LibreOffice, Google
+                               // Таблицы, openpyxl/Python-выгрузки из 1С и т.п.). Бланк для
+                               // скачивания по-прежнему генерируется через ExcelJS ниже.
 const { query, pool } = require('../db');
 const { authRequired, requireRole } = require('./auth');
 const { makeUploader } = require('../upload');
@@ -90,9 +94,13 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
     return String(cellValue).trim();
   }
 
-  const wb = new ExcelJS.Workbook();
+  let sheetRows; // массив строк-массивов, sheetRows[0] — шапка
   try {
-    await wb.xlsx.readFile(req.file.path);
+    const wb = XLSX.readFile(req.file.path, { cellDates: true, raw: true });
+    const sheetName = wb.SheetNames[0];
+    if (!sheetName) return res.status(400).json({ error: 'empty_file', message: 'В файле нет ни одного листа с данными.' });
+    const ws = wb.Sheets[sheetName];
+    sheetRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true });
   } catch (readErr) {
     console.error('Error reading import file:', readErr);
     return res.status(400).json({
@@ -102,16 +110,15 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
   }
 
   try {
-    const ws = wb.worksheets[0];
-    if (!ws) return res.status(400).json({ error: 'empty_file', message: 'В файле нет ни одного листа с данными.' });
+    if (!sheetRows.length) return res.status(400).json({ error: 'empty_file', message: 'В файле нет ни одного листа с данными.' });
 
-    const headerRow = ws.getRow(1);
-    const colByField = {};
-    headerRow.eachCell((cell, colNumber) => {
-      const key = String(cell.value || '').trim().toLowerCase();
-      if (headerMap[key]) colByField[headerMap[key]] = colNumber;
+    const headerRow = sheetRows[0];
+    const colByField = {}; // field -> индекс колонки (0-based)
+    headerRow.forEach((cellValue, colIndex) => {
+      const key = String(cellValue || '').trim().toLowerCase();
+      if (headerMap[key] && !(headerMap[key] in colByField)) colByField[headerMap[key]] = colIndex;
     });
-    if (!colByField.last_name || !colByField.first_name) {
+    if (!(colByField.last_name >= 0) || !(colByField.first_name >= 0)) {
       return res.status(400).json({ error: 'missing_columns', message: 'В файле должны быть колонки: Фамилия, Имя (и опционально Объект, Отдел, Должность, Логин, Пароль)' });
     }
 
@@ -119,12 +126,13 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
     let created = 0, skipped = 0, historyCreated = 0;
     const errors = [];
 
-    for (let r = 2; r <= ws.rowCount; r++) {
-      const row = ws.getRow(r);
+    for (let r = 1; r < sheetRows.length; r++) {
+      const row = sheetRows[r];
+      const rowNum = r + 1; // номер строки как в Excel (шапка = строка 1)
       const get = (field) => {
-        if (!colByField[field]) return '';
-        const raw = row.getCell(colByField[field]).value;
-        return DATE_FIELDS.has(field) ? cellToDateStr(raw) : String(raw || '').trim();
+        if (!(field in colByField)) return '';
+        const raw = row[colByField[field]];
+        return DATE_FIELDS.has(field) ? cellToDateStr(raw) : String(raw ?? '').trim();
       };
       const last_name = get('last_name');
       const first_name = get('first_name');
@@ -132,7 +140,7 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
       if (!last_name && !first_name && !login) continue; // blank row
 
       if (!last_name || !first_name) {
-        errors.push(`Строка ${r}: не заполнены обязательные поля (Фамилия, Имя)`);
+        errors.push(`Строка ${rowNum}: не заполнены обязательные поля (Фамилия, Имя)`);
         skipped++;
         continue;
       }
@@ -141,7 +149,7 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
         if (login) {
           const exists = await query('SELECT id FROM users WHERE login = $1', [login]);
           if (exists.rows.length > 0) {
-            errors.push(`Строка ${r}: логин "${login}" уже занят`);
+            errors.push(`Строка ${rowNum}: логин "${login}" уже занят`);
             skipped++;
             continue;
           }
@@ -169,7 +177,7 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
           const test_date = get('test_date');
 
           if (!protocol_number || !protocol_date || !test_date) {
-            errors.push(`Строка ${r}: сотрудник создан, но обучение не внесено — для курса "${courseTitle}" нужны № протокола, дата протокола и дата прохождения`);
+            errors.push(`Строка ${rowNum}: сотрудник создан, но обучение не внесено — для курса "${courseTitle}" нужны № протокола, дата протокола и дата прохождения`);
             continue;
           }
 
@@ -179,7 +187,7 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
           );
           const course = cRes.rows[0];
           if (!course) {
-            errors.push(`Строка ${r}: курс "${courseTitle}" не найден — обучение не внесено`);
+            errors.push(`Строка ${rowNum}: курс "${courseTitle}" не найден — обучение не внесено`);
             continue;
           }
 
@@ -199,12 +207,12 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
             await advanceProtocolCounter(protocol_number);
             historyCreated++;
           } catch (histErr) {
-            errors.push(`Строка ${r}: сотрудник создан, но не удалось внести обучение — ${histErr.message}`);
+            errors.push(`Строка ${rowNum}: сотрудник создан, но не удалось внести обучение — ${histErr.message}`);
           }
         }
       } catch (rowErr) {
-        console.error(`Error importing row ${r}:`, rowErr);
-        errors.push(`Строка ${r}: не удалось создать сотрудника — ${rowErr.message}`);
+        console.error(`Error importing row ${rowNum}:`, rowErr);
+        errors.push(`Строка ${rowNum}: не удалось создать сотрудника — ${rowErr.message}`);
         skipped++;
       }
     }
