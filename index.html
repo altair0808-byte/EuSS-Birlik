@@ -1,0 +1,2701 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ТБ / БиОТ — Обучение и тестирование</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<style>
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+  .fade-in { animation: fadeIn .2s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+</style>
+</head>
+<body class="bg-slate-100 min-h-screen text-slate-800">
+<div id="app"></div>
+
+<!-- Универсальное модальное окно для просмотра материалов курса (PDF/PPT) и видео прямо на сайте -->
+<div id="mediaViewerModal" class="fixed inset-0 bg-slate-900/70 hidden items-center justify-center p-2 sm:p-6 z-[100]" onclick="if(event.target===this) closeMediaViewer()">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-5xl h-full sm:h-[85vh] flex flex-col overflow-hidden">
+    <div class="flex justify-between items-center px-4 py-3 border-b border-slate-200 shrink-0">
+      <h3 id="mediaViewerTitle" class="text-sm font-bold text-slate-900 truncate pr-4"></h3>
+      <div class="flex items-center gap-4 shrink-0">
+        <a id="mediaViewerDownload" href="#" target="_blank" rel="noopener" class="text-xs font-semibold text-blue-600 hover:underline">Скачать</a>
+        <button type="button" onclick="closeMediaViewer()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none">&times;</button>
+      </div>
+    </div>
+    <div id="mediaViewerBody" class="flex-1 min-h-0 bg-slate-50"></div>
+  </div>
+</div>
+
+<script>
+// --- I18N DICTIONARY ---
+const I18N = {
+  ru: {
+    app_title: 'Обучение и проверка знаний по ТБ / БиОТ',
+    login: 'Вход в систему',
+    login_field: 'Логин',
+    password_field: 'Пароль',
+    login_btn: 'Войти',
+    login_error: 'Неверный логин или пароль',
+    logout: 'Выйти',
+    lang_switch: 'ҚАЗ',
+
+    nav_dashboard: 'Главная',
+    nav_users: 'Сотрудники',
+    nav_courses: 'Курсы и тесты',
+    nav_assignments: 'Назначения / Журнал',
+    nav_export: 'Экспорт в Excel',
+    nav_settings: 'Настройки',
+    nav_my_tests: 'Мои тесты',
+    nav_calendar: 'Календарь',
+
+    role_superadmin: 'Суперадминистратор',
+    role_admin: 'Администратор (Инженер ТБ)',
+    role_employee: 'Сотрудник',
+
+    hint_last_protocol: 'Последний использованный номер протокола',
+    hint_last_cert: 'Последний выданный номер сертификата',
+    hint_next_cert: 'Следующий будет присвоен',
+
+    users_title: 'Сотрудники и администраторы',
+    add_user: 'Добавить пользователя',
+    import_excel: 'Импорт из Excel (.xlsx)',
+    last_name: 'Фамилия',
+    first_name: 'Имя',
+    object_field: 'Объект',
+    department_field: 'Отдел',
+    position_field: 'Должность',
+    role_field: 'Роль',
+    save: 'Сохранить',
+    cancel: 'Отмена',
+    edit: 'Изменить',
+    delete: 'Удалить',
+    actions: 'Действия',
+    confirm_delete: 'Удалить запись без возможности восстановления?',
+    search_placeholder: 'Поиск по фамилии, имени, логину...',
+    all_objects: 'Все объекты',
+    all_departments: 'Все отделы',
+
+    courses_title: 'Курсы и тестовые материалы',
+    add_course: 'Добавить курс',
+    course_title_ru: 'Название курса (RU)',
+    course_title_kz: 'Название курса (KZ)',
+    course_desc_ru: 'Описание (RU)',
+    course_desc_kz: 'Описание (KZ)',
+    video_url: 'Ссылка на видео (YouTube и т.д.)',
+    material_pdf: 'Материал (PDF)',
+    time_limit: 'Лимит времени (мин)',
+    pass_score: 'Проходной балл (%)',
+    validity: 'Срок действия сертификата (мес.)',
+    upload: 'Загрузить',
+    questions: 'Вопросы теста',
+    add_question: 'Добавить вопрос',
+    question_ru: 'Вопрос (RU)',
+    question_kz: 'Вопрос (KZ)',
+    option: 'Вариант ответа',
+    correct_answer: 'Правильный вариант',
+
+    assignments_title: 'Назначения тестов и журнал результатов',
+    assign_test: 'Назначить тест',
+    select_employee: 'Сотрудник',
+    select_course: 'Курс',
+    protocol_number: 'Номер протокола',
+    protocol_date: 'Дата протокола',
+    filter_status: 'Статус',
+    status_pending: 'Ожидает',
+    status_in_progress: 'В процессе',
+    status_passed: 'Пройден',
+    status_failed: 'Не пройден',
+    has_certificate: 'Наличие сертификата',
+    yes: 'Да',
+    no: 'Нет',
+    allow_retake: 'Разрешить пересдачу',
+    download_cert: 'Скачать сертификат',
+    score: 'Балл',
+    test_date: 'Дата прохождения',
+    next_test_date: 'Следующее прохождение',
+    apply_filters: 'Применить',
+    reset_filters: 'Сбросить',
+
+    export_title: 'Экспорт результатов в Excel',
+    export_desc: 'Выберите объект — файл будет сформирован с отдельным листом для каждого отдела.',
+    export_btn: 'Скачать Excel',
+
+    settings_title: 'Настройки компании и сертификатов',
+    company_name: 'Название компании',
+    chairman_name: 'ФИО председателя комиссии',
+    member2_name: 'Член комиссии 1 (ФИО, должность)',
+    member3_name: 'Член комиссии 2 (ФИО, должность)',
+    logo_upload: 'Логотип компании',
+    stamp_upload: 'Печать (изображение)',
+    signature_upload: 'Подпись председателя (изображение)',
+
+    my_tests_title: 'Мои назначенные тесты',
+    start_test: 'Пройти обучение и тест',
+    view_material: 'Материалы курса',
+    test_locked: 'Тест провален. Ожидайте разрешения пересдачи от администратора.',
+    test_passed_msg: 'Тест успешно пройден!',
+    already_passed: 'Курс успешно пройден. Сертификат действителен.',
+
+    test_screen_title: 'Тестирование',
+    time_left: 'Осталось времени',
+    submit_test: 'Завершить тест',
+    question_of: 'Вопрос',
+    warning_focus: 'Внимание! Не переключайтесь на другие вкладки и окна во время теста. Обнаружено переключений',
+    of_max: 'из',
+    test_terminated: 'Тест принудительно завершён из-за нарушения правил (переключение вкладок/окон более 3 раз).',
+    confirm_submit: 'Вы уверены, что хотите завершить тест? Повторная попытка возможна только с разрешения администратора.',
+    anti_cheat_notice: 'Копирование текста, выделение и переключение вкладок во время теста запрещены и фиксируются системой.',
+
+    result_title: 'Результат теста',
+    your_score: 'Ваш результат',
+    passed_label: 'Тест пройден',
+    failed_label: 'Тест не пройден',
+    back_to_list: 'Вернуться к списку',
+    cert_number: 'Номер сертификата',
+
+    loading: 'Загрузка...',
+    no_data: 'Нет данных',
+    required_field: 'Обязательное поле',
+    save_success: 'Сохранено',
+    error_generic: 'Произошла ошибка. Попробуйте снова.',
+
+    profile_title: 'Профиль сотрудника',
+    back_to_users: 'К списку сотрудников',
+    profile_info: 'Данные сотрудника',
+    profile_history: 'История обучения',
+    download_report: 'Скачать отчёт (Excel)',
+    date_from: 'С даты',
+    date_to: 'По дату',
+    filters: 'Фильтры',
+    expiring_soon_title: 'Скоро истекает срок сертификата',
+    expiring_none: 'Нет сертификатов, истекающих в ближайшее время.',
+    days_left: 'дней осталось',
+    overdue: 'просрочен',
+    expires_today: 'истекает сегодня',
+    calendar_title: 'Календарь прохождения обучения',
+    calendar_completions_on: 'Прошли обучение',
+    prev_month: 'Назад',
+    next_month: 'Вперёд',
+    all_statuses: 'Все статусы',
+    all_roles: 'Все роли'
+  },
+  kz: {
+    app_title: 'ЕҚ / БиОТ бойынша оқыту және білім тексеру',
+    login: 'Жүйеге кіру',
+    login_field: 'Логин',
+    password_field: 'Құпия сөз',
+    login_btn: 'Кіру',
+    login_error: 'Логин немесе құпия сөз қате',
+    logout: 'Шығу',
+    lang_switch: 'РУС',
+
+    nav_dashboard: 'Басты бет',
+    nav_users: 'Қызметкерлер',
+    nav_courses: 'Курстар мен тесттер',
+    nav_assignments: 'Тағайындаулар / Журнал',
+    nav_export: 'Excel-ге экспорт',
+    nav_settings: 'Баптаулар',
+    nav_my_tests: 'Менің тесттерім',
+    nav_calendar: 'Күнтізбе',
+
+    role_superadmin: 'Супер әкімші',
+    role_admin: 'Әкімші (ЕҚ инженері)',
+    role_employee: 'Қызметкер',
+
+    hint_last_protocol: 'Соңғы қолданылған хаттама нөмірі',
+    hint_last_cert: 'Соңғы берілген сертификат нөмірі',
+    hint_next_cert: 'Келесі нөмір',
+
+    users_title: 'Қызметкерлер мен әкімшілер',
+    add_user: 'Пайдаланушы қосу',
+    import_excel: 'Excel-ден импорт (.xlsx)',
+    last_name: 'Тегі',
+    first_name: 'Аты',
+    object_field: 'Обьект',
+    department_field: 'Бөлім',
+    position_field: 'Лауазым',
+    role_field: 'Рөл',
+    save: 'Сақтау',
+    cancel: 'Бас тарту',
+    edit: 'Өзгерту',
+    delete: 'Жою',
+    actions: 'Әрекеттер',
+    confirm_delete: 'Жазбаны қайтарусыз жою керек пе?',
+    search_placeholder: 'Тегі, аты, логин бойынша іздеу...',
+    all_objects: 'Барлық обьектілер',
+    all_departments: 'Барлық бөлімдер',
+
+    courses_title: 'Курстар мен тест материалдары',
+    add_course: 'Курс қосу',
+    course_title_ru: 'Курс атауы (RU)',
+    course_title_kz: 'Курс атауы (KZ)',
+    course_desc_ru: 'Сипаттама (RU)',
+    course_desc_kz: 'Сипаттама (KZ)',
+    video_url: 'Видео сілтемесі (YouTube т.б.)',
+    material_pdf: 'Материал (PDF)',
+    time_limit: 'Уақыт шегі (мин)',
+    pass_score: 'Өту балы (%)',
+    validity: 'Сертификат мерзімі (ай)',
+    upload: 'Жүктеу',
+    questions: 'Тест сұрақтары',
+    add_question: 'Сұрақ қосу',
+    question_ru: 'Сұрақ (RU)',
+    question_kz: 'Сұрақ (KZ)',
+    option: 'Жауап нұсқасы',
+    correct_answer: 'Дұрыс нұсқа',
+
+    assignments_title: 'Тесттерді тағайындау және нәтижелер журналы',
+    assign_test: 'Тест тағайындау',
+    select_employee: 'Қызметкер',
+    select_course: 'Курс',
+    protocol_number: 'Хаттама нөмірі',
+    protocol_date: 'Хаттама күні',
+    filter_status: 'Мәртебе',
+    status_pending: 'Күтуде',
+    status_in_progress: 'Барысында',
+    status_passed: 'Өтті',
+    status_failed: 'Өтпеді',
+    has_certificate: 'Сертификат бар ма',
+    yes: 'Иә',
+    no: 'Жоқ',
+    allow_retake: 'Қайта тапсыруға рұқсат беру',
+    download_cert: 'Сертификатты жүктеу',
+    score: 'Балл',
+    test_date: 'Өту күні',
+    next_test_date: 'Келесі өту күні',
+    apply_filters: 'Қолдану',
+    reset_filters: 'Тазарту',
+
+    export_title: 'Нәтижелерді Excel-ге экспорттау',
+    export_desc: 'Обьектіні таңдаңыз — әр бөлім үшін жеке парақ жасалады.',
+    export_btn: 'Excel жүктеу',
+
+    settings_title: 'Компания және сертификат баптаулары',
+    company_name: 'Компания атауы',
+    chairman_name: 'Комиссия төрағасының аты-жөні',
+    member2_name: 'Комиссия мүшесі 1 (аты-жөні, лауазымы)',
+    member3_name: 'Комиссия мүшесі 2 (аты-жөні, лауазымы)',
+    logo_upload: 'Компания логотипі',
+    stamp_upload: 'Мөр (сурет)',
+    signature_upload: 'Төрағаның қолы (сурет)',
+
+    my_tests_title: 'Маған тағайындалған тесттер',
+    start_test: 'Оқу және тестілеуден өту',
+    view_material: 'Курс материалдары',
+    test_locked: 'Тест сәтсіз аяқталды. Әкімшінің қайта тапсыруға рұқсатын күтіңіз.',
+    test_passed_msg: 'Тест сәтті тапсырылды!',
+    already_passed: 'Курс сәтті аяқталды. Сертификат жарамды.',
+
+    test_screen_title: 'Тестілеу',
+    time_left: 'Қалған уақыт',
+    submit_test: 'Тестті аяқтау',
+    question_of: 'Сұрақ',
+    warning_focus: 'Назар аударыңыз! Тест кезінде басқа қойындыларға ауыспаңыз. Анықталған ауысулар',
+    of_max: '/',
+    test_terminated: 'Ережелерді бұзғаны үшін тест мәжбүрлі түрде аяқталды (қойындыны 3 реттен артық ауыстыру).',
+    confirm_submit: 'Тестті аяқтағыңыз келетініне сенімдісіз бе? Қайта әрекет тек әкімшінің рұқсатымен мүмкін.',
+    anti_cheat_notice: 'Тест кезінде мәтінді көшіру, белгілеу және қойындыларды ауыстыру тыйым салынған және жүйеде тіркеледі.',
+
+    result_title: 'Тест нәтижесі',
+    your_score: 'Сіздің нәтижеңіз',
+    passed_label: 'Тест тапсырылды',
+    failed_label: 'Тест тапсырылмады',
+    back_to_list: 'Тізімге оралу',
+    cert_number: 'Сертификат нөмірі',
+
+    loading: 'Жүктелуде...',
+    no_data: 'Деректер жоқ',
+    required_field: 'Міндетті өріс',
+    save_success: 'Сақталды',
+    error_generic: 'Қате орын алды. Қайталап көріңіз.',
+
+    profile_title: 'Қызметкер профилі',
+    back_to_users: 'Қызметкерлер тізіміне',
+    profile_info: 'Қызметкер деректері',
+    profile_history: 'Оқыту тарихы',
+    download_report: 'Есепті жүктеу (Excel)',
+    date_from: 'Күннен',
+    date_to: 'Күнге дейін',
+    filters: 'Сүзгілер',
+    expiring_soon_title: 'Сертификат мерзімі жақында аяқталады',
+    expiring_none: 'Жақын арада мерзімі аяқталатын сертификаттар жоқ.',
+    days_left: 'күн қалды',
+    overdue: 'мерзімі өтті',
+    expires_today: 'бүгін аяқталады',
+    calendar_title: 'Оқытудан өту күнтізбесі',
+    calendar_completions_on: 'Оқудан өткендер',
+    prev_month: 'Артқа',
+    next_month: 'Алға',
+    all_statuses: 'Барлық мәртебелер',
+    all_roles: 'Барлық рөлдер'
+  }
+};
+
+let CURRENT_LANG = localStorage.getItem('lang') || 'ru';
+function t(key) { return (I18N[CURRENT_LANG] && I18N[CURRENT_LANG][key]) || key; }
+function setLang(lang) { CURRENT_LANG = lang; localStorage.setItem('lang', lang); }
+
+
+// --- STATE & API ---
+const state = {
+  token: localStorage.getItem('token') || null,
+  user: JSON.parse(localStorage.getItem('user') || 'null'),
+  tab: 'dashboard',
+  courses: [],
+  users: [],
+  assignments: [],
+  settings: {},
+  activeTest: null,
+  testTimer: null,
+  timeLeft: 0,
+  usersFilter: { q: '', object: '', department: '', role: '' },
+  assignFilter: { status: '', object: '', department: '', q: '', date_from: '', date_to: '' },
+  meta: { objects: [], departments: [] },
+  profileUserId: null,
+  calendarDate: new Date(),
+  protocols: [],
+  activeProtocols: []
+};
+
+function qs(obj) {
+  const parts = Object.entries(obj).filter(([, v]) => v !== '' && v !== null && v !== undefined);
+  if (!parts.length) return '';
+  return '?' + parts.map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v)).join('&');
+}
+
+const api = {
+  async req(url, opts = {}) {
+    opts.headers = opts.headers || {};
+    if (state.token) opts.headers['Authorization'] = 'Bearer ' + state.token;
+    if (opts.body && !(opts.body instanceof FormData)) {
+      opts.headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(opts.body);
+    }
+    const res = await fetch(url, opts);
+    if (res.status === 401) {
+      logout();
+      throw new Error('Unauthorized');
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Ошибка сервера' }));
+      throw new Error(err.message || err.error || 'Ошибка запроса');
+    }
+    const ct = res.headers.get('content-type');
+    if (ct && ct.includes('application/json')) return res.json();
+    return res;
+  },
+  login(login, password) { return this.req('/api/auth/login', { method: 'POST', body: { login, password } }); },
+  getUsers(filter = {}) { return this.req('/api/users' + qs(filter)); },
+  getUser(id) { return this.req('/api/users/' + id); },
+  getUsersMeta() { return this.req('/api/users/meta/objects'); },
+  saveUser(data, id) { return this.req(id ? '/api/users/' + id : '/api/users', { method: id ? 'PUT' : 'POST', body: data }); },
+  deleteUser(id) { return this.req('/api/users/' + id, { method: 'DELETE' }); },
+  getCourses() { return this.req('/api/courses'); },
+  getCourse(id) { return this.req('/api/courses/' + id); },
+  saveCourse(data, id) { return this.req(id ? '/api/courses/' + id : '/api/courses', { method: id ? 'PUT' : 'POST', body: data }); },
+  deleteCourse(id) { return this.req('/api/courses/' + id, { method: 'DELETE' }); },
+  addQuestion(cid, data) { return this.req('/api/courses/' + cid + '/questions', { method: 'POST', body: data }); },
+  deleteQuestion(cid, qid) { return this.req('/api/courses/' + cid + '/questions/' + qid, { method: 'DELETE' }); },
+  updateQuestion(cid, qid, data) { return this.req('/api/courses/' + cid + '/questions/' + qid, { method: 'PUT', body: data }); },
+  getAssignments(filter = {}) { return this.req('/api/assignments' + qs(filter)); },
+  getExpiring(days = 30) { return this.req('/api/assignments/expiring' + qs({ days })); },
+  getMyAssignments() { return this.req('/api/assignments/mine'); },
+  createAssignment(data) { return this.req('/api/assignments', { method: 'POST', body: data }); },
+  createAssignmentsBulk(data) { return this.req('/api/assignments/bulk', { method: 'POST', body: data }); },
+  getLastNumbers() { return this.req('/api/assignments/last-numbers'); },
+  deleteAssignment(id) { return this.req('/api/assignments/' + id, { method: 'DELETE' }); },
+  allowRetake(id) { return this.req('/api/assignments/' + id + '/allow-retake', { method: 'POST' }); },
+  startTest(id) { return this.req('/api/assignments/' + id + '/start', { method: 'POST' }); },
+  submitTest(id, answers, focus_violations) { return this.req('/api/assignments/' + id + '/submit', { method: 'POST', body: { answers, focus_violations } }); },
+  getSettings() { return this.req('/api/settings'); },
+  saveSettings(data) { return this.req('/api/settings', { method: 'PUT', body: data }); },
+  getPublicSettings() { return this.req('/api/settings/public'); },
+  getAssignmentAnswers(id) { return this.req('/api/assignments/' + id + '/answers'); },
+  // Протоколы (открытие/закрытие, п.1 и п.4)
+  getProtocols() { return this.req('/api/protocols'); },
+  getActiveProtocols() { return this.req('/api/protocols/active'); },
+  openProtocol(data) { return this.req('/api/protocols', { method: 'POST', body: data }); },
+  updateProtocol(id, data) { return this.req('/api/protocols/' + id, { method: 'PATCH', body: data }); },
+  closeProtocol(id) { return this.req('/api/protocols/' + id + '/close', { method: 'POST' }); },
+  reopenProtocol(id) { return this.req('/api/protocols/' + id + '/reopen', { method: 'POST' }); },
+  deleteProtocol(id) { return this.req('/api/protocols/' + id, { method: 'DELETE' }); },
+  // Материалы/видео курса отдельно RU/KZ (п.3)
+  uploadMaterial(courseId, lang, file) {
+    const fd = new FormData(); fd.append('file', file);
+    return this.req('/api/courses/' + courseId + '/material/' + lang, { method: 'POST', body: fd });
+  },
+  deleteMaterial(courseId, lang) { return this.req('/api/courses/' + courseId + '/material/' + lang, { method: 'DELETE' }); },
+  uploadVideo(courseId, lang, file) {
+    const fd = new FormData(); fd.append('file', file);
+    return this.req('/api/courses/' + courseId + '/video/' + lang, { method: 'POST', body: fd });
+  },
+  deleteVideo(courseId, lang) { return this.req('/api/courses/' + courseId + '/video/' + lang, { method: 'DELETE' }); }
+};
+
+// Публичные настройки бренда (название компании + логотип), доступные без
+// авторизации — используются на экране входа и в шапке приложения.
+let PUBLIC_SETTINGS = { company_name: '', logo_path: '' };
+
+function brandMarkHtml(sizeClass) {
+  if (PUBLIC_SETTINGS && PUBLIC_SETTINGS.logo_path) {
+    return `<img src="${esc(PUBLIC_SETTINGS.logo_path)}" alt="logo" class="${sizeClass} object-contain rounded-lg bg-white">`;
+  }
+  return `<div class="${sizeClass} bg-blue-600 text-white rounded-lg flex items-center justify-center font-bold text-lg">ТБ</div>`;
+}
+
+// Скачивание/открытие защищённых файлов (требующих Authorization),
+// которые нельзя открыть обычной ссылкой <a href target="_blank">,
+// т.к. браузер не добавляет заголовок Authorization при обычной навигации.
+async function downloadAuthed(url, filename) {
+  try {
+    const res = await fetch(url, { headers: state.token ? { 'Authorization': 'Bearer ' + state.token } : {} });
+    if (res.status === 401) { logout(); return; }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Ошибка сервера' }));
+      alert(err.message || err.error || 'Не удалось скачать файл');
+      return;
+    }
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    if (filename) {
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } else {
+      window.open(blobUrl, '_blank');
+    }
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
+  } catch (e) {
+    alert('Не удалось скачать файл: ' + e.message);
+  }
+}
+
+// Экранирование текста перед вставкой в innerHTML (защита от XSS в ФИО/названиях)
+function esc(str) {
+  return String(str ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// Экранирование строки для безопасной вставки внутрь одинарных кавычек в inline-обработчике onclick="...('...')"
+function jsAttrEsc(str) {
+  return String(str ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+// --- ПРОСМОТР МАТЕРИАЛОВ И ВИДЕО ПРЯМО НА САЙТЕ (без открытия в отдельном окне) ---
+function isVideoFileUrl(url) { return /\.(mp4|webm|ogg|mov|m4v|avi|mkv)(\?|#|$)/i.test(url); }
+function isPdfFileUrl(url) { return /\.pdf(\?|#|$)/i.test(url); }
+function isOfficeDocUrl(url) { return /\.(ppt|pptx|doc|docx|xls|xlsx)(\?|#|$)/i.test(url); }
+
+function toYouTubeEmbedUrl(url) {
+  try {
+    const u = new URL(url, window.location.origin);
+    const host = u.hostname.replace(/^www\./, '');
+    let id = '';
+    if (host === 'youtu.be') id = u.pathname.slice(1);
+    else if (host === 'youtube.com' || host === 'm.youtube.com') {
+      if (u.pathname === '/watch') id = u.searchParams.get('v') || '';
+      else if (u.pathname.startsWith('/embed/')) return u.href;
+      else if (u.pathname.startsWith('/shorts/')) id = u.pathname.split('/')[2] || '';
+    } else {
+      return null;
+    }
+    return id ? `https://www.youtube.com/embed/${id}` : null;
+  } catch (e) { return null; }
+}
+
+// Открывает материал/видео (файл на сервере или внешняя ссылка, напр. YouTube) во встроенном
+// модальном окне поверх сайта, вместо перехода в новую вкладку.
+function openMediaViewer(url, title) {
+  if (!url) return;
+  const modal = document.getElementById('mediaViewerModal');
+  const body = document.getElementById('mediaViewerBody');
+  const titleEl = document.getElementById('mediaViewerTitle');
+  const dl = document.getElementById('mediaViewerDownload');
+  let absUrl;
+  try { absUrl = new URL(url, window.location.origin).href; } catch (e) { absUrl = url; }
+
+  titleEl.textContent = title || '';
+  dl.href = absUrl;
+  body.innerHTML = '';
+
+  if (isPdfFileUrl(url)) {
+    body.innerHTML = `<iframe src="${esc(absUrl)}" class="w-full h-full border-0"></iframe>`;
+  } else if (isVideoFileUrl(url)) {
+    body.innerHTML = `<video src="${esc(absUrl)}" controls autoplay class="w-full h-full bg-black"></video>`;
+  } else if (isOfficeDocUrl(url)) {
+    const officeUrl = 'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(absUrl);
+    body.innerHTML = `
+      <iframe src="${esc(officeUrl)}" class="w-full h-full border-0"></iframe>
+      <p class="text-[11px] text-slate-500 px-3 py-2 border-t border-slate-200">Если предпросмотр не отображается (например, сайт недоступен из интернета), воспользуйтесь ссылкой «Скачать» выше.</p>
+    `;
+  } else {
+    const yt = toYouTubeEmbedUrl(url);
+    if (yt) {
+      body.innerHTML = `<iframe src="${esc(yt)}" class="w-full h-full border-0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
+    } else {
+      body.innerHTML = `<iframe src="${esc(absUrl)}" class="w-full h-full border-0"></iframe>`;
+    }
+  }
+
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+}
+
+function closeMediaViewer() {
+  const modal = document.getElementById('mediaViewerModal');
+  const body = document.getElementById('mediaViewerBody');
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+  body.innerHTML = ''; // останавливает воспроизведение видео/iframe при закрытии
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeMediaViewer();
+});
+
+function logout() {
+  state.token = null;
+  state.user = null;
+  localStorage.removeItem('token');
+  localStorage.removeItem('user');
+  render();
+}
+
+function switchLang(l) {
+  setLang(l);
+  render();
+}
+
+// --- RENDER APP ---
+function render() {
+  const app = document.getElementById('app');
+  if (!state.token || !state.user) {
+    renderLogin(app);
+    return;
+  }
+  renderMain(app);
+}
+
+function renderLogin(app) {
+  app.innerHTML = `
+    <div class="min-h-screen flex items-center justify-center p-4">
+      <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-8 fade-in border border-slate-200">
+        <div class="flex justify-between items-center mb-6">
+          <span class="text-xs font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full">Safety & Health</span>
+          <button onclick="switchLang(CURRENT_LANG === 'ru' ? 'kz' : 'ru')" class="text-xs font-medium text-slate-600 hover:text-blue-600 border px-2 py-1 rounded">
+            ${CURRENT_LANG === 'ru' ? 'ҚАЗ' : 'РУС'}
+          </button>
+        </div>
+        <div class="flex justify-center mb-4">${brandMarkHtml('w-24 h-24')}</div>
+        ${PUBLIC_SETTINGS.company_name ? `<p class="text-xs font-semibold text-blue-600 uppercase tracking-wide mb-1 text-center">${esc(PUBLIC_SETTINGS.company_name)}</p>` : ''}
+        <h1 class="text-2xl font-bold text-slate-900 mb-1 text-center">${t('login')}</h1>
+        <p class="text-sm text-slate-500 mb-6 text-center">${t('app_title')}</p>
+        
+        <form id="loginForm" onsubmit="handleLogin(event)" class="space-y-4">
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">${t('login_field')}</label>
+            <input type="text" id="loginInput" required placeholder="8888" class="w-full px-3.5 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">${t('password_field')}</label>
+            <input type="password" id="passInput" required class="w-full px-3.5 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+          </div>
+          <div id="loginError" class="text-sm text-red-600 hidden"></div>
+          <button type="submit" class="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow transition">
+            ${t('login_btn')}
+          </button>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
+async function handleLogin(e) {
+  e.preventDefault();
+  const errDiv = document.getElementById('loginError');
+  errDiv.classList.add('hidden');
+  const login = document.getElementById('loginInput').value.trim();
+  const pass = document.getElementById('passInput').value;
+  try {
+    const res = await api.login(login, pass);
+    state.token = res.token;
+    state.user = res.user;
+    localStorage.setItem('token', res.token);
+    localStorage.setItem('user', JSON.stringify(res.user));
+    state.tab = res.user.role === 'employee' ? 'my_tests' : 'dashboard';
+    render();
+  } catch (err) {
+    errDiv.textContent = err.message || t('login_error');
+    errDiv.classList.remove('hidden');
+  }
+}
+
+function renderMain(app) {
+  const isEmployee = state.user.role === 'employee';
+  // Сотруднику всегда доступна только вкладка "Мои тесты" — не даём ему
+  // увидеть админский раздел (например, если вкладка осталась в состоянии
+  // 'dashboard'/'users'/... после перезагрузки страницы или входа под другой
+  // ролью в этом же браузере).
+  if (isEmployee && state.tab !== 'my_tests') {
+    state.tab = 'my_tests';
+  }
+  const roleName = t('role_' + state.user.role) || state.user.role;
+
+  app.innerHTML = `
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-30">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center h-16">
+        <div class="flex items-center space-x-3">
+          ${brandMarkHtml('w-14 h-14')}
+          <div>
+            <h1 class="text-base font-bold text-slate-900 leading-tight">${esc(PUBLIC_SETTINGS.company_name) || t('app_title')}</h1>
+            <p class="text-xs text-slate-500">${esc(state.user.last_name || '')} ${esc(state.user.first_name || '')} (${esc(roleName)})</p>
+          </div>
+        </div>
+        <div class="flex items-center space-x-3">
+          <button onclick="switchLang(CURRENT_LANG === 'ru' ? 'kz' : 'ru')" class="text-xs font-semibold px-2.5 py-1.5 border rounded-lg text-slate-700 hover:bg-slate-50">
+            ${CURRENT_LANG === 'ru' ? 'ҚАЗ' : 'РУС'}
+          </button>
+          <button onclick="logout()" class="text-xs font-semibold px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition">
+            ${t('logout')}
+          </button>
+        </div>
+      </div>
+      <!-- Навигация -->
+      <nav class="bg-slate-50 border-t border-slate-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-1 sm:space-x-4 overflow-x-auto py-2">
+          ${!isEmployee ? `
+            <button onclick="setTab('dashboard')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'dashboard' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_dashboard')}</button>
+            <button onclick="setTab('users')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_users')}</button>
+            <button onclick="setTab('courses')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'courses' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_courses')}</button>
+            <button onclick="setTab('assignments')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'assignments' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_assignments')}</button>
+            <button onclick="setTab('protocols')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'protocols' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">Протоколы</button>
+            <button onclick="setTab('calendar')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'calendar' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_calendar')}</button>
+            <a href="#" onclick="downloadAuthed('/api/export/excel','journal_export.xlsx');return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-emerald-700 hover:bg-emerald-50">📥 ${t('nav_export')}</a>
+            <button onclick="setTab('settings')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'settings' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_settings')}</button>
+          ` : `
+            <button onclick="setTab('my_tests')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'my_tests' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_my_tests')}</button>
+          `}
+        </div>
+      </nav>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <div id="tabContent"></div>
+    </main>
+  `;
+
+  loadTabContent();
+}
+
+function setTab(tname) {
+  state.tab = tname;
+  render();
+}
+
+async function loadTabContent() {
+  const container = document.getElementById('tabContent');
+  if (!container) return;
+
+  if (state.tab === 'dashboard') {
+    container.innerHTML = `
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+        <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-bold text-slate-500 uppercase">Сотрудники</div>
+          <div class="text-3xl font-black text-slate-900 mt-2" id="dashUsers">...</div>
+        </div>
+        <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-bold text-slate-500 uppercase">Курсы и тесты</div>
+          <div class="text-3xl font-black text-blue-600 mt-2" id="dashCourses">...</div>
+        </div>
+        <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-bold text-slate-500 uppercase">Назначено тестирований (всего)</div>
+          <div class="text-3xl font-black text-emerald-600 mt-2" id="dashAssignments">...</div>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-bold text-slate-500 uppercase">Ожидают прохождения</div>
+          <div class="text-2xl font-black text-amber-600 mt-1" id="dashPending">...</div>
+        </div>
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-bold text-slate-500 uppercase">Пройдено (сдано/не сдано)</div>
+          <div class="text-2xl font-black text-slate-700 mt-1" id="dashCompleted">...</div>
+        </div>
+        <div class="bg-white p-4 rounded-xl border border-red-200 bg-red-50/40 shadow-sm">
+          <div class="text-xs font-bold text-red-700 uppercase">Просрочено</div>
+          <div class="text-2xl font-black text-red-600 mt-1" id="dashOverdue">...</div>
+        </div>
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-bold text-slate-500 uppercase">В норме (срок не истёк)</div>
+          <div class="text-2xl font-black text-emerald-600 mt-1" id="dashValid">...</div>
+        </div>
+      </div>
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
+        <h3 class="text-base font-bold mb-4">Быстрые действия</h3>
+        <div class="flex flex-wrap gap-3">
+          <button onclick="setTab('assignments')" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700">Назначить проверку знаний</button>
+          <button onclick="setTab('users')" class="px-4 py-2 bg-slate-100 text-slate-800 rounded-lg text-sm font-semibold hover:bg-slate-200">Добавить сотрудника</button>
+          <button onclick="setTab('courses')" class="px-4 py-2 bg-slate-100 text-slate-800 rounded-lg text-sm font-semibold hover:bg-slate-200">Создать курс</button>
+        </div>
+      </div>
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <h3 class="text-base font-bold mb-4">⏰ ${t('expiring_soon_title')} (30 ${CURRENT_LANG === 'kz' ? 'күн' : 'дней'})</h3>
+        <div id="expiringList" class="space-y-2"><div class="text-slate-400 text-sm">${t('loading')}</div></div>
+      </div>
+    `;
+    try {
+      const [u, c, a] = await Promise.all([api.getUsers(), api.getCourses(), api.getAssignments()]);
+      document.getElementById('dashUsers').textContent = u.length;
+      document.getElementById('dashCourses').textContent = c.length;
+      document.getElementById('dashAssignments').textContent = a.length;
+
+      // Разбивка по статусам. "Назначено тестирований" — это общее число записей
+      // (созданных протоколов), оно не уменьшается после прохождения теста —
+      // тест просто меняет статус конкретной записи с "pending" на "passed"/"failed".
+      // Отдельно считаем просроченные (next_test_date уже прошёл) и действующие (в норме).
+      const now = new Date();
+      const pending = a.filter(x => x.status === 'pending' || x.status === 'in_progress').length;
+      const completed = a.filter(x => x.status === 'passed' || x.status === 'failed').length;
+      const overdue = a.filter(x => x.status === 'passed' && x.next_test_date && new Date(x.next_test_date) < now).length;
+      const valid = a.filter(x => x.status === 'passed' && x.next_test_date && new Date(x.next_test_date) >= now).length;
+      document.getElementById('dashPending').textContent = pending;
+      document.getElementById('dashCompleted').textContent = completed;
+      document.getElementById('dashOverdue').textContent = overdue;
+      document.getElementById('dashValid').textContent = valid;
+    } catch (e) {}
+    loadExpiringWidget();
+  }
+
+  if (state.tab === 'users') {
+    container.innerHTML = `
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
+          <h2 class="text-lg font-bold text-slate-900">${t('users_title')}</h2>
+          <div class="flex gap-2">
+            <input type="file" id="importFile" accept=".xlsx" class="hidden" onchange="handleImportFile(this)">
+            <button onclick="downloadUsersTemplate()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">⬇ Скачать бланк</button>
+            <button onclick="document.getElementById('importFile').click()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">📥 ${t('import_excel')}</button>
+            <button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${t('add_user')}</button>
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-2 mb-4">
+          <input id="uFilterQ" type="text" placeholder="${t('search_placeholder')}" value="${esc(state.usersFilter.q)}" oninput="onUsersFilterChange()" class="flex-1 min-w-[200px] border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          <select id="uFilterObject" onchange="onUsersFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm"><option value="">${t('all_objects')}</option></select>
+          <select id="uFilterDept" onchange="onUsersFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm"><option value="">${t('all_departments')}</option></select>
+          <select id="uFilterRole" onchange="onUsersFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm">
+            <option value="">${t('all_roles')}</option>
+            <option value="employee">${t('role_employee')}</option>
+            <option value="admin">${t('role_admin')}</option>
+          </select>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">ФИО</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Логин</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Объект / Отдел</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Должность</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Роль</th>
+                <th class="px-4 py-3 text-right font-semibold text-slate-600">${t('actions')}</th>
+              </tr>
+            </thead>
+            <tbody id="usersTable" class="divide-y divide-slate-100"><tr><td colspan="6" class="p-4 text-center text-slate-400">Загрузка...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="userModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6">
+          <h3 class="text-lg font-bold mb-4" id="userModalTitle">Пользователь</h3>
+          <form onsubmit="saveUserForm(event)" class="space-y-3">
+            <input type="hidden" id="userId">
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="text-xs font-semibold text-slate-600">Фамилия</label><input id="uLastName" required class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Имя</label><input id="uFirstName" required class="w-full border p-2 rounded text-sm"></div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="text-xs font-semibold text-slate-600">Объект</label><input id="uObject" class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Отдел</label><input id="uDept" class="w-full border p-2 rounded text-sm"></div>
+            </div>
+            <div><label class="text-xs font-semibold text-slate-600">Должность</label><input id="uPos" class="w-full border p-2 rounded text-sm"></div>
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="text-xs font-semibold text-slate-600">Логин (табельный номер)</label><input id="uLogin" placeholder="Можно назначить позже" class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Пароль</label><input type="password" id="uPass" placeholder="Не менять" class="w-full border p-2 rounded text-sm"></div>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">№ сертификата (уникальный номер сотрудника)</label>
+              <input id="uCertNumber" placeholder="Например, 0125" class="w-full border p-2 rounded text-sm">
+              <p class="text-[11px] text-slate-400 mt-1">Можно исправить вручную в любой момент — история пройденных тестов сотрудника при этом не меняется.</p>
+            </div>
+            <p class="text-xs text-slate-400 -mt-1">Логин и пароль можно не указывать сейчас, а добавить позже — просто откройте карточку сотрудника ещё раз и нажмите «Изменить». При указании логина обязательно укажите и пароль.</p>
+            <div id="roleFieldWrapper">
+              <label class="text-xs font-semibold text-slate-600">Роль</label>
+              <select id="uRole" class="w-full border p-2 rounded text-sm">
+                <option value="employee">Сотрудник</option>
+                <option value="admin">Администратор (Инженер ТБ)</option>
+              </select>
+            </div>
+            <div class="flex justify-end space-x-2 pt-3 border-t">
+              <button type="button" onclick="closeUserModal()" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
+              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+    loadUsersList();
+  }
+
+  if (state.tab === 'user_profile') {
+    container.innerHTML = `
+      <button onclick="setTab('users')" class="text-sm text-blue-600 hover:underline mb-4">&larr; ${t('back_to_users')}</button>
+      <div id="profileContent"><div class="text-slate-400">${t('loading')}</div></div>
+    `;
+    loadUserProfile(state.profileUserId);
+  }
+
+  if (state.tab === 'courses') {
+    container.innerHTML = `
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <div class="flex justify-between items-center mb-6">
+          <h2 class="text-lg font-bold text-slate-900">${t('courses_title')}</h2>
+          <button onclick="openCourseModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold">+ ${t('add_course')}</button>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="coursesList"><div class="p-4 text-slate-400">Загрузка курсов...</div></div>
+      </div>
+      <div id="courseModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
+          <h3 class="text-lg font-bold mb-4" id="courseModalTitle">Курс</h3>
+          <form onsubmit="saveCourseForm(event)" class="space-y-3">
+            <input type="hidden" id="courseId">
+            <div><label class="text-xs font-semibold text-slate-600">Название (RU)</label><input id="cTitleRu" required class="w-full border p-2 rounded text-sm"></div>
+            <div><label class="text-xs font-semibold text-slate-600">Название (KZ)</label><input id="cTitleKz" required class="w-full border p-2 rounded text-sm"></div>
+            <div><label class="text-xs font-semibold text-slate-600">Описание (RU)</label><textarea id="cDescRu" rows="2" class="w-full border p-2 rounded text-sm"></textarea></div>
+            <div><label class="text-xs font-semibold text-slate-600">Описание (KZ)</label><textarea id="cDescKz" rows="2" class="w-full border p-2 rounded text-sm"></textarea></div>
+            <div class="grid grid-cols-3 gap-3">
+              <div><label class="text-xs font-semibold text-slate-600">Время (мин)</label><input type="number" id="cTime" value="20" class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Проходной (%)</label><input type="number" id="cPass" value="80" class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Срок (мес)</label><input type="number" id="cValid" value="12" class="w-full border p-2 rounded text-sm"></div>
+            </div>
+            <div class="border-t pt-3">
+              <label class="text-xs font-semibold text-slate-600">Материалы курса (презентация PPT/PPTX или PDF) — отдельно на русском и казахском</label>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-1">
+                <div>
+                  <p class="text-[11px] font-semibold text-slate-500 mb-1">🇷🇺 На русском</p>
+                  <div class="flex items-center gap-2">
+                    <input type="file" id="cMaterialFileRu" accept=".pdf,.ppt,.pptx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="w-full border p-2 rounded text-sm">
+                    <button type="button" onclick="uploadCourseMaterial('ru')" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить</button>
+                  </div>
+                  <div id="cMaterialStatusRu" class="text-xs text-slate-500 mt-1"></div>
+                </div>
+                <div>
+                  <p class="text-[11px] font-semibold text-slate-500 mb-1">🇰🇿 На казахском</p>
+                  <div class="flex items-center gap-2">
+                    <input type="file" id="cMaterialFileKz" accept=".pdf,.ppt,.pptx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation" class="w-full border p-2 rounded text-sm">
+                    <button type="button" onclick="uploadCourseMaterial('kz')" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить</button>
+                  </div>
+                  <div id="cMaterialStatusKz" class="text-xs text-slate-500 mt-1"></div>
+                </div>
+              </div>
+            </div>
+            <div class="border-t pt-3">
+              <label class="text-xs font-semibold text-slate-600">Видео курса (необязательно) — файл или ссылка, отдельно на русском и казахском</label>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-1">
+                <div>
+                  <p class="text-[11px] font-semibold text-slate-500 mb-1">🇷🇺 На русском</p>
+                  <input id="cVideoRu" placeholder="https://youtube.com/..." class="w-full border p-2 rounded text-sm">
+                  <div class="flex items-center gap-2 mt-2">
+                    <input type="file" id="cVideoFileRu" accept="video/*,.mp4,.webm,.mov,.avi,.mkv" class="w-full border p-2 rounded text-sm">
+                    <button type="button" onclick="uploadCourseVideo('ru')" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить</button>
+                  </div>
+                  <div id="cVideoStatusRu" class="text-xs text-slate-500 mt-1"></div>
+                </div>
+                <div>
+                  <p class="text-[11px] font-semibold text-slate-500 mb-1">🇰🇿 На казахском</p>
+                  <input id="cVideoKz" placeholder="https://youtube.com/..." class="w-full border p-2 rounded text-sm">
+                  <div class="flex items-center gap-2 mt-2">
+                    <input type="file" id="cVideoFileKz" accept="video/*,.mp4,.webm,.mov,.avi,.mkv" class="w-full border p-2 rounded text-sm">
+                    <button type="button" onclick="uploadCourseVideo('kz')" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить</button>
+                  </div>
+                  <div id="cVideoStatusKz" class="text-xs text-slate-500 mt-1"></div>
+                </div>
+              </div>
+              <p class="text-[11px] text-slate-400 mt-1">Видео может отсутствовать — курс можно сохранить без него.</p>
+            </div>
+            <div class="flex justify-end space-x-2 pt-3 border-t">
+              <button type="button" onclick="document.getElementById('courseModal').classList.add('hidden')" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
+              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить</button>
+            </div>
+          </form>
+        </div>
+      </div>
+      <div id="questionsModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-4xl w-full p-6 max-h-[90vh] flex flex-col">
+          <div class="flex justify-between items-center mb-3">
+            <h3 class="text-lg font-bold" id="questionsModalTitle">Тесты курса</h3>
+            <button onclick="document.getElementById('questionsModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-700 text-xl leading-none">&times;</button>
+          </div>
+
+          <div class="bg-slate-50 border rounded-lg p-3 mb-3">
+            <p class="text-xs font-semibold text-slate-700 mb-2">Автоматическая загрузка теста из Excel (10 вариантов по 10 вопросов, по 4 ответа)</p>
+            <div class="flex flex-wrap items-center gap-2">
+              <button type="button" onclick="downloadTestTemplate()" class="px-3 py-1.5 border rounded-lg text-xs font-semibold whitespace-nowrap">⬇ Скачать шаблон Excel</button>
+              <input type="file" id="testImportFile" accept=".xlsx" class="border p-1.5 rounded text-xs flex-1 min-w-[160px]">
+              <select id="testImportMode" class="border p-1.5 rounded text-xs">
+                <option value="replace">Заменить всю базу тестов</option>
+                <option value="append">Добавить к существующим</option>
+              </select>
+              <button type="button" onclick="importTestFile()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить тест</button>
+            </div>
+            <div id="testImportStatus" class="text-xs mt-2"></div>
+          </div>
+
+          <div id="variantTabs" class="flex flex-wrap gap-1.5 mb-3"></div>
+
+          <div id="questionsList" class="space-y-3 overflow-y-auto flex-1 mb-4"></div>
+
+          <form id="questionForm" onsubmit="saveQuestionForm(event)" novalidate class="border-t pt-4 space-y-2">
+            <input type="hidden" id="qId">
+            <input type="hidden" id="qVariant" value="1">
+            <p class="text-xs font-semibold text-slate-500">Вопрос для билета (варианта) <span id="qVariantLabel">1</span></p>
+            <div><label class="text-xs font-semibold text-slate-600">Вопрос (RU)</label><input id="qTextRu" required class="w-full border p-2 rounded text-sm"></div>
+            <div><label class="text-xs font-semibold text-slate-600">Вопрос (KZ)</label><input id="qTextKz" required class="w-full border p-2 rounded text-sm"></div>
+            <div class="space-y-1.5">
+              <label class="text-xs font-semibold text-slate-600">Варианты ответа — отметьте ✓ правильный</label>
+              ${[0, 1, 2, 3].map(i => `
+                <div class="flex items-center gap-2 border rounded-lg p-2 bg-slate-50">
+                  <input type="radio" name="qCorrectRadio" value="${i}" id="qCorrectR${i}" ${i === 0 ? 'checked' : ''} class="w-4 h-4 accent-emerald-600 shrink-0" title="Отметить как правильный ответ">
+                  <input id="qOpt${i}Ru" placeholder="Ответ ${i + 1} (RU)" required class="flex-1 border p-2 rounded text-sm">
+                  <input id="qOpt${i}Kz" placeholder="Жауап ${i + 1} (KZ)" required class="flex-1 border p-2 rounded text-sm">
+                </div>
+              `).join('')}
+            </div>
+            <div class="flex justify-end space-x-2">
+              <button type="button" onclick="resetQuestionForm()" class="px-4 py-2 border rounded-lg text-sm">Очистить</button>
+              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить вопрос</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+    loadCoursesList();
+  }
+
+  if (state.tab === 'assignments') {
+    container.innerHTML = `
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <div class="flex justify-between items-center mb-6">
+          <h2 class="text-lg font-bold text-slate-900">${t('nav_assignments')}</h2>
+          <button onclick="openAssignModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold">+ Назначить тест</button>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-4">
+          <input id="aFilterQ" type="text" placeholder="${t('search_placeholder')}" value="${esc(state.assignFilter.q)}" oninput="onAssignFilterChange()" class="col-span-2 border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          <select id="aFilterObject" onchange="onAssignFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm"><option value="">${t('all_objects')}</option></select>
+          <select id="aFilterDept" onchange="onAssignFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm"><option value="">${t('all_departments')}</option></select>
+          <select id="aFilterStatus" onchange="onAssignFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm">
+            <option value="">${t('all_statuses')}</option>
+            <option value="pending">${t('status_pending')}</option>
+            <option value="in_progress">${t('status_in_progress')}</option>
+            <option value="passed">${t('status_passed')}</option>
+            <option value="failed">${t('status_failed')}</option>
+          </select>
+          <div class="flex gap-1 col-span-2 md:col-span-1">
+            <input id="aFilterFrom" type="date" title="${t('date_from')}" onchange="onAssignFilterChange()" class="w-full border border-slate-300 rounded-lg px-2 py-2 text-xs">
+          </div>
+          <div class="flex gap-1">
+            <input id="aFilterTo" type="date" title="${t('date_to')}" onchange="onAssignFilterChange()" class="w-full border border-slate-300 rounded-lg px-2 py-2 text-xs">
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Сотрудник</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Курс</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Протокол</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Статус</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Балл</th>
+                <th class="px-4 py-3 text-right font-semibold text-slate-600">Действия</th>
+              </tr>
+            </thead>
+            <tbody id="assignTable" class="divide-y divide-slate-100"><tr><td colspan="6" class="p-4 text-center text-slate-400">Загрузка...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="assignModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] flex flex-col">
+          <h3 class="text-lg font-bold mb-4">Назначить тестирование</h3>
+          <form onsubmit="submitAssignForm(event)" class="space-y-3 overflow-y-auto flex-1 pr-1">
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Курс</label>
+              <select id="asCourseId" required class="w-full border p-2 rounded text-sm"></select>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="text-xs font-semibold text-slate-600">Номер протокола</label><input id="asProtNum" required class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Дата протокола</label><input type="date" id="asProtDate" required class="w-full border p-2 rounded text-sm"></div>
+            </div>
+            <div class="text-[11px] text-slate-500 -mt-1">Один номер протокола будет присвоен всем выбранным ниже сотрудникам. Номер подставлен автоматически по счётчику из настроек — при необходимости его можно исправить вручную.</div>
+            <div id="asActiveProtocolHint" class="text-[11px] text-emerald-700 font-semibold -mt-1"></div>
+            <div id="asNextCertHint" class="text-[11px] text-blue-600 font-semibold -mt-1"></div>
+            <div class="border-t pt-3">
+              <label class="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                <input type="checkbox" id="asHistorical" onchange="onAsHistoricalToggle()">
+                Внести уже пройденное ранее обучение (старые данные, без сдачи теста в системе)
+              </label>
+              <div id="asHistoricalFields" class="hidden grid grid-cols-2 gap-3 mt-2">
+                <div><label class="text-xs font-semibold text-slate-600">Дата прохождения</label><input type="date" id="asTestDate" class="w-full border p-2 rounded text-sm"></div>
+                <div><label class="text-xs font-semibold text-slate-600">Дата след. прохождения</label><input type="date" id="asNextTestDate" class="w-full border p-2 rounded text-sm"></div>
+                <div><label class="text-xs font-semibold text-slate-600">Результат, % (по умолчанию 100)</label><input type="number" min="0" max="100" id="asScorePercent" class="w-full border p-2 rounded text-sm"></div>
+                <div class="text-[11px] text-slate-500 self-end pb-2">Номер сертификата будет присвоен автоматически. Если дату след. прохождения не указать, она рассчитается по сроку действия курса.</div>
+              </div>
+            </div>
+            <div class="border-t pt-3">
+              <div class="flex items-center justify-between mb-2">
+                <label class="text-xs font-semibold text-slate-600">Сотрудники <span id="asSelectedCount" class="text-blue-600 font-bold"></span></label>
+                <div class="space-x-2 text-xs">
+                  <button type="button" onclick="asSelectAll(true)" class="text-blue-600 hover:underline">Выбрать всех</button>
+                  <button type="button" onclick="asSelectAll(false)" class="text-slate-500 hover:underline">Снять всё</button>
+                </div>
+              </div>
+              <div class="grid grid-cols-2 gap-2 mb-2">
+                <input id="asFilterQ" type="text" placeholder="${t('search_placeholder')}" oninput="renderAssignEmployeeList()" class="border border-slate-300 rounded-lg px-2 py-1.5 text-xs col-span-2">
+                <select id="asFilterObject" onchange="renderAssignEmployeeList()" class="border border-slate-300 rounded-lg px-2 py-1.5 text-xs"><option value="">${t('all_objects')}</option></select>
+                <select id="asFilterDept" onchange="renderAssignEmployeeList()" class="border border-slate-300 rounded-lg px-2 py-1.5 text-xs"><option value="">${t('all_departments')}</option></select>
+              </div>
+              <div id="asEmployeeList" class="border rounded-lg divide-y max-h-52 overflow-y-auto"></div>
+            </div>
+            <div class="flex justify-end space-x-2 pt-3 border-t sticky bottom-0 bg-white">
+              <button type="button" onclick="document.getElementById('assignModal').classList.add('hidden')" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
+              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Назначить</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+    loadAssignmentsList();
+  }
+
+  if (state.tab === 'protocols') {
+    container.innerHTML = `
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-lg font-bold text-slate-900">Протоколы комиссии</h2>
+          <button onclick="openProtocolModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold">+ Открыть протокол</button>
+        </div>
+        <p class="text-xs text-slate-500 mb-4">
+          Откройте протокол — укажите его номер и период (дату открытия и дату закрытия).
+          Пока протокол открыт и сегодняшняя дата попадает в этот период, каждому сотруднику,
+          который сдаст тест в эти дни, номер этого протокола присвоится автоматически —
+          вручную вводить номер протокола при назначении теста не обязательно.
+        </p>
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">№ протокола</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Дата открытия</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Дата закрытия</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Статус</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Сотрудников присвоено</th>
+                <th class="px-4 py-3 text-right font-semibold text-slate-600">Действия</th>
+              </tr>
+            </thead>
+            <tbody id="protocolsTable" class="divide-y divide-slate-100"><tr><td colspan="6" class="p-4 text-center text-slate-400">Загрузка...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="protocolModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+          <h3 class="text-lg font-bold mb-4" id="protocolModalTitle">Открыть протокол</h3>
+          <form onsubmit="saveProtocolForm(event)" class="space-y-3">
+            <input type="hidden" id="protocolId">
+            <div><label class="text-xs font-semibold text-slate-600">Номер протокола</label><input id="protoNumber" required class="w-full border p-2 rounded text-sm" placeholder="Например, 1"></div>
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="text-xs font-semibold text-slate-600">Дата открытия</label><input type="date" id="protoOpenDate" required class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Дата закрытия</label><input type="date" id="protoCloseDate" required class="w-full border p-2 rounded text-sm"></div>
+            </div>
+            <p class="text-[11px] text-slate-500">Всем сотрудникам, кто сдаст тест в этот период, номер протокола присвоится автоматически.</p>
+            <div class="flex justify-end space-x-2 pt-3 border-t">
+              <button type="button" onclick="document.getElementById('protocolModal').classList.add('hidden')" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
+              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+    loadProtocolsList();
+  }
+
+  if (state.tab === 'calendar') {
+    container.innerHTML = `
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <div class="flex justify-between items-center mb-6">
+          <h2 class="text-lg font-bold text-slate-900">${t('calendar_title')}</h2>
+          <div class="flex items-center gap-2">
+            <button onclick="changeCalendarMonth(-1)" class="px-3 py-1.5 border rounded-lg text-sm hover:bg-slate-50">&larr; ${t('prev_month')}</button>
+            <span id="calMonthLabel" class="text-sm font-semibold w-40 text-center"></span>
+            <button onclick="changeCalendarMonth(1)" class="px-3 py-1.5 border rounded-lg text-sm hover:bg-slate-50">${t('next_month')} &rarr;</button>
+          </div>
+        </div>
+        <div id="calGrid" class="grid grid-cols-7 gap-1.5"></div>
+      </div>
+      <div id="calDayModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[80vh] overflow-y-auto">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="text-lg font-bold" id="calDayTitle"></h3>
+            <button onclick="document.getElementById('calDayModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-700 text-xl leading-none">&times;</button>
+          </div>
+          <div id="calDayList" class="space-y-2"></div>
+        </div>
+      </div>
+    `;
+    loadCalendar();
+  }
+
+  if (state.tab === 'my_tests') {
+    container.innerHTML = `
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <h2 class="text-lg font-bold text-slate-900 mb-6">${t('nav_my_tests')}</h2>
+        <div id="myTestsList" class="space-y-4"><div class="text-slate-400">Загрузка...</div></div>
+      </div>
+            <div id="testRunModal" class="fixed inset-0 bg-slate-900/60 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full flex flex-col p-6 min-h-[500px]">
+          <!-- Шапка -->
+          <div class="flex justify-between items-center pb-4 border-b">
+            <div>
+              <h3 class="text-base font-bold text-slate-900" id="testRunTitle">Тестирование</h3>
+              <p class="text-xs text-slate-500 font-medium mt-0.5" id="testRunSubtitle">Вопрос 1 из 10</p>
+            </div>
+            <span id="testRunTimer" class="font-mono font-bold text-red-600 bg-red-50 px-3 py-1 rounded-lg text-sm">00:00</span>
+          </div>
+
+          <!-- Кнопки быстрого перехода по номерам вопросов (1..10) -->
+          <div id="testQuestionPager" class="flex flex-wrap gap-2 py-3 border-b"></div>
+
+          <!-- Сам текущий вопрос с вариантами ответов -->
+          <div id="testRunQuestions" class="flex-1 py-4 overflow-y-auto"></div>
+
+          <!-- Нижняя панель навигации -->
+          <div class="pt-4 border-t flex justify-between items-center">
+            <button type="button" id="btnPrevQ" onclick="stepQuestion(-1)" class="px-4 py-2 border border-slate-300 rounded-lg text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-30">
+              ← Назад
+            </button>
+            <div class="space-x-2">
+              <button type="button" id="btnNextQ" onclick="stepQuestion(1)" class="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-sm">
+                Далее →
+              </button>
+              <button type="button" onclick="finishTest()" class="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-sm">
+                Завершить тест
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    loadMyTests();
+  }
+
+  if (state.tab === 'settings') {
+    const isSuperadmin = state.user && state.user.role === 'superadmin';
+    container.innerHTML = `
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-w-xl">
+        <h2 class="text-lg font-bold text-slate-900 mb-4">${t('nav_settings')}</h2>
+        ${!isSuperadmin ? `<div class="mb-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">Изменение настроек и фирменного бланка доступно только суперадминистратору.</div>` : ''}
+        <fieldset ${!isSuperadmin ? 'disabled' : ''}>
+          <form onsubmit="saveSettingsForm(event)" class="space-y-4">
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Наименование организации (ТОО / АО)</label>
+              <input id="setComp" required class="w-full border p-2.5 rounded-lg text-sm">
+            </div>
+            <div class="border-t pt-4">
+              <h3 class="text-sm font-bold text-slate-900 mb-2">Комиссия (указывается на сертификате)</h3>
+              <div class="space-y-3">
+                <div>
+                  <label class="text-xs font-semibold text-slate-600">Председатель комиссии (ФИО, должность)</label>
+                  <input id="setChair" required class="w-full border p-2.5 rounded-lg text-sm">
+                </div>
+                <div>
+                  <label class="text-xs font-semibold text-slate-600">${t('member2_name')}</label>
+                  <input id="setMember2" class="w-full border p-2.5 rounded-lg text-sm">
+                </div>
+                <div>
+                  <label class="text-xs font-semibold text-slate-600">${t('member3_name')}</label>
+                  <input id="setMember3" class="w-full border p-2.5 rounded-lg text-sm">
+                </div>
+              </div>
+            </div>
+            <div class="border-t pt-4">
+              <h3 class="text-sm font-bold text-slate-900 mb-2">Нумерация протоколов и сертификатов</h3>
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="text-xs font-semibold text-slate-600">Префикс номера протокола</label>
+                  <input id="setProtPrefix" placeholder="напр. П-" class="w-full border p-2.5 rounded-lg text-sm">
+                </div>
+                <div>
+                  <label class="text-xs font-semibold text-slate-600">Следующий номер протокола</label>
+                  <input id="setProtNext" type="number" min="1" class="w-full border p-2.5 rounded-lg text-sm">
+                </div>
+                <div>
+                  <label class="text-xs font-semibold text-slate-600">Префикс номера сертификата</label>
+                  <input id="setCertPrefix" placeholder="напр. СЕРТ-" class="w-full border p-2.5 rounded-lg text-sm">
+                </div>
+                <div>
+                  <label class="text-xs font-semibold text-slate-600">Кол-во цифр в номере сертификата</label>
+                  <input id="setCertDigits" type="number" min="1" max="10" class="w-full border p-2.5 rounded-lg text-sm">
+                </div>
+                <div class="col-span-2">
+                  <label class="text-xs font-semibold text-slate-600">Следующий номер сертификата</label>
+                  <input id="setCertNext" type="number" min="1" class="w-full border p-2.5 rounded-lg text-sm">
+                </div>
+              </div>
+              <p class="text-[11px] text-slate-500 mt-2">Измените "Следующий номер", чтобы продолжить нумерацию с номера из уже существующего бумажного/Excel-реестра. Дальше номера будут присваиваться автоматически.</p>
+            </div>
+            <button type="submit" class="px-5 py-2.5 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить настройки</button>
+          </form>
+          <div class="border-t mt-6 pt-6 space-y-4">
+            <h3 class="text-sm font-bold text-slate-900">Фирменный бланк сертификата</h3>
+            ${['logo', 'stamp', 'signature'].map(kind => `
+              <div>
+                <label class="text-xs font-semibold text-slate-600">${t(kind + '_upload')}</label>
+                <div class="flex items-center gap-2">
+                  <input type="file" id="set_${kind}_file" accept="image/*" class="w-full border p-2 rounded-lg text-sm">
+                  <button type="button" onclick="uploadBrandingFile('${kind}')" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить</button>
+                </div>
+                <div id="set_${kind}_status" class="text-xs text-slate-500 mt-1"></div>
+              </div>
+            `).join('')}
+          </div>
+        </fieldset>
+      </div>
+    `;
+    loadSettingsData();
+  }
+}
+
+// --- DASHBOARD: EXPIRING CERTIFICATES WIDGET ---
+async function loadExpiringWidget() {
+  const div = document.getElementById('expiringList');
+  if (!div) return;
+  try {
+    const list = await api.getExpiring(30);
+    if (!list.length) {
+      div.innerHTML = `<div class="text-sm text-slate-500">${t('expiring_none')}</div>`;
+      return;
+    }
+    const now = new Date();
+    div.innerHTML = list.map(a => {
+      const nextDate = new Date(a.next_test_date);
+      const daysLeft = Math.ceil((nextDate - now) / (1000 * 60 * 60 * 24));
+      const overdue = daysLeft < 0;
+      const today = daysLeft === 0;
+      const badgeClass = overdue ? 'bg-red-100 text-red-800' : daysLeft <= 7 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700';
+      const badgeText = overdue ? `${Math.abs(daysLeft)} ${CURRENT_LANG === 'kz' ? 'күн' : 'дн.'} ${t('overdue')}` : today ? t('expires_today') : `${daysLeft} ${t('days_left')}`;
+      return `
+        <div class="flex flex-wrap items-center justify-between gap-2 p-3 rounded-lg border ${overdue ? 'border-red-200 bg-red-50/40' : 'border-slate-100'}">
+          <div class="min-w-0">
+            <button onclick="openUserProfile(${a.user_id})" class="font-semibold text-slate-900 text-sm hover:text-blue-600 hover:underline text-left">${esc(a.last_name)} ${esc(a.first_name)}</button>
+            <div class="text-xs text-slate-500">${esc(a.object || '—')} / ${esc(a.department || '—')} · ${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-bold px-2.5 py-1 rounded-lg ${badgeClass}">${badgeText}</span>
+            <span class="text-xs text-slate-400">${nextDate.toLocaleDateString('ru-RU')}</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch (e) {
+    div.innerHTML = `<div class="text-sm text-red-600">${t('error_generic')}</div>`;
+  }
+}
+
+// --- USERS LOGIC ---
+async function downloadUsersTemplate() {
+  try {
+    const res = await api.req('/api/users/import-template.xlsx');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'users_import_template.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('Не удалось скачать бланк: ' + e.message);
+  }
+}
+
+async function handleImportFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await api.req('/api/users/import', { method: 'POST', body: fd });
+    let msg = `Импортировано сотрудников: ${res.created}.`;
+    if (res.historyCreated) msg += ` Внесено записей об обучении: ${res.historyCreated}.`;
+    if (res.skipped) msg += ` Пропущено: ${res.skipped}.`;
+    if (res.errors && res.errors.length) msg += '\n\n' + res.errors.slice(0, 20).join('\n');
+    alert(msg);
+  } catch (e) {
+    alert('Ошибка импорта: ' + e.message);
+  }
+  input.value = '';
+  loadUsersList();
+}
+
+let usersFilterTimeout = null;
+function onUsersFilterChange() {
+  state.usersFilter.q = document.getElementById('uFilterQ').value;
+  state.usersFilter.object = document.getElementById('uFilterObject').value;
+  state.usersFilter.department = document.getElementById('uFilterDept').value;
+  state.usersFilter.role = document.getElementById('uFilterRole').value;
+  clearTimeout(usersFilterTimeout);
+  usersFilterTimeout = setTimeout(loadUsersList, 250);
+}
+
+async function populateUsersMetaFilters() {
+  try {
+    const meta = await api.getUsersMeta();
+    state.meta = meta;
+    const objSel = document.getElementById('uFilterObject');
+    const depSel = document.getElementById('uFilterDept');
+    if (objSel) objSel.innerHTML = `<option value="">${t('all_objects')}</option>` + meta.objects.map(o => `<option value="${esc(o)}" ${state.usersFilter.object === o ? 'selected' : ''}>${esc(o)}</option>`).join('');
+    if (depSel) depSel.innerHTML = `<option value="">${t('all_departments')}</option>` + meta.departments.map(d => `<option value="${esc(d)}" ${state.usersFilter.department === d ? 'selected' : ''}>${esc(d)}</option>`).join('');
+  } catch (e) {}
+}
+
+async function loadUsersList() {
+  const roleFilter = document.getElementById('uFilterRole');
+  if (roleFilter) roleFilter.value = state.usersFilter.role;
+  const users = await api.getUsers(state.usersFilter);
+  state.users = users.filter(u => u.role !== "superadmin");
+  const tbody = document.getElementById('usersTable');
+  if (!tbody) return;
+  if (!state.users.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-slate-400">${t('no_data')}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = state.users.map(u => `
+    <tr class="hover:bg-slate-50">
+      <td class="px-4 py-3 font-medium text-slate-900">
+        <button onclick="openUserProfile(${u.id})" class="hover:text-blue-600 hover:underline text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>
+      </td>
+      <td class="px-4 py-3 font-mono text-slate-600">${u.login ? esc(u.login) : '<span class="text-slate-400 italic font-sans">не назначен</span>'}</td>
+      <td class="px-4 py-3 text-slate-600">${esc(u.object || '—')} / ${esc(u.department || '—')}</td>
+      <td class="px-4 py-3 text-slate-600">${esc(u.position || '—')}</td>
+      <td class="px-4 py-3"><span class="text-xs font-semibold px-2 py-0.5 rounded ${u.role === 'superadmin' ? 'bg-purple-100 text-purple-700' : u.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-700'}">${esc(u.role)}</span></td>
+      <td class="px-4 py-3 text-right space-x-2">
+        <button onclick="editUser(${u.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>
+        <button onclick="delUser(${u.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
+      </td>
+    </tr>
+  `).join('');
+  populateUsersMetaFilters();
+}
+
+function openUserModal(u = null) {
+  document.getElementById('userId').value = u ? u.id : '';
+  document.getElementById('uLastName').value = u ? u.last_name : '';
+  document.getElementById('uFirstName').value = u ? u.first_name : '';
+  document.getElementById('uObject').value = u ? u.object : '';
+  document.getElementById('uDept').value = u ? u.department : '';
+  document.getElementById('uPos').value = u ? u.position : '';
+  document.getElementById('uLogin').value = u ? u.login : '';
+  document.getElementById('uPass').value = '';
+  document.getElementById('uCertNumber').value = u ? (u.permanent_certificate_number || '') : '';
+  document.getElementById('uRole').value = u ? u.role : 'employee';
+  const roleWrapper = document.getElementById('roleFieldWrapper');
+  if (roleWrapper) {
+    if (state.user && state.user.role === 'superadmin') {
+      roleWrapper.classList.remove('hidden');
+    } else {
+      roleWrapper.classList.add('hidden');
+    }
+  }
+  document.getElementById('userModalTitle').textContent = u ? 'Редактировать сотрудника' : 'Добавить сотрудника';
+  document.getElementById('userModal').classList.remove('hidden');
+}
+
+function closeUserModal() {
+  document.getElementById('userModal').classList.add('hidden');
+}
+
+function editUser(id) {
+  const u = state.users.find(x => x.id === id);
+  if (u) openUserModal(u);
+}
+
+async function delUser(id) {
+  if (!confirm('Удалить пользователя?')) return;
+  await api.deleteUser(id);
+  loadUsersList();
+}
+
+async function saveUserForm(e) {
+  e.preventDefault();
+  const id = document.getElementById('userId').value;
+  const data = {
+    last_name: document.getElementById('uLastName').value.trim(),
+    first_name: document.getElementById('uFirstName').value.trim(),
+    object: document.getElementById('uObject').value.trim(),
+    department: document.getElementById('uDept').value.trim(),
+    position: document.getElementById('uPos').value.trim(),
+    login: document.getElementById('uLogin').value.trim(),
+    role: document.getElementById('uRole').value,
+    permanent_certificate_number: document.getElementById('uCertNumber').value.trim()
+  };
+  const pass = document.getElementById('uPass').value;
+  if (pass) data.password = pass;
+  await api.saveUser(data, id);
+  closeUserModal();
+  loadUsersList();
+}
+
+// --- COURSES LOGIC ---
+async function loadCoursesList() {
+  const courses = await api.getCourses();
+  state.courses = courses;
+  const div = document.getElementById('coursesList');
+  if (!div) return;
+  div.innerHTML = courses.map(c => `
+    <div class="border border-slate-200 p-4 rounded-xl hover:shadow-sm transition bg-white flex flex-col justify-between">
+      <div>
+        <div class="flex justify-between items-start">
+          <h4 class="font-bold text-slate-900 text-base">${esc(CURRENT_LANG === 'kz' ? c.title_kz : c.title_ru)}</h4>
+          <span class="text-xs font-semibold bg-blue-50 text-blue-700 px-2 py-0.5 rounded">${c.time_limit_minutes} мин | ${c.pass_score_percent}%</span>
+        </div>
+        <p class="text-xs text-slate-500 mt-2">Вопросов в базе: ${c.questions_count || 0}</p>
+        <div class="flex flex-wrap gap-1.5 mt-2">
+          ${(c.material_pdf_path_ru || c.material_pdf_path) ? '<span class="text-[11px] font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">📄 RU материалы</span>' : '<span class="text-[11px] font-semibold bg-amber-50 text-amber-600 px-2 py-0.5 rounded">📄 нет RU материалов</span>'}
+          ${c.material_pdf_path_kz ? '<span class="text-[11px] font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">📄 KZ материалы</span>' : '<span class="text-[11px] font-semibold bg-amber-50 text-amber-600 px-2 py-0.5 rounded">📄 нет KZ материалов</span>'}
+          ${(c.video_path_ru || c.video_url_ru || c.video_path || c.video_url) ? '<span class="text-[11px] font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">🎬 RU видео</span>' : '<span class="text-[11px] font-semibold bg-slate-100 text-slate-400 px-2 py-0.5 rounded">RU видео не добавлено</span>'}
+          ${(c.video_path_kz || c.video_url_kz) ? '<span class="text-[11px] font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">🎬 KZ видео</span>' : '<span class="text-[11px] font-semibold bg-slate-100 text-slate-400 px-2 py-0.5 rounded">KZ видео не добавлено</span>'}
+        </div>
+      </div>
+      <div class="mt-4 pt-3 border-t flex justify-end space-x-3 text-xs font-semibold">
+        <button onclick="openTestsModal(${c.id})" class="text-emerald-600 hover:underline">Тесты</button>
+        <button onclick="openCourseModal(${c.id})" class="text-blue-600 hover:underline">Изменить</button>
+        <button onclick="delCourse(${c.id})" class="text-red-600 hover:underline">Удалить</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function openCourseModal(id) {
+  ['Ru', 'Kz'].forEach(L => {
+    document.getElementById('cMaterialStatus' + L).textContent = '';
+    document.getElementById('cMaterialFile' + L).value = '';
+    document.getElementById('cVideoStatus' + L).textContent = '';
+    document.getElementById('cVideoFile' + L).value = '';
+  });
+  if (id) {
+    const { course } = await api.getCourse(id);
+    document.getElementById('courseId').value = course.id;
+    document.getElementById('cTitleRu').value = course.title_ru || '';
+    document.getElementById('cTitleKz').value = course.title_kz || '';
+    document.getElementById('cDescRu').value = course.description_ru || '';
+    document.getElementById('cDescKz').value = course.description_kz || '';
+    document.getElementById('cTime').value = course.time_limit_minutes;
+    document.getElementById('cPass').value = course.pass_score_percent;
+    document.getElementById('cValid').value = course.validity_months;
+    // video_url_ru/kz — новые поля; video_url — старое поле для курсов, созданных до этого обновления
+    document.getElementById('cVideoRu').value = course.video_url_ru || course.video_url || '';
+    document.getElementById('cVideoKz').value = course.video_url_kz || '';
+    renderMaterialStatus('ru', course.material_pdf_path_ru || course.material_pdf_path);
+    renderMaterialStatus('kz', course.material_pdf_path_kz);
+    renderVideoStatus('ru', course.video_path_ru || course.video_path);
+    renderVideoStatus('kz', course.video_path_kz);
+    document.getElementById('courseModalTitle').textContent = 'Редактировать курс';
+  } else {
+    document.getElementById('courseId').value = '';
+    document.getElementById('cTitleRu').value = '';
+    document.getElementById('cTitleKz').value = '';
+    document.getElementById('cDescRu').value = '';
+    document.getElementById('cDescKz').value = '';
+    document.getElementById('cTime').value = 20;
+    document.getElementById('cPass').value = 80;
+    document.getElementById('cValid').value = 12;
+    document.getElementById('cVideoRu').value = '';
+    document.getElementById('cVideoKz').value = '';
+    renderMaterialStatus('ru', null);
+    renderMaterialStatus('kz', null);
+    renderVideoStatus('ru', null);
+    renderVideoStatus('kz', null);
+    document.getElementById('courseModalTitle').textContent = 'Новый курс';
+  }
+  document.getElementById('courseModal').classList.remove('hidden');
+}
+
+function renderMaterialStatus(lang, path) {
+  const el = document.getElementById('cMaterialStatus' + (lang === 'kz' ? 'Kz' : 'Ru'));
+  if (!el) return;
+  el.innerHTML = path
+    ? `Текущий файл: <button type="button" onclick="openMediaViewer('${jsAttrEsc(path)}', 'Материалы курса')" class="text-blue-600 underline">открыть</button> · <button type="button" onclick="deleteCourseMaterial('${lang}')" class="text-red-600 underline">удалить</button>`
+    : 'Материалы пока не загружены.';
+}
+
+function renderVideoStatus(lang, path) {
+  const el = document.getElementById('cVideoStatus' + (lang === 'kz' ? 'Kz' : 'Ru'));
+  if (!el) return;
+  el.innerHTML = path
+    ? `Текущий видеофайл: <button type="button" onclick="openMediaViewer('${jsAttrEsc(path)}', 'Видео')" class="text-blue-600 underline">открыть</button> · <button type="button" onclick="deleteCourseVideo('${lang}')" class="text-red-600 underline">удалить</button>`
+    : 'Видеофайл не загружен (можно указать только ссылку выше или оставить пустым).';
+}
+
+async function saveCourseForm(e) {
+  e.preventDefault();
+  const id = document.getElementById('courseId').value || undefined;
+  const data = {
+    title_ru: document.getElementById('cTitleRu').value.trim(),
+    title_kz: document.getElementById('cTitleKz').value.trim(),
+    description_ru: document.getElementById('cDescRu').value.trim(),
+    description_kz: document.getElementById('cDescKz').value.trim(),
+    time_limit_minutes: parseInt(document.getElementById('cTime').value) || 20,
+    pass_score_percent: parseInt(document.getElementById('cPass').value) || 80,
+    validity_months: parseInt(document.getElementById('cValid').value) || 12,
+    video_url_ru: document.getElementById('cVideoRu').value.trim(),
+    video_url_kz: document.getElementById('cVideoKz').value.trim()
+  };
+  const saved = await api.saveCourse(data, id);
+  const courseId = id || saved.id;
+  const materialFileRu = document.getElementById('cMaterialFileRu').files[0];
+  if (materialFileRu) await api.uploadMaterial(courseId, 'ru', materialFileRu);
+  const materialFileKz = document.getElementById('cMaterialFileKz').files[0];
+  if (materialFileKz) await api.uploadMaterial(courseId, 'kz', materialFileKz);
+  const videoFileRu = document.getElementById('cVideoFileRu').files[0];
+  if (videoFileRu) await api.uploadVideo(courseId, 'ru', videoFileRu);
+  const videoFileKz = document.getElementById('cVideoFileKz').files[0];
+  if (videoFileKz) await api.uploadVideo(courseId, 'kz', videoFileKz);
+  document.getElementById('courseModal').classList.add('hidden');
+  loadCoursesList();
+}
+
+async function uploadCourseMaterial(lang) {
+  const id = document.getElementById('courseId').value;
+  const file = document.getElementById('cMaterialFile' + (lang === 'kz' ? 'Kz' : 'Ru')).files[0];
+  if (!id) { alert('Сначала сохраните курс, затем загрузите материалы.'); return; }
+  if (!file) { alert('Выберите файл (PDF, PPT или PPTX).'); return; }
+  try {
+    const res = await api.uploadMaterial(id, lang, file);
+    renderMaterialStatus(lang, res['material_pdf_path_' + lang]);
+    loadCoursesList();
+  } catch (e) {
+    alert('Не удалось загрузить файл: ' + e.message);
+  }
+}
+
+async function deleteCourseMaterial(lang) {
+  const id = document.getElementById('courseId').value;
+  if (!id || !confirm('Удалить материалы курса?')) return;
+  await api.deleteMaterial(id, lang);
+  renderMaterialStatus(lang, null);
+  loadCoursesList();
+}
+
+async function uploadCourseVideo(lang) {
+  const id = document.getElementById('courseId').value;
+  const file = document.getElementById('cVideoFile' + (lang === 'kz' ? 'Kz' : 'Ru')).files[0];
+  if (!id) { alert('Сначала сохраните курс, затем загрузите видео.'); return; }
+  if (!file) { alert('Выберите видеофайл.'); return; }
+  try {
+    const res = await api.uploadVideo(id, lang, file);
+    renderVideoStatus(lang, res['video_path_' + lang]);
+    loadCoursesList();
+  } catch (e) {
+    alert('Не удалось загрузить видео: ' + e.message);
+  }
+}
+
+async function deleteCourseVideo(lang) {
+  const id = document.getElementById('courseId').value;
+  if (!id || !confirm('Удалить видео курса (файл и ссылку)?')) return;
+  await api.deleteVideo(id, lang);
+  document.getElementById('cVideo' + (lang === 'kz' ? 'Kz' : 'Ru')).value = '';
+  renderVideoStatus(lang, null);
+  loadCoursesList();
+}
+
+async function delCourse(id) {
+  if (!confirm('Удалить курс?')) return;
+  await api.deleteCourse(id);
+  loadCoursesList();
+}
+
+// --- TESTS (QUESTIONS BY VARIANT) LOGIC ---
+// Тестовая база курса организована как до 10 вариантов (билетов) по 10 вопросов,
+// по 4 варианта ответа в каждом. Это позволяет выдавать сотрудникам разные билеты.
+const TEST_VARIANTS_COUNT = 10;
+let currentQuestionsCourseId = null;
+let currentTestVariant = 1;
+let allCourseQuestions = [];
+
+async function openTestsModal(courseId) {
+  currentQuestionsCourseId = courseId;
+  currentTestVariant = 1;
+  resetQuestionForm();
+  document.getElementById('testImportStatus').innerHTML = '';
+  document.getElementById('testImportFile').value = '';
+  await loadQuestionsForCourse();
+  document.getElementById('questionsModal').classList.remove('hidden');
+}
+// Сохраняем старое имя как алиас на случай, если где-то ещё осталась ссылка на него
+function openQuestionsModal(courseId) { return openTestsModal(courseId); }
+
+async function loadQuestionsForCourse() {
+  const { course, questions } = await api.getCourse(currentQuestionsCourseId);
+  document.getElementById('questionsModalTitle').textContent = 'Тесты курса: ' + course.title_ru;
+  allCourseQuestions = questions;
+  renderVariantTabs();
+  renderVariantQuestions();
+}
+
+function renderVariantTabs() {
+  const div = document.getElementById('variantTabs');
+  const counts = {};
+  allCourseQuestions.forEach(q => { counts[q.variant_number] = (counts[q.variant_number] || 0) + 1; });
+  div.innerHTML = Array.from({ length: TEST_VARIANTS_COUNT }, (_, i) => i + 1).map(v => {
+    const count = counts[v] || 0;
+    const complete = count >= 10;
+    const active = v === currentTestVariant;
+    const colorClasses = active
+      ? 'bg-blue-600 text-white'
+      : (complete ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-slate-100 text-slate-600 hover:bg-slate-200');
+    return `<button type="button" onclick="selectTestVariant(${v})" class="px-3 py-1.5 rounded-lg text-xs font-semibold ${colorClasses}">Билет ${v} (${count}/10)</button>`;
+  }).join('');
+}
+
+function selectTestVariant(v) {
+  currentTestVariant = v;
+  resetQuestionForm();
+  renderVariantTabs();
+  renderVariantQuestions();
+}
+
+function renderVariantQuestions() {
+  const container = document.getElementById('questionsList');
+  if (!container) return;
+  const list = allCourseQuestions.filter(q => (q.variant_number || 1) === currentTestVariant);
+
+  if (!list.length) {
+    container.innerHTML = '<div class="text-sm text-slate-400 py-4 text-center">В билете №' + currentTestVariant + ' пока нет вопросов. Добавьте первый ниже или загрузите тест из Excel.</div>';
+    return;
+  }
+
+  container.innerHTML = list.map((q, idx) => {
+    let opts = [];
+    if (Array.isArray(q.options_ru)) {
+      opts = q.options_ru;
+    } else {
+      try { opts = JSON.parse(q.options_ru || '[]'); } catch (e) { opts = []; }
+    }
+
+    return `
+    <div class="border rounded-lg p-3 bg-slate-50">
+      <div class="flex justify-between items-start">
+        <div class="text-sm font-semibold text-slate-900">${idx + 1}. ${esc(q.question_ru)}</div>
+        <div class="space-x-2 text-xs font-semibold whitespace-nowrap">
+          <button type="button" onclick="editQuestionById(${q.id})" class="text-blue-600 hover:underline">Изменить</button>
+          <button type="button" onclick="deleteQuestionRow(${q.id})" class="text-red-600 hover:underline">Удалить</button>
+        </div>
+      </div>
+      <ul class="text-xs text-slate-600 mt-1 list-disc list-inside">
+        ${opts.map((o, i) => `<li class="${i === q.correct_index ? 'text-emerald-700 font-semibold' : ''}">${esc(o)}${i === q.correct_index ? ' ✓' : ''}</li>`).join('')}
+      </ul>
+    </div>
+    `;
+  }).join('');
+}
+
+function resetQuestionForm() {
+  document.getElementById('qId').value = '';
+  document.getElementById('qVariant').value = currentTestVariant;
+  document.getElementById('qVariantLabel').textContent = currentTestVariant;
+  document.getElementById('qTextRu').value = '';
+  document.getElementById('qTextKz').value = '';
+  for (let i = 0; i < 4; i++) {
+    document.getElementById('qOpt' + i + 'Ru').value = '';
+    document.getElementById('qOpt' + i + 'Kz').value = '';
+  }
+  const r0 = document.getElementById('qCorrectR0');
+  if (r0) r0.checked = true;
+}
+
+function editQuestionById(id) {
+  const q = (allCourseQuestions || []).find(item => Number(item.id) === Number(id));
+  if (!q) return;
+
+  let optsRu = [], optsKz = [];
+  try { optsRu = Array.isArray(q.options_ru) ? q.options_ru : JSON.parse(q.options_ru || '[]'); } catch (e) {}
+  try { optsKz = Array.isArray(q.options_kz) ? q.options_kz : JSON.parse(q.options_kz || '[]'); } catch (e) {}
+
+  document.getElementById('qId').value = q.id;
+  document.getElementById('qVariant').value = q.variant_number || currentTestVariant;
+  document.getElementById('qVariantLabel').textContent = q.variant_number || currentTestVariant;
+  document.getElementById('qTextRu').value = q.question_ru || '';
+  document.getElementById('qTextKz').value = q.question_kz || '';
+
+  for (let i = 0; i < 4; i++) {
+    document.getElementById('qOpt' + i + 'Ru').value = optsRu[i] || '';
+    document.getElementById('qOpt' + i + 'Kz').value = optsKz[i] || '';
+  }
+
+  const radio = document.getElementById('qCorrectR' + (q.correct_index ?? 0));
+  if (radio) radio.checked = true;
+
+  // Плавный скролл к форме вопроса
+  document.getElementById('qTextRu')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+// Алиас для обратной совместимости
+function editQuestionRow(q) {
+  if (q && q.id) editQuestionById(q.id);
+}
+
+async function saveQuestionForm(e) {
+  e.preventDefault();
+   const qid = document.getElementById('qId').value;
+  const currentCount = (allCourseQuestions || []).filter(q => Number(q.variant_number) === Number(currentTestVariant)).length;
+  if (!qid && currentCount >= 10) {
+    alert('В одном билете не может быть больше 10 вопросов. Удалите или измените существующие.');
+    return;
+  }
+  const textRu = document.getElementById('qTextRu').value.trim();
+  let textKz = document.getElementById('qTextKz').value.trim();
+
+  if (!textRu) {
+    alert('Пожалуйста, введите текст вопроса (RU).');
+    return;
+  }
+  if (!textKz) textKz = textRu;
+
+  const optsRu = [0, 1, 2, 3].map(i => document.getElementById('qOpt' + i + 'Ru').value.trim());
+  let optsKz = [0, 1, 2, 3].map(i => document.getElementById('qOpt' + i + 'Kz').value.trim());
+
+  if (optsRu.some(o => !o)) {
+    alert('Заполните все 4 варианта ответа (RU).');
+    return;
+  }
+  optsKz = optsKz.map((kz, i) => kz || optsRu[i]);
+
+  const correctRadio = document.querySelector('input[name="qCorrectRadio"]:checked');
+  if (!correctRadio) {
+    alert('Отметьте точку правильного ответа слева от одного из вариантов.');
+    return;
+  }
+
+  const data = {
+    question_ru: textRu,
+    question_kz: textKz,
+    options_ru: optsRu,
+    options_kz: optsKz,
+    correct_index: parseInt(correctRadio.value, 10),
+    variant_number: parseInt(document.getElementById('qVariant').value, 10) || currentTestVariant
+  };
+
+  try {
+    if (qid) {
+      await api.updateQuestion(currentQuestionsCourseId, qid, data);
+    } else {
+      await api.addQuestion(currentQuestionsCourseId, data);
+    }
+    resetQuestionForm();
+    await loadQuestionsForCourse();
+    loadCoursesList();
+  } catch (err) {
+    alert('Ошибка сохранения вопроса: ' + (err.message || 'Ошибка сервера'));
+  }
+}
+
+async function deleteQuestionRow(qid) {
+  if (!confirm('Удалить вопрос?')) return;
+  try {
+    await api.deleteQuestion(currentQuestionsCourseId, qid);
+    await loadQuestionsForCourse();
+    loadCoursesList();
+  } catch (err) {
+    alert('Ошибка при удалении: ' + (err.message || 'Ошибка сервера'));
+  }
+}
+
+// --- Автоматическая загрузка теста из Excel ---
+async function downloadTestTemplate() {
+  try {
+    const res = await api.req('/api/courses/questions-template.xlsx');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'test_template.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('Не удалось скачать шаблон: ' + e.message);
+  }
+}
+
+async function importTestFile() {
+  const fileInput = document.getElementById('testImportFile');
+  const file = fileInput.files[0];
+  const mode = document.getElementById('testImportMode').value;
+  const statusEl = document.getElementById('testImportStatus');
+  if (!file) { alert('Выберите файл Excel (.xlsx) для загрузки.'); return; }
+  if (mode === 'replace' && !confirm('Вся текущая база тестов этого курса будет удалена и заменена содержимым файла. Продолжить?')) return;
+
+  statusEl.innerHTML = '<span class="text-slate-500">Загрузка и проверка файла...</span>';
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await api.req('/api/courses/' + currentQuestionsCourseId + '/questions/import?mode=' + mode, { method: 'POST', body: fd });
+    let html = `<span class="text-emerald-700 font-semibold">Загружено вопросов: ${res.imported}</span>`;
+    if (res.skipped) {
+      html += `<div class="text-amber-600 mt-1">Пропущено строк: ${res.skipped}</div>`;
+      html += `<ul class="list-disc list-inside text-amber-600">${res.errors.slice(0, 15).map(e => `<li>${esc(e)}</li>`).join('')}</ul>`;
+      if (res.errors.length > 15) html += `<div class="text-amber-600">...и ещё ${res.errors.length - 15}</div>`;
+    }
+    statusEl.innerHTML = html;
+    fileInput.value = '';
+    await loadQuestionsForCourse();
+    loadCoursesList();
+  } catch (e) {
+    statusEl.innerHTML = `<span class="text-red-600">Ошибка загрузки: ${esc(e.message)}</span>`;
+  }
+}
+
+// --- ASSIGNMENTS LOGIC ---
+let assignFilterTimeout = null;
+function onAssignFilterChange() {
+  state.assignFilter.q = document.getElementById('aFilterQ').value;
+  state.assignFilter.object = document.getElementById('aFilterObject').value;
+  state.assignFilter.department = document.getElementById('aFilterDept').value;
+  state.assignFilter.status = document.getElementById('aFilterStatus').value;
+  state.assignFilter.date_from = document.getElementById('aFilterFrom').value;
+  state.assignFilter.date_to = document.getElementById('aFilterTo').value;
+  clearTimeout(assignFilterTimeout);
+  assignFilterTimeout = setTimeout(loadAssignmentsList, 250);
+}
+
+async function populateAssignMetaFilters() {
+  try {
+    const meta = await api.getUsersMeta();
+    const objSel = document.getElementById('aFilterObject');
+    const depSel = document.getElementById('aFilterDept');
+    if (objSel) objSel.innerHTML = `<option value="">${t('all_objects')}</option>` + meta.objects.map(o => `<option value="${esc(o)}" ${state.assignFilter.object === o ? 'selected' : ''}>${esc(o)}</option>`).join('');
+    if (depSel) depSel.innerHTML = `<option value="">${t('all_departments')}</option>` + meta.departments.map(d => `<option value="${esc(d)}" ${state.assignFilter.department === d ? 'selected' : ''}>${esc(d)}</option>`).join('');
+  } catch (e) {}
+}
+
+async function loadAssignmentsList() {
+  const statusSel = document.getElementById('aFilterStatus');
+  if (statusSel) statusSel.value = state.assignFilter.status;
+  const fromInput = document.getElementById('aFilterFrom');
+  if (fromInput) fromInput.value = state.assignFilter.date_from;
+  const toInput = document.getElementById('aFilterTo');
+  if (toInput) toInput.value = state.assignFilter.date_to;
+
+  const list = await api.getAssignments(state.assignFilter);
+  state.assignments = list;
+  const tbody = document.getElementById('assignTable');
+  if (!tbody) return;
+  if (!list.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-slate-400">${t('no_data')}</td></tr>`;
+  } else {
+    tbody.innerHTML = list.map(a => `
+      <tr class="hover:bg-slate-50">
+        <td class="px-4 py-3 font-medium">
+          <button onclick="openUserProfile(${a.user_id})" class="hover:text-blue-600 hover:underline text-left">${esc(a.last_name)} ${esc(a.first_name)}</button>
+          <br><span class="text-xs text-slate-400">${esc(a.position || '')}</span>
+        </td>
+        <td class="px-4 py-3">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</td>
+        <td class="px-4 py-3 text-xs text-slate-600">№ ${esc(a.protocol_number)}<br>${esc(a.protocol_date)}${a.test_date ? `<br><span class="text-slate-400">${t('test_date')}: ${new Date(a.test_date).toLocaleDateString('ru-RU')}</span>` : ''}</td>
+        <td class="px-4 py-3">
+          <span class="text-xs font-bold px-2 py-1 rounded ${a.status === 'passed' ? 'bg-emerald-100 text-emerald-800' : a.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}">
+            ${a.status === 'passed' ? 'СДАЛ' : a.status === 'failed' ? 'НЕ СДАЛ' : 'НАЗНАЧЕН'}
+          </span>
+        </td>
+        <td class="px-4 py-3 font-bold">${a.score_percent !== null ? a.score_percent + '%' : '—'}</td>
+        <td class="px-4 py-3 text-right space-x-2">
+          ${a.status === 'passed' && a.certificate_number ? `<a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="text-blue-600 hover:underline text-xs font-semibold">Сертификат</a>` : ''}
+          ${a.status === 'failed' ? `<button onclick="allowRetake(${a.id})" class="text-amber-600 hover:underline text-xs">Пересдача</button>` : ''}
+          <button onclick="delAssign(${a.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
+        </td>
+      </tr>
+    `).join('');
+  }
+  populateAssignMetaFilters();
+}
+
+let asAllEmployees = [];
+let asSelectedIds = new Set();
+
+async function openAssignModal() {
+  const [allUsers, courses] = await Promise.all([api.getUsers(), api.getCourses()]);
+  asAllEmployees = allUsers.filter(u => u.role === 'employee');
+  asSelectedIds = new Set();
+
+  const cSel = document.getElementById('asCourseId');
+  cSel.innerHTML = courses.map(c => `<option value="${c.id}">${esc(c.title_ru)}</option>`).join('');
+
+  // Фильтры по объекту/отделу для списка сотрудников
+  const objects = [...new Set(asAllEmployees.map(u => u.object).filter(Boolean))].sort();
+  const departments = [...new Set(asAllEmployees.map(u => u.department).filter(Boolean))].sort();
+  document.getElementById('asFilterObject').innerHTML = `<option value="">${t('all_objects')}</option>` + objects.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('');
+  document.getElementById('asFilterDept').innerHTML = `<option value="">${t('all_departments')}</option>` + departments.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('');
+  document.getElementById('asFilterQ').value = '';
+  document.getElementById('asHistorical').checked = false;
+  document.getElementById('asHistoricalFields').classList.add('hidden');
+  document.getElementById('asTestDate').value = '';
+  document.getElementById('asTestDate').required = false;
+  document.getElementById('asNextTestDate').value = '';
+  document.getElementById('asScorePercent').value = '';
+
+  document.getElementById('asProtDate').value = toLocalDateStr(new Date());
+  try {
+    const nums = await api.getLastNumbers();
+    document.getElementById('asProtNum').value = nums.next_protocol_number || '1';
+    const certHint = document.getElementById('asNextCertHint');
+    if (certHint) certHint.textContent = nums.next_certificate_number ? `${t('hint_next_cert')}: ${nums.next_certificate_number}` : '';
+  } catch (e) {
+    document.getElementById('asProtNum').value = '1';
+  }
+
+  // Если сегодня действует открытый протокол (вкладка "Протоколы"), предупреждаем
+  // администратора: итоговый номер будет присвоен автоматически при сдаче теста
+  // сотрудником в период действия этого протокола, независимо от того, что введено ниже.
+  const activeHint = document.getElementById('asActiveProtocolHint');
+  if (activeHint) {
+    activeHint.textContent = '';
+    try {
+      const active = await api.getActiveProtocols();
+      if (active.length) {
+        const p = active[0];
+        activeHint.textContent = `Сейчас открыт протокол № ${p.protocol_number} (до ${fmtDate(p.close_date)}) — если сотрудник сдаст тест сегодня, ему автоматически будет присвоен именно этот номер.`;
+      }
+    } catch (e) {}
+  }
+
+  renderAssignEmployeeList();
+  document.getElementById('assignModal').classList.remove('hidden');
+}
+
+function renderAssignEmployeeList() {
+  const q = (document.getElementById('asFilterQ').value || '').toLowerCase();
+  const obj = document.getElementById('asFilterObject').value;
+  const dept = document.getElementById('asFilterDept').value;
+
+  const filtered = asAllEmployees.filter(u => {
+    if (obj && u.object !== obj) return false;
+    if (dept && u.department !== dept) return false;
+    if (q) {
+      const hay = `${u.last_name} ${u.first_name} ${u.login}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const div = document.getElementById('asEmployeeList');
+  if (!filtered.length) {
+    div.innerHTML = `<div class="p-3 text-xs text-slate-400 text-center">${t('no_data')}</div>`;
+  } else {
+    div.innerHTML = filtered.map(u => `
+      <label class="flex items-center gap-2 px-3 py-2 text-sm hover:bg-slate-50 cursor-pointer">
+        <input type="checkbox" value="${u.id}" ${asSelectedIds.has(u.id) ? 'checked' : ''} onchange="toggleAsEmployee(${u.id}, this.checked)" class="rounded text-blue-600">
+        <span class="flex-1">${esc(u.last_name)} ${esc(u.first_name)}</span>
+        <span class="text-xs text-slate-400">${esc(u.object || '—')}</span>
+      </label>
+    `).join('');
+  }
+  updateAsSelectedCount();
+}
+
+function toggleAsEmployee(id, checked) {
+  if (checked) asSelectedIds.add(id); else asSelectedIds.delete(id);
+  updateAsSelectedCount();
+}
+
+function asSelectAll(select) {
+  const q = (document.getElementById('asFilterQ').value || '').toLowerCase();
+  const obj = document.getElementById('asFilterObject').value;
+  const dept = document.getElementById('asFilterDept').value;
+  const filtered = asAllEmployees.filter(u => {
+    if (obj && u.object !== obj) return false;
+    if (dept && u.department !== dept) return false;
+    if (q) {
+      const hay = `${u.last_name} ${u.first_name} ${u.login}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  filtered.forEach(u => select ? asSelectedIds.add(u.id) : asSelectedIds.delete(u.id));
+  renderAssignEmployeeList();
+}
+
+function updateAsSelectedCount() {
+  const span = document.getElementById('asSelectedCount');
+  if (span) span.textContent = asSelectedIds.size ? `(${asSelectedIds.size})` : '';
+}
+
+function onAsHistoricalToggle() {
+  const on = document.getElementById('asHistorical').checked;
+  document.getElementById('asHistoricalFields').classList.toggle('hidden', !on);
+  document.getElementById('asTestDate').required = on;
+}
+
+async function submitAssignForm(e) {
+  e.preventDefault();
+  if (asSelectedIds.size === 0) {
+    alert('Выберите хотя бы одного сотрудника.');
+    return;
+  }
+  const historical = document.getElementById('asHistorical').checked;
+  if (historical && !document.getElementById('asTestDate').value) {
+    alert('Укажите дату прохождения для исторической записи.');
+    return;
+  }
+  const data = {
+    user_ids: [...asSelectedIds],
+    course_id: document.getElementById('asCourseId').value,
+    protocol_number: document.getElementById('asProtNum').value.trim(),
+    protocol_date: document.getElementById('asProtDate').value
+  };
+  if (historical) {
+    data.historical = true;
+    data.test_date = document.getElementById('asTestDate').value;
+    data.next_test_date = document.getElementById('asNextTestDate').value || undefined;
+    data.score_percent = document.getElementById('asScorePercent').value || undefined;
+  }
+  const res = await api.createAssignmentsBulk(data);
+  document.getElementById('assignModal').classList.add('hidden');
+  if (res.skipped) {
+    alert(`Назначено: ${res.created}. Пропущено (некорректный id): ${res.skipped}.`);
+  }
+  loadAssignmentsList();
+}
+
+async function allowRetake(id) {
+  await api.allowRetake(id);
+  loadAssignmentsList();
+}
+
+async function delAssign(id) {
+  if (!confirm('Удалить назначение?')) return;
+  await api.deleteAssignment(id);
+  loadAssignmentsList();
+}
+
+// --- ПРОТОКОЛЫ (открытие/закрытие, п.1 и п.4) ---
+function fmtDate(d) {
+  if (!d) return '—';
+  // Поле приходит как YYYY-MM-DD (DATE в postgres) — просто переставляем местами
+  const s = String(d).slice(0, 10);
+  const parts = s.split('-');
+  return parts.length === 3 ? `${parts[2]}.${parts[1]}.${parts[0]}` : s;
+}
+
+async function loadProtocolsList() {
+  const tbody = document.getElementById('protocolsTable');
+  if (!tbody) return;
+  try {
+    const list = await api.getProtocols();
+    state.protocols = list;
+    if (!list.length) {
+      tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-slate-400">Пока нет ни одного протокола</td></tr>`;
+      return;
+    }
+    const todayStr = toLocalDateStr(new Date());
+    tbody.innerHTML = list.map(p => {
+      const isActiveNow = p.status === 'open' && String(p.open_date).slice(0,10) <= todayStr && todayStr <= String(p.close_date).slice(0,10);
+      return `
+      <tr class="hover:bg-slate-50">
+        <td class="px-4 py-3 font-bold text-slate-900">№ ${esc(p.protocol_number)}</td>
+        <td class="px-4 py-3 text-slate-600">${fmtDate(p.open_date)}</td>
+        <td class="px-4 py-3 text-slate-600">${fmtDate(p.close_date)}</td>
+        <td class="px-4 py-3">
+          <span class="text-xs font-bold px-2 py-1 rounded ${p.status === 'open' ? (isActiveNow ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800') : 'bg-slate-100 text-slate-600'}">
+            ${p.status === 'open' ? (isActiveNow ? 'ОТКРЫТ (действует сегодня)' : 'ОТКРЫТ') : 'ЗАКРЫТ'}
+          </span>
+        </td>
+        <td class="px-4 py-3 text-slate-600">${p.assignments_count || 0}</td>
+        <td class="px-4 py-3 text-right space-x-2 whitespace-nowrap">
+          <button onclick="editProtocol(${p.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>
+          ${p.status === 'open'
+            ? `<button onclick="closeProtocolAction(${p.id})" class="text-amber-600 hover:underline text-xs">Закрыть</button>`
+            : `<button onclick="reopenProtocolAction(${p.id})" class="text-emerald-600 hover:underline text-xs">Открыть снова</button>`}
+          <button onclick="deleteProtocolAction(${p.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
+        </td>
+      </tr>
+    `;
+    }).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-red-500">${t('error_generic')}</td></tr>`;
+  }
+}
+
+function openProtocolModal(p = null) {
+  document.getElementById('protocolId').value = p ? p.id : '';
+  document.getElementById('protoNumber').value = p ? p.protocol_number : '';
+  document.getElementById('protoOpenDate').value = p ? String(p.open_date).slice(0, 10) : toLocalDateStr(new Date());
+  document.getElementById('protoCloseDate').value = p ? String(p.close_date).slice(0, 10) : toLocalDateStr(new Date());
+  document.getElementById('protocolModalTitle').textContent = p ? 'Изменить протокол' : 'Открыть протокол';
+  document.getElementById('protocolModal').classList.remove('hidden');
+}
+
+function editProtocol(id) {
+  const p = (state.protocols || []).find(x => x.id === id);
+  if (p) openProtocolModal(p);
+}
+
+async function saveProtocolForm(e) {
+  e.preventDefault();
+  const id = document.getElementById('protocolId').value;
+  const data = {
+    protocol_number: document.getElementById('protoNumber').value.trim(),
+    open_date: document.getElementById('protoOpenDate').value,
+    close_date: document.getElementById('protoCloseDate').value
+  };
+  try {
+    if (id) await api.updateProtocol(id, data);
+    else await api.openProtocol(data);
+    document.getElementById('protocolModal').classList.add('hidden');
+    loadProtocolsList();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+async function closeProtocolAction(id) {
+  if (!confirm('Закрыть протокол? Новые сотрудники, сдавшие тест позже, больше не будут автоматически получать этот номер.')) return;
+  await api.closeProtocol(id);
+  loadProtocolsList();
+}
+
+async function reopenProtocolAction(id) {
+  await api.reopenProtocol(id);
+  loadProtocolsList();
+}
+
+async function deleteProtocolAction(id) {
+  if (!confirm('Удалить протокол?')) return;
+  try {
+    await api.deleteProtocol(id);
+    loadProtocolsList();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+// --- USER PROFILE (АДМИН/СУПЕРАДМИН СМОТРИТ КАРТОЧКУ СОТРУДНИКА) ---
+function openUserProfile(userId) {
+  state.profileUserId = userId;
+  state.tab = 'user_profile';
+  render();
+}
+
+// Переход на вкладку "Сотрудники" и открытие модалки редактирования конкретного
+// пользователя. Сначала переключаем вкладку (это синхронно кладёт разметку модалки
+// в DOM), и только потом открываем её — иначе элементов модалки ещё не существует.
+async function editUserFromProfile(id) {
+  state.tab = 'users';
+  render();
+  try {
+    const u = await api.getUser(id);
+    openUserModal(u);
+  } catch (e) {
+    alert(t('error_generic'));
+  }
+}
+
+async function loadUserProfile(userId) {
+  const div = document.getElementById('profileContent');
+  if (!div) return;
+  try {
+    const [user, assignments] = await Promise.all([
+      api.getUser(userId),
+      api.getAssignments({ user_id: userId })
+    ]);
+    const roleName = t('role_' + user.role) || user.role;
+    div.innerHTML = `
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
+        <div class="flex flex-wrap justify-between items-start gap-4">
+          <div>
+            <h2 class="text-xl font-bold text-slate-900">${esc(user.last_name)} ${esc(user.first_name)}</h2>
+            <p class="text-sm text-slate-500 mt-1">${esc(user.position || '—')} · ${esc(user.object || '—')} / ${esc(user.department || '—')}</p>
+            <p class="text-xs text-slate-400 mt-1">${t('login_field')}: <span class="font-mono">${user.login ? esc(user.login) : 'не назначен'}</span> · ${esc(roleName)}</p>
+            <p class="text-xs text-slate-400 mt-1">№ сертификата: <span class="font-mono font-semibold text-slate-600">${user.permanent_certificate_number ? esc(user.permanent_certificate_number) : 'не присвоен'}</span></p>
+          </div>
+          <div class="flex gap-2">
+            <button onclick="editUserFromProfile(${user.id})" class="px-4 py-2 border rounded-lg text-sm font-semibold hover:bg-slate-50">${t('edit')}</button>
+            <a href="#" onclick="downloadAuthed('/api/export/excel','journal_export.xlsx');return false;" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold">📥 ${t('download_report')}</a>
+          </div>
+        </div>
+      </div>
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <h3 class="text-base font-bold mb-4">${t('profile_history')}</h3>
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Курс</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Протокол</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Статус</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">Балл</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">${t('next_test_date')}</th>
+                <th class="px-4 py-3 text-right font-semibold text-slate-600">${t('actions')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${assignments.length ? assignments.map(a => `
+                <tr class="hover:bg-slate-50">
+                  <td class="px-4 py-3">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</td>
+                  <td class="px-4 py-3 text-xs text-slate-600">№ ${esc(a.protocol_number)}<br>${esc(a.protocol_date)}</td>
+                  <td class="px-4 py-3">
+                    <span class="text-xs font-bold px-2 py-1 rounded ${a.status === 'passed' ? 'bg-emerald-100 text-emerald-800' : a.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}">
+                      ${a.status === 'passed' ? 'СДАЛ' : a.status === 'failed' ? 'НЕ СДАЛ' : 'НАЗНАЧЕН'}
+                    </span>
+                  </td>
+                  <td class="px-4 py-3 font-bold">${a.score_percent !== null ? a.score_percent + '%' : '—'}</td>
+                  <td class="px-4 py-3 text-xs text-slate-600">${a.next_test_date ? new Date(a.next_test_date).toLocaleDateString('ru-RU') : '—'}</td>
+                  <td class="px-4 py-3 text-right whitespace-nowrap space-x-2">
+                    ${a.user_answers ? `<button onclick="openAnswersModal(${a.id})" class="text-slate-600 hover:underline text-xs font-semibold">Подробнее</button>` : ''}
+                    ${a.status === 'passed' && a.certificate_number ? `<a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="text-blue-600 hover:underline text-xs font-semibold">${t('download_cert')}</a>` : ''}
+                  </td>
+                </tr>
+              `).join('') : `<tr><td colspan="6" class="p-4 text-center text-slate-400">${t('no_data')}</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div id="answersModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[85vh] flex flex-col">
+          <div class="flex justify-between items-center mb-3">
+            <h3 class="text-lg font-bold">Ответы на вопросы</h3>
+            <button onclick="document.getElementById('answersModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-700 text-xl leading-none">&times;</button>
+          </div>
+          <div id="answersModalBody" class="space-y-2 overflow-y-auto flex-1"></div>
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    div.innerHTML = `<div class="text-red-600 text-sm">${t('error_generic')}</div>`;
+  }
+}
+
+// Показывает, на какие вопросы сотрудник ответил верно/неверно в конкретной попытке (п.2 запроса)
+async function openAnswersModal(assignmentId) {
+  const modal = document.getElementById('answersModal');
+  const body = document.getElementById('answersModalBody');
+  if (!modal || !body) return;
+  body.innerHTML = `<div class="text-slate-400 text-sm">${t('loading')}</div>`;
+  modal.classList.remove('hidden');
+  try {
+    const { questions } = await api.getAssignmentAnswers(assignmentId);
+    if (!questions.length) {
+      body.innerHTML = `<div class="text-slate-400 text-sm">${t('no_data')}</div>`;
+      return;
+    }
+    body.innerHTML = questions.map((q, i) => {
+      const opts = parseOpts(CURRENT_LANG === 'kz' ? q.options_kz : q.options_ru);
+      const qText = CURRENT_LANG === 'kz' ? q.question_kz : q.question_ru;
+      return `
+        <div class="border rounded-lg p-3 ${q.is_correct ? 'border-emerald-200 bg-emerald-50/40' : 'border-red-200 bg-red-50/40'}">
+          <p class="text-sm font-semibold text-slate-800 mb-2">${i + 1}. ${esc(qText)} ${q.is_correct ? '<span class="text-emerald-600">✓</span>' : '<span class="text-red-600">✗</span>'}</p>
+          <div class="space-y-1">
+            ${opts.map((o, idx) => {
+              let cls = 'text-slate-600';
+              let mark = '';
+              if (idx === q.correct_index) { cls = 'text-emerald-700 font-semibold'; mark = ' ✓ верный ответ'; }
+              if (idx === q.chosen_index && idx !== q.correct_index) { cls = 'text-red-700 font-semibold'; mark = ' ✗ выбран сотрудником'; }
+              else if (idx === q.chosen_index && idx === q.correct_index) { mark = ' ✓ выбран сотрудником и верный'; }
+              return `<div class="text-xs ${cls}">${esc(o)}${mark}</div>`;
+            }).join('')}
+            ${q.chosen_index === null ? '<div class="text-xs text-slate-400 italic">Сотрудник не ответил на этот вопрос</div>' : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch (e) {
+    body.innerHTML = `<div class="text-red-600 text-sm">${t('error_generic')}</div>`;
+  }
+}
+
+// --- CALENDAR (АДМИН/СУПЕРАДМИН: КТО ПРОШЁЛ ОБУЧЕНИЕ В ВЫБРАННЫЕ ДАТЫ) ---
+// Форматирует дату в YYYY-MM-DD по ЛОКАЛЬНОМУ времени (в отличие от toISOString,
+// который переводит в UTC и может сдвинуть дату на день назад/вперёд для часовых поясов вроде UTC+5)
+function toLocalDateStr(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function changeCalendarMonth(delta) {
+  const d = new Date(state.calendarDate);
+  d.setMonth(d.getMonth() + delta);
+  state.calendarDate = d;
+  loadCalendar();
+}
+
+async function loadCalendar() {
+  const d = state.calendarDate;
+  const year = d.getFullYear();
+  const month = d.getMonth(); // 0-based
+  const label = document.getElementById('calMonthLabel');
+  const monthNames = CURRENT_LANG === 'kz'
+    ? ['Қаңтар','Ақпан','Наурыз','Сәуір','Мамыр','Маусым','Шілде','Тамыз','Қыркүйек','Қазан','Қараша','Желтоқсан']
+    : ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+  if (label) label.textContent = `${monthNames[month]} ${year}`;
+
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const dateFrom = toLocalDateStr(firstDay);
+  const dateTo = toLocalDateStr(lastDay);
+
+  const grid = document.getElementById('calGrid');
+  if (!grid) return;
+  grid.innerHTML = `<div class="col-span-7 text-center text-slate-400 py-8">${t('loading')}</div>`;
+
+  let list = [];
+  try {
+    list = await api.getAssignments({ status: 'passed', date_from: dateFrom, date_to: dateTo });
+  } catch (e) {
+    grid.innerHTML = `<div class="col-span-7 text-center text-red-600 py-8">${t('error_generic')}</div>`;
+    return;
+  }
+
+  // Группируем прошедших обучение по дню месяца (по дате фактической сдачи test_date)
+  const byDay = {};
+  list.forEach(a => {
+    if (!a.test_date) return;
+    const day = new Date(a.test_date).getDate();
+    (byDay[day] = byDay[day] || []).push(a);
+  });
+  state.calendarByDay = byDay;
+
+  const weekdayNames = CURRENT_LANG === 'kz' ? ['Дс','Сс','Ср','Бс','Жм','Сн','Жс'] : ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+  let startWeekday = firstDay.getDay(); // 0=Sun
+  startWeekday = startWeekday === 0 ? 6 : startWeekday - 1; // делаем понедельник первым днём недели
+  const daysInMonth = lastDay.getDate();
+  const todayStr = new Date().toDateString();
+
+  let cells = weekdayNames.map(wd => `<div class="text-center text-xs font-bold text-slate-400 py-1">${wd}</div>`).join('');
+  for (let i = 0; i < startWeekday; i++) cells += `<div></div>`;
+  for (let day = 1; day <= daysInMonth; day++) {
+    const count = (byDay[day] || []).length;
+    const isToday = new Date(year, month, day).toDateString() === todayStr;
+    cells += `
+      <button onclick="showCalendarDay(${day})" class="aspect-square rounded-lg border ${isToday ? 'border-blue-400' : 'border-slate-100'} p-1.5 flex flex-col items-start justify-between hover:border-blue-400 hover:shadow-sm transition ${count ? 'bg-emerald-50' : 'bg-white'}">
+        <span class="text-xs font-semibold ${isToday ? 'text-blue-600' : 'text-slate-600'}">${day}</span>
+        ${count ? `<span class="text-[10px] font-bold text-emerald-700 bg-emerald-100 rounded px-1.5 py-0.5 self-end">${count}</span>` : ''}
+      </button>
+    `;
+  }
+  grid.innerHTML = cells;
+}
+
+function showCalendarDay(day) {
+  const d = state.calendarDate;
+  const list = (state.calendarByDay && state.calendarByDay[day]) || [];
+  const dateLabel = new Date(d.getFullYear(), d.getMonth(), day).toLocaleDateString('ru-RU');
+  document.getElementById('calDayTitle').textContent = `${t('calendar_completions_on')} — ${dateLabel}`;
+  const listDiv = document.getElementById('calDayList');
+  listDiv.innerHTML = list.length ? list.map(a => `
+    <div class="flex items-center justify-between p-3 rounded-lg border border-slate-100 hover:bg-slate-50">
+      <div>
+        <button onclick="document.getElementById('calDayModal').classList.add('hidden'); openUserProfile(${a.user_id})" class="font-semibold text-sm text-slate-900 hover:text-blue-600 hover:underline text-left">${esc(a.last_name)} ${esc(a.first_name)}</button>
+        <div class="text-xs text-slate-500">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</div>
+      </div>
+      <span class="text-xs font-bold px-2 py-1 rounded bg-emerald-100 text-emerald-800">${a.score_percent}%</span>
+    </div>
+  `).join('') : `<div class="text-sm text-slate-400">${t('no_data')}</div>`;
+  document.getElementById('calDayModal').classList.remove('hidden');
+}
+
+// --- MY TESTS (EMPLOYEE) ---
+async function loadMyTests() {
+  const list = await api.getMyAssignments();
+  const div = document.getElementById('myTestsList');
+  if (!div) return;
+  if (!list.length) {
+    div.innerHTML = '<div class="p-6 text-center text-slate-500">У вас нет назначенных тестов.</div>';
+    return;
+  }
+  div.innerHTML = list.map(a => {
+    const isKz = CURRENT_LANG === 'kz';
+    // Материалы/видео на языке интерфейса сотрудника; если для этого языка не загружено — берём другой язык, затем старые (legacy) поля
+    const materialPath = (isKz ? a.material_pdf_path_kz : a.material_pdf_path_ru) || a.material_pdf_path_ru || a.material_pdf_path_kz || a.material_pdf_path;
+    const videoPath = (isKz ? a.video_path_kz : a.video_path_ru) || a.video_path_ru || a.video_path_kz || a.video_path;
+    const videoUrl = (isKz ? a.video_url_kz : a.video_url_ru) || a.video_url_ru || a.video_url_kz || a.video_url;
+    return `
+    <div class="p-5 border border-slate-200 rounded-xl bg-white flex flex-wrap justify-between items-center gap-4">
+      <div>
+        <h4 class="text-base font-bold text-slate-900">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</h4>
+        <p class="text-xs text-slate-500 mt-1">Протокол № ${esc(a.protocol_number)} от ${esc(a.protocol_date)}</p>
+        ${(materialPath || videoPath || videoUrl) ? `
+          <div class="mt-2 space-x-3 text-xs font-semibold">
+            ${materialPath ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(materialPath)}', '${jsAttrEsc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}')" class="text-blue-600 hover:underline">📄 Материалы курса</button>` : ''}
+            ${videoPath ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(videoPath)}', '${jsAttrEsc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}')" class="text-blue-600 hover:underline">🎬 Видео</button>` : (videoUrl ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(videoUrl)}', '${jsAttrEsc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}')" class="text-blue-600 hover:underline">🎬 Видео</button>` : '')}
+          </div>
+        ` : ''}
+      </div>
+      <div class="flex items-center space-x-3">
+        ${a.status === 'passed' ? `
+          <span class="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg">Сдано (${a.score_percent}%)</span>
+          <a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold">Скачать сертификат</a>
+        ` : a.status === 'failed' && !a.retake_allowed ? `
+          <span class="text-xs font-bold text-red-700 bg-red-50 px-3 py-1.5 rounded-lg">Не сдано (${a.score_percent}%)</span>
+        ` : `
+          <button type="button" onclick="runTest(${a.id}, '${jsAttrEsc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}', ${a.time_limit_minutes || 20})" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-sm shadow">
+            ${a.retake_allowed ? 'Пересдать тест' : 'Начать тестирование'}
+          </button>
+        `}
+      </div>
+    </div>
+  `;
+  }).join('');
+}
+
+function parseOpts(raw) {
+  if (Array.isArray(raw)) return raw;
+  try { return JSON.parse(raw); } catch (e) { return []; }
+}
+
+function onTestVisibilityChange() {
+  if (document.hidden && state.activeTest) {
+    state.activeTest.violations = (state.activeTest.violations || 0) + 1;
+  }
+}
+
+let currentTestIndex = 0;
+
+async function runTest(assignmentId, title, timeLimitMinutes) {
+  let data;
+  try {
+    data = await api.startTest(assignmentId);
+  } catch (e) {
+    console.error('startTest failed', e);
+    alert('Не удалось начать тестирование: ' + (e && e.message ? e.message : 'ошибка сервера'));
+    return;
+  }
+  // Ограничиваем строго 10 вопросами
+  const questions = (data && data.questions || []).slice(0, 10);
+  if (!questions.length) {
+    alert('Для этого курса пока нет вопросов. Обратитесь к администратору.');
+    return;
+  }
+
+  state.activeTest = {
+    id: assignmentId,
+    questions: questions,
+    answers: {},
+    violations: 0
+  };
+  currentTestIndex = 0;
+
+  document.getElementById('testRunTitle').textContent = title;
+  document.getElementById('testRunModal').classList.remove('hidden');
+
+  renderTestStep();
+
+  document.addEventListener('visibilitychange', onTestVisibilityChange);
+
+  // Обратный отсчет таймера
+  const timerEl = document.getElementById('testRunTimer');
+  state.timeLeft = Math.max(1, parseInt(timeLimitMinutes, 10) || 20) * 60;
+  const renderTimer = () => {
+    const m = Math.floor(state.timeLeft / 60).toString().padStart(2, '0');
+    const s = (state.timeLeft % 60).toString().padStart(2, '0');
+    if (timerEl) timerEl.textContent = `${m}:${s}`;
+  };
+  renderTimer();
+  if (state.timerInterval) clearInterval(state.timerInterval);
+  state.timerInterval = setInterval(() => {
+    state.timeLeft--;
+    renderTimer();
+    if (state.timeLeft <= 0) {
+      clearInterval(state.timerInterval);
+      alert('Время вышло! Тест будет завершен.');
+      finishTest();
+    }
+  }, 1000);
+}
+
+function renderTestStep() {
+  const test = state.activeTest;
+  if (!test || !test.questions.length) return;
+
+  const total = test.questions.length;
+  const q = test.questions[currentTestIndex];
+
+  document.getElementById('testRunSubtitle').textContent = `Вопрос ${currentTestIndex + 1} из ${total}`;
+
+  // Рендерим кнопки 1..10 (зеленые — где уже выбран ответ, синяя — текущий)
+  const pager = document.getElementById('testQuestionPager');
+  pager.innerHTML = test.questions.map((item, idx) => {
+    const isAnswered = test.answers[item.id] !== undefined;
+    const isCurrent = idx === currentTestIndex;
+    let cls = 'w-8 h-8 rounded-lg text-xs font-bold transition ';
+    if (isCurrent) {
+      cls += 'bg-blue-600 text-white ring-2 ring-blue-300';
+    } else if (isAnswered) {
+      cls += 'bg-emerald-100 text-emerald-800 border border-emerald-300';
+    } else {
+      cls += 'bg-slate-100 text-slate-600 hover:bg-slate-200';
+    }
+    return `<button type="button" onclick="goToQuestion(${idx})" class="${cls}">${idx + 1}</button>`;
+  }).join('');
+
+  // Текст вопроса и варианты
+  const qText = CURRENT_LANG === 'kz' ? (q.question_kz || q.question_ru) : (q.question_ru || q.question_kz);
+  const rawOpts = CURRENT_LANG === 'kz' ? (q.options_kz || q.options_ru) : (q.options_ru || q.options_kz);
+  const opts = parseOpts(rawOpts);
+
+  const container = document.getElementById('testRunQuestions');
+  container.innerHTML = `
+    <div class="space-y-4">
+      <div class="font-semibold text-slate-900 text-base leading-snug">
+        ${currentTestIndex + 1}. ${esc(qText)}
+      </div>
+      <div class="space-y-2.5 pt-2">
+        ${opts.map((opt, optIdx) => {
+          const checked = test.answers[q.id] === optIdx;
+          return `
+            <label class="flex items-center space-x-3 p-3 rounded-xl border ${checked ? 'border-blue-500 bg-blue-50/70 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'} cursor-pointer text-sm transition">
+              <input type="radio" name="active_q_${q.id}" value="${optIdx}" ${checked ? 'checked' : ''} onchange="setAnswer(${q.id}, ${optIdx})" class="text-blue-600 w-4 h-4">
+              <span class="text-slate-800">${esc(opt)}</span>
+            </label>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+
+  document.getElementById('btnPrevQ').disabled = (currentTestIndex === 0);
+  document.getElementById('btnNextQ').style.display = (currentTestIndex === total - 1) ? 'none' : 'inline-block';
+}
+
+function setAnswer(questionId, optIdx) {
+  state.activeTest.answers[questionId] = optIdx;
+  renderTestStep();
+}
+
+function goToQuestion(idx) {
+  currentTestIndex = idx;
+  renderTestStep();
+}
+
+function stepQuestion(delta) {
+  const next = currentTestIndex + delta;
+  if (next >= 0 && next < state.activeTest.questions.length) {
+    currentTestIndex = next;
+    renderTestStep();
+  }
+}
+
+async function finishTest(auto) {
+  if (!auto && !confirm('Вы уверены, что хотите завершить тест?')) return;
+  
+  if (state.activeTest && state.activeTest.questions) {
+    const curQ = state.activeTest.questions[currentTestIndex];
+    if (curQ) {
+      const checkedRadio = document.querySelector(`input[name="active_q_${curQ.id}"]:checked`);
+      if (checkedRadio) {
+        state.activeTest.answers[curQ.id] = parseInt(checkedRadio.value, 10);
+      }
+    }
+  }
+
+  clearInterval(state.testTimer);
+
+  document.removeEventListener('visibilitychange', onTestVisibilityChange);
+  const res = await api.submitTest(state.activeTest.id, state.activeTest.answers, state.activeTest.violations || 0);
+  document.getElementById('testRunModal').classList.add('hidden');
+  const prefix = auto ? 'Время вышло. ' : '';
+  alert(res.passed ? `${prefix}Поздравляем! Тест сдан (${res.scorePercent}%)` : `${prefix}К сожалению, тест не сдан (${res.scorePercent}%)`);
+  state.activeTest = null;
+  loadMyTests();
+}
+
+// --- SETTINGS LOGIC ---
+async function loadSettingsData() {
+  const data = await api.getSettings();
+  document.getElementById('setComp').value = data.company_name || '';
+  document.getElementById('setChair').value = data.chairman_name || '';
+  document.getElementById('setMember2').value = data.member2_name || '';
+  document.getElementById('setMember3').value = data.member3_name || '';
+  document.getElementById('setProtPrefix').value = data.protocol_prefix || '';
+  document.getElementById('setProtNext').value = data.protocol_next_number || 1;
+  document.getElementById('setCertPrefix').value = data.certificate_prefix || '';
+  document.getElementById('setCertDigits').value = data.certificate_digits || 4;
+  document.getElementById('setCertNext').value = data.certificate_next_number || 1;
+  const pathField = { logo: 'logo_path', stamp: 'stamp_path', signature: 'signature_path' };
+  ['logo', 'stamp', 'signature'].forEach(kind => {
+    const el = document.getElementById('set_' + kind + '_status');
+    if (el && data[pathField[kind]]) {
+      el.innerHTML = `Загружено: <a href="${data[pathField[kind]]}" target="_blank" class="text-blue-600 underline">открыть</a>`;
+    }
+  });
+}
+
+async function saveSettingsForm(e) {
+  e.preventDefault();
+  await api.saveSettings({
+    company_name: document.getElementById('setComp').value.trim(),
+    chairman_name: document.getElementById('setChair').value.trim(),
+    member2_name: document.getElementById('setMember2').value.trim(),
+    member3_name: document.getElementById('setMember3').value.trim(),
+    protocol_prefix: document.getElementById('setProtPrefix').value.trim(),
+    protocol_next_number: document.getElementById('setProtNext').value,
+    certificate_prefix: document.getElementById('setCertPrefix').value.trim(),
+    certificate_digits: document.getElementById('setCertDigits').value,
+    certificate_next_number: document.getElementById('setCertNext').value
+  });
+  // Обновляем название компании в шапке/логине сразу, без перезагрузки страницы
+  PUBLIC_SETTINGS.company_name = document.getElementById('setComp').value.trim();
+  alert('Настройки успешно сохранены!');
+  render();
+}
+
+async function uploadBrandingFile(kind) {
+  const input = document.getElementById('set_' + kind + '_file');
+  const file = input.files[0];
+  if (!file) { alert('Выберите файл.'); return; }
+  const statusEl = document.getElementById('set_' + kind + '_status');
+  try {
+    if (statusEl) statusEl.textContent = 'Загрузка...';
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await api.req('/api/settings/' + kind, { method: 'POST', body: fd });
+    const pathField = { logo: 'logo_path', stamp: 'stamp_path', signature: 'signature_path' };
+    if (statusEl) statusEl.innerHTML = `Загружено: <a href="${res[pathField[kind]]}" target="_blank" class="text-blue-600 underline">открыть</a>`;
+    if (kind === 'logo') {
+      // Логотип теперь должен отображаться и в шапке сайта, и на экране входа
+      PUBLIC_SETTINGS.logo_path = res.logo_path;
+      render();
+    }
+  } catch (e) {
+    if (statusEl) statusEl.textContent = '';
+    alert('Не удалось загрузить файл: ' + e.message);
+  }
+}
+
+// Init app
+async function bootstrap() {
+  try {
+    PUBLIC_SETTINGS = await api.getPublicSettings();
+  } catch (e) { /* логотип/название компании ещё не настроены — не критично */ }
+  render();
+}
+bootstrap();
+</script>
+</body>
+</html>
