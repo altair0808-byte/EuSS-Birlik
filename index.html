@@ -1142,6 +1142,7 @@ async function handleImportFile(input) {
   try {
     const res = await api.req('/api/users/import', { method: 'POST', body: fd });
     let msg = `Импортировано сотрудников: ${res.created}.`;
+    if (res.historyCreated) msg += ` Внесено записей об обучении: ${res.historyCreated}.`;
     if (res.skipped) msg += ` Пропущено: ${res.skipped}.`;
     if (res.errors && res.errors.length) msg += '\n\n' + res.errors.slice(0, 20).join('\n');
     alert(msg);
@@ -1939,7 +1940,7 @@ async function loadUserProfile(userId) {
                   <td class="px-4 py-3 font-bold">${a.score_percent !== null ? a.score_percent + '%' : '—'}</td>
                   <td class="px-4 py-3 text-xs text-slate-600">${a.next_test_date ? new Date(a.next_test_date).toLocaleDateString('ru-RU') : '—'}</td>
                   <td class="px-4 py-3 text-right">
-                    ${a.status === 'passed' && a.certificate_number ? `<a href="#" onclick="downloadAuthed('/api/assignments/${a.id}/certificate.pdf');return false;" class="text-blue-600 hover:underline text-xs font-semibold">${t('download_cert')}</a>` : '—'}
+                    ${a.status === 'passed' && a.certificate_number ? `<a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="text-blue-600 hover:underline text-xs font-semibold">${t('download_cert')}</a>` : '—'}
                   </td>
                 </tr>
               `).join('') : `<tr><td colspan="6" class="p-4 text-center text-slate-400">${t('no_data')}</td></tr>`}
