@@ -12,6 +12,13 @@
   ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
   .fade-in { animation: fadeIn .2s ease-out; }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .test-scroll {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+  }
 </style>
 </head>
 <body class="bg-slate-100 min-h-screen text-slate-800">
@@ -382,8 +389,18 @@ const api = {
       throw new Error('Unauthorized');
     }
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'Ошибка сервера' }));
-      throw new Error(err.message || err.error || 'Ошибка запроса');
+      const raw = await res.text().catch(() => '');
+      let detail = '';
+      try {
+        const parsed = JSON.parse(raw);
+        detail = parsed.message || parsed.error || '';
+      } catch (e) {
+        detail = (raw || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+      }
+      const err = new Error(detail || 'Ошибка запроса');
+      err.status = res.status;
+      err.url = url;
+      throw err;
     }
     const ct = res.headers.get('content-type');
     if (ct && ct.includes('application/json')) return res.json();
@@ -1165,10 +1182,10 @@ async function loadTabContent() {
         <h2 class="text-lg font-bold text-slate-900 mb-6">${t('nav_my_tests')}</h2>
         <div id="myTestsList" class="space-y-4"><div class="text-slate-400">Загрузка...</div></div>
       </div>
-            <div id="testRunModal" class="fixed inset-0 bg-slate-900/60 hidden flex items-center justify-center p-4 z-50">
-        <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full flex flex-col p-6 min-h-[500px]">
+            <div id="testRunModal" class="fixed inset-0 bg-slate-900/60 hidden flex items-stretch sm:items-center justify-center p-0 sm:p-4 z-50 overflow-hidden overscroll-contain">
+        <div class="bg-white rounded-none sm:rounded-2xl shadow-2xl max-w-2xl w-full flex flex-col p-4 sm:p-6 h-[100dvh] sm:h-auto sm:min-h-[500px] sm:max-h-[92vh] overflow-hidden">
           <!-- Шапка -->
-          <div class="flex justify-between items-center pb-4 border-b">
+          <div class="flex justify-between items-center pb-4 border-b shrink-0">
             <div>
               <h3 class="text-base font-bold text-slate-900" id="testRunTitle">Тестирование</h3>
               <p class="text-xs text-slate-500 font-medium mt-0.5" id="testRunSubtitle">Вопрос 1 из 10</p>
@@ -1177,13 +1194,13 @@ async function loadTabContent() {
           </div>
 
           <!-- Кнопки быстрого перехода по номерам вопросов (1..10) -->
-          <div id="testQuestionPager" class="flex flex-wrap gap-2 py-3 border-b"></div>
+          <div id="testQuestionPager" class="flex flex-wrap gap-2 py-3 border-b shrink-0"></div>
 
           <!-- Сам текущий вопрос с вариантами ответов -->
-          <div id="testRunQuestions" class="flex-1 py-4 overflow-y-auto"></div>
+          <div id="testRunQuestions" class="test-scroll flex-1 py-4 pr-1"></div>
 
           <!-- Нижняя панель навигации -->
-          <div class="pt-4 border-t flex justify-between items-center">
+          <div class="pt-4 border-t flex flex-wrap gap-2 justify-between items-center bg-white shrink-0">
             <button type="button" id="btnPrevQ" onclick="stepQuestion(-1)" class="px-4 py-2 border border-slate-300 rounded-lg text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-30">
               ← Назад
             </button>
@@ -2483,11 +2500,33 @@ async function runTest(assignmentId, title, timeLimitMinutes) {
     data = await api.startTest(assignmentId);
   } catch (e) {
     console.error('startTest failed', e);
-    alert('Не удалось начать тестирование: ' + (e && e.message ? e.message : 'ошибка сервера'));
+    const raw = (e && e.message ? e.message : '').toLowerCase();
+    const MESSAGES = [
+      ['retake not allowed', 'Пересдача по этому курсу не разрешена. Попросите администратора открыть пересдачу в разделе «Назначения» (кнопка «Пересдача»).'],
+      ['already passed', 'Тест по этому курсу уже сдан.'],
+      ['already completed', 'Тест по этому курсу уже завершён.'],
+      ['no questions', 'Для этого курса пока нет вопросов. Обратитесь к администратору.'],
+      ['not found', 'Назначение не найдено — обновите страницу и попробуйте снова.'],
+      ['expired', 'Срок прохождения теста истёк. Обратитесь к администратору.']
+    ];
+    const matched = MESSAGES.find(([key]) => raw.includes(key));
+    const hint = matched
+      ? matched[1]
+      : e && e.status === 404
+        ? 'Назначение не найдено или раздел тестирования недоступен на сервере.'
+        : e && e.status === 403
+          ? 'Тест уже пройден или пересдача пока не разрешена.'
+          : (e && e.message ? e.message : 'ошибка сервера');
+    alert(hint);
+    // Список мог устареть — подтягиваем актуальные статусы.
+    try { await loadMyTests(); } catch (err) { console.error('refresh after start failure', err); }
     return;
   }
   // Ограничиваем строго 10 вопросами
-  const questions = (data && data.questions || []).slice(0, 10);
+  const rawQuestions = Array.isArray(data)
+    ? data
+    : (data && (data.questions || data.items || (data.test && data.test.questions))) || [];
+  const questions = rawQuestions.slice(0, 10);
   if (!questions.length) {
     alert('Для этого курса пока нет вопросов. Обратитесь к администратору.');
     return;
@@ -2503,6 +2542,8 @@ async function runTest(assignmentId, title, timeLimitMinutes) {
 
   document.getElementById('testRunTitle').textContent = title;
   document.getElementById('testRunModal').classList.remove('hidden');
+  // На телефоне без этого прокручивалась страница под окном, а не сам тест.
+  document.body.style.overflow = 'hidden';
 
   renderTestStep();
 
@@ -2541,7 +2582,7 @@ function renderTestStep() {
   // Рендерим кнопки 1..10 (зеленые — где уже выбран ответ, синяя — текущий)
   const pager = document.getElementById('testQuestionPager');
   pager.innerHTML = test.questions.map((item, idx) => {
-    const isAnswered = test.answers[item.id] !== undefined;
+    const isAnswered = test.answers[answerKey(item)] !== undefined;
     const isCurrent = idx === currentTestIndex;
     let cls = 'w-8 h-8 rounded-lg text-xs font-bold transition ';
     if (isCurrent) {
@@ -2567,10 +2608,11 @@ function renderTestStep() {
       </div>
       <div class="space-y-2.5 pt-2">
         ${opts.map((opt, optIdx) => {
-          const checked = test.answers[q.id] === optIdx;
+          const qKey = answerKey(q);
+          const checked = test.answers[qKey] === optIdx;
           return `
             <label class="flex items-center space-x-3 p-3 rounded-xl border ${checked ? 'border-blue-500 bg-blue-50/70 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'} cursor-pointer text-sm transition">
-              <input type="radio" name="active_q_${q.id}" value="${optIdx}" ${checked ? 'checked' : ''} onchange="setAnswer(${q.id}, ${optIdx})" class="text-blue-600 w-4 h-4">
+              <input type="radio" name="active_q_${qKey}" value="${optIdx}" ${checked ? 'checked' : ''} onchange="setAnswer('${qKey}', ${optIdx})" onclick="setAnswer('${qKey}', ${optIdx})" class="text-blue-600 w-4 h-4">
               <span class="text-slate-800">${esc(opt)}</span>
             </label>
           `;
@@ -2583,9 +2625,24 @@ function renderTestStep() {
   document.getElementById('btnNextQ').style.display = (currentTestIndex === total - 1) ? 'none' : 'inline-block';
 }
 
+function answerKey(q) {
+  return String(q && (q.id !== undefined ? q.id : q.question_id));
+}
+
 function setAnswer(questionId, optIdx) {
-  state.activeTest.answers[questionId] = optIdx;
+  if (!state.activeTest) return;
+  state.activeTest.answers[String(questionId)] = optIdx;
   renderTestStep();
+}
+
+// Снимаем выбранные варианты прямо из разметки — на случай, если событие
+// change на мобильном не успело отработать до нажатия «Завершить тест».
+function syncAnswersFromDom() {
+  if (!state.activeTest) return;
+  document.querySelectorAll('#testRunQuestions input[type="radio"]:checked').forEach((input) => {
+    const qid = input.name.replace('active_q_', '');
+    state.activeTest.answers[qid] = parseInt(input.value, 10);
+  });
 }
 
 function goToQuestion(idx) {
@@ -2602,23 +2659,28 @@ function stepQuestion(delta) {
 }
 
 async function finishTest(auto) {
-  if (!auto && !confirm('Вы уверены, что хотите завершить тест?')) return;
-  
-  if (state.activeTest && state.activeTest.questions) {
-    const curQ = state.activeTest.questions[currentTestIndex];
-    if (curQ) {
-      const checkedRadio = document.querySelector(`input[name="active_q_${curQ.id}"]:checked`);
-      if (checkedRadio) {
-        state.activeTest.answers[curQ.id] = parseInt(checkedRadio.value, 10);
-      }
-    }
+  if (!state.activeTest) return;
+  // Сначала фиксируем отмеченный вариант текущего (в т.ч. последнего) вопроса,
+  // и только потом спрашиваем подтверждение.
+  syncAnswersFromDom();
+
+  if (!auto) {
+    const unanswered = state.activeTest.questions.filter(
+      (q) => state.activeTest.answers[answerKey(q)] === undefined
+    ).length;
+    const question = unanswered
+      ? `Без ответа осталось вопросов: ${unanswered}. Всё равно завершить тест?`
+      : 'Вы уверены, что хотите завершить тест?';
+    if (!confirm(question)) return;
   }
 
+  clearInterval(state.timerInterval);
   clearInterval(state.testTimer);
 
   document.removeEventListener('visibilitychange', onTestVisibilityChange);
   const res = await api.submitTest(state.activeTest.id, state.activeTest.answers, state.activeTest.violations || 0);
   document.getElementById('testRunModal').classList.add('hidden');
+  document.body.style.overflow = '';
   const prefix = auto ? 'Время вышло. ' : '';
   alert(res.passed ? `${prefix}Поздравляем! Тест сдан (${res.scorePercent}%)` : `${prefix}К сожалению, тест не сдан (${res.scorePercent}%)`);
   state.activeTest = null;
