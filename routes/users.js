@@ -33,13 +33,23 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, re
 });
 
 // Bulk import from Excel
-// Обязательные колонки (шапка, порядок любой): Фамилия, Имя, Логин
-// Опционально: Объект, Отдел, Должность, Пароль
+// Обязательные колонки (шапка, порядок любой): Фамилия, Имя
+// Опционально: Объект, Отдел, Должность, Логин, Пароль
+// Если Логин не указан — сотрудник создаётся без доступа в систему,
+// логин и пароль можно назначить позже через карточку профиля (кнопка "Изменить").
 // Опционально (чтобы сразу зафиксировать уже пройденное ранее обучение —
 // например, из старого бумажного/Excel-журнала — вместе с созданием сотрудника):
 // Курс, № протокола, Дата протокола, Дата прохождения, № сертификата, Действителен до, Результат %
 router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'no_file' });
+
+  const originalName = String(req.file.originalname || '').toLowerCase();
+  if (!originalName.endsWith('.xlsx')) {
+    return res.status(400).json({
+      error: 'invalid_format',
+      message: 'Поддерживается только формат .xlsx. Откройте файл в Excel и сохраните его как "Книга Excel (.xlsx)", затем загрузите снова.'
+    });
+  }
 
   const headerMap = {
     'фамилия': 'last_name',
@@ -80,11 +90,20 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
     return String(cellValue).trim();
   }
 
+  const wb = new ExcelJS.Workbook();
   try {
-    const wb = new ExcelJS.Workbook();
     await wb.xlsx.readFile(req.file.path);
+  } catch (readErr) {
+    console.error('Error reading import file:', readErr);
+    return res.status(400).json({
+      error: 'invalid_file',
+      message: 'Не удалось прочитать файл. Убедитесь, что это корректный Excel-файл (.xlsx), он не повреждён и не защищён паролем.'
+    });
+  }
+
+  try {
     const ws = wb.worksheets[0];
-    if (!ws) return res.status(400).json({ error: 'empty_file' });
+    if (!ws) return res.status(400).json({ error: 'empty_file', message: 'В файле нет ни одного листа с данными.' });
 
     const headerRow = ws.getRow(1);
     const colByField = {};
@@ -92,8 +111,8 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
       const key = String(cell.value || '').trim().toLowerCase();
       if (headerMap[key]) colByField[headerMap[key]] = colNumber;
     });
-    if (!colByField.last_name || !colByField.first_name || !colByField.login) {
-      return res.status(400).json({ error: 'missing_columns', message: 'В файле должны быть колонки: Фамилия, Имя, Логин (и опционально Объект, Отдел, Должность, Пароль)' });
+    if (!colByField.last_name || !colByField.first_name) {
+      return res.status(400).json({ error: 'missing_columns', message: 'В файле должны быть колонки: Фамилия, Имя (и опционально Объект, Отдел, Должность, Логин, Пароль)' });
     }
 
     const DATE_FIELDS = new Set(['protocol_date', 'test_date', 'next_test_date']);
@@ -109,80 +128,91 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
       };
       const last_name = get('last_name');
       const first_name = get('first_name');
-      const login = get('login');
+      const login = get('login') || null; // логин необязателен — можно назначить позже в карточке профиля
       if (!last_name && !first_name && !login) continue; // blank row
 
-      if (!last_name || !first_name || !login) {
-        errors.push(`Строка ${r}: не заполнены обязательные поля`);
+      if (!last_name || !first_name) {
+        errors.push(`Строка ${r}: не заполнены обязательные поля (Фамилия, Имя)`);
         skipped++;
         continue;
       }
 
-      const exists = await query('SELECT id FROM users WHERE login = $1', [login]);
-      if (exists.rows.length > 0) {
-        errors.push(`Строка ${r}: логин "${login}" уже занят`);
-        skipped++;
-        continue;
-      }
-
-      const password = get('password') || Math.random().toString(36).slice(-8);
-      const hash = bcrypt.hashSync(password, 10);
-      const userResult = await query(
-        `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'employee') RETURNING id`,
-        [last_name, first_name, get('object'), get('department'), get('position'), login, hash]
-      );
-      created++;
-
-      // Если в строке указан курс — параллельно заносим уже пройденное ранее
-      // обучение (протокол + сертификат) как историческую запись, чтобы не
-      // вбивать её вручную по каждому сотруднику после импорта.
-      const courseTitle = get('course');
-      if (courseTitle) {
-        const protocol_number = get('protocol_number');
-        const protocol_date = get('protocol_date');
-        const test_date = get('test_date');
-
-        if (!protocol_number || !protocol_date || !test_date) {
-          errors.push(`Строка ${r}: сотрудник создан, но обучение не внесено — для курса "${courseTitle}" нужны № протокола, дата протокола и дата прохождения`);
-          continue;
+      try {
+        if (login) {
+          const exists = await query('SELECT id FROM users WHERE login = $1', [login]);
+          if (exists.rows.length > 0) {
+            errors.push(`Строка ${r}: логин "${login}" уже занят`);
+            skipped++;
+            continue;
+          }
         }
 
-        const cRes = await query(
-          `SELECT id FROM courses WHERE lower(title_ru) = lower($1) OR lower(title_kz) = lower($1) LIMIT 1`,
-          [courseTitle]
+        // Пароль/хэш нужны только если указан логин — без логина сотрудник
+        // просто числится в списке и не может войти в систему до тех пор,
+        // пока ему не назначат логин и пароль через карточку профиля.
+        const password = login ? (get('password') || Math.random().toString(36).slice(-8)) : null;
+        const hash = password ? bcrypt.hashSync(password, 10) : null;
+        const userResult = await query(
+          `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'employee') RETURNING id`,
+          [last_name, first_name, get('object'), get('department'), get('position'), login, hash]
         );
-        const course = cRes.rows[0];
-        if (!course) {
-          errors.push(`Строка ${r}: курс "${courseTitle}" не найден — обучение не внесено`);
-          continue;
-        }
+        created++;
 
-        try {
-          const h = await buildHistoricalFields(course.id, {
-            test_date,
-            next_test_date: get('next_test_date'),
-            certificate_number: get('certificate_number'),
-            score_percent: get('score_percent')
-          });
-          await query(`
-            INSERT INTO assignments (user_id, course_id, protocol_number, protocol_date, assigned_by,
-              status, score_percent, test_date, next_test_date, certificate_number)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-          `, [userResult.rows[0].id, course.id, protocol_number, protocol_date, req.user.id,
-              h.status, h.score_percent, h.test_date, h.next_test_date, h.certificate_number]);
-          await advanceProtocolCounter(protocol_number);
-          historyCreated++;
-        } catch (histErr) {
-          errors.push(`Строка ${r}: сотрудник создан, но не удалось внести обучение — ${histErr.message}`);
+        // Если в строке указан курс — параллельно заносим уже пройденное ранее
+        // обучение (протокол + сертификат) как историческую запись, чтобы не
+        // вбивать её вручную по каждому сотруднику после импорта.
+        const courseTitle = get('course');
+        if (courseTitle) {
+          const protocol_number = get('protocol_number');
+          const protocol_date = get('protocol_date');
+          const test_date = get('test_date');
+
+          if (!protocol_number || !protocol_date || !test_date) {
+            errors.push(`Строка ${r}: сотрудник создан, но обучение не внесено — для курса "${courseTitle}" нужны № протокола, дата протокола и дата прохождения`);
+            continue;
+          }
+
+          const cRes = await query(
+            `SELECT id FROM courses WHERE lower(title_ru) = lower($1) OR lower(title_kz) = lower($1) LIMIT 1`,
+            [courseTitle]
+          );
+          const course = cRes.rows[0];
+          if (!course) {
+            errors.push(`Строка ${r}: курс "${courseTitle}" не найден — обучение не внесено`);
+            continue;
+          }
+
+          try {
+            const h = await buildHistoricalFields(course.id, {
+              test_date,
+              next_test_date: get('next_test_date'),
+              certificate_number: get('certificate_number'),
+              score_percent: get('score_percent')
+            });
+            await query(`
+              INSERT INTO assignments (user_id, course_id, protocol_number, protocol_date, assigned_by,
+                status, score_percent, test_date, next_test_date, certificate_number)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            `, [userResult.rows[0].id, course.id, protocol_number, protocol_date, req.user.id,
+                h.status, h.score_percent, h.test_date, h.next_test_date, h.certificate_number]);
+            await advanceProtocolCounter(protocol_number);
+            historyCreated++;
+          } catch (histErr) {
+            errors.push(`Строка ${r}: сотрудник создан, но не удалось внести обучение — ${histErr.message}`);
+          }
         }
+      } catch (rowErr) {
+        console.error(`Error importing row ${r}:`, rowErr);
+        errors.push(`Строка ${r}: не удалось создать сотрудника — ${rowErr.message}`);
+        skipped++;
       }
     }
 
     res.json({ created, skipped, historyCreated, errors });
   } catch (e) {
     console.error('Error importing users:', e);
-    res.status(500).json({ error: 'import_failed', details: e.message });
+    res.status(500).json({ error: 'import_failed', message: 'Не удалось выполнить импорт: ' + e.message, details: e.message });
   }
 });
 
@@ -217,7 +247,7 @@ router.get('/import-template.xlsx', authRequired, requireRole('admin', 'superadm
     ws.getColumn('next_test_date').numFmt = 'yyyy-mm-dd';
     ws.addRow({
       last_name: 'Иванов', first_name: 'Иван', object: 'Объект 1', department: 'Отдел ОТ',
-      position: 'Инженер', login: '10001', password: '',
+      position: 'Инженер', login: '', password: '',
       course: '', protocol_number: '', protocol_date: '', test_date: '', certificate_number: '', next_test_date: '', score_percent: ''
     });
     ws.addRow({
@@ -232,9 +262,12 @@ router.get('/import-template.xlsx', authRequired, requireRole('admin', 'superadm
     [
       'Инструкция по заполнению файла для массовой загрузки сотрудников:',
       '1. Заполните лист "Сотрудники", по одной строке на каждого сотрудника.',
-      '2. Обязательные колонки: Фамилия, Имя, Логин. Логин (или табельный номер) должен быть уникальным.',
-      '3. Колонки Объект, Отдел, Должность, Пароль — необязательные.',
-      '4. Если оставить колонку "Пароль" пустой, система сгенерирует случайный пароль автоматически.',
+      '2. Обязательные колонки: Фамилия, Имя.',
+      '3. Колонки Объект, Отдел, Должность, Логин, Пароль — необязательные.',
+      '3а. Логин (или табельный номер), если указан, должен быть уникальным. Если оставить его пустым,',
+      '    сотрудник будет создан только по ФИО, без доступа в систему — логин и пароль можно будет',
+      '    назначить позже на вкладке "Сотрудники" кнопкой "Изменить" у нужного сотрудника.',
+      '4. Если логин указан, а колонка "Пароль" оставлена пустой, система сгенерирует случайный пароль автоматически.',
       '5. Все загруженные сотрудники получают роль "Сотрудник" (employee).',
       '',
       'Колонки Курс / № протокола / Дата протокола / Дата прохождения / № сертификата / Действителен до / Результат %',
@@ -299,26 +332,34 @@ function validateRole(requesterRole, targetRole) {
 }
 
 // Create single user
+// Логин и пароль необязательны при создании — можно добавить сотрудника
+// только по ФИО и назначить ему доступ позже через редактирование карточки.
 router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   const { last_name, first_name, object, department, position, login, password, role } = req.body;
   const targetRole = role || 'employee';
+  const loginVal = login && String(login).trim() ? String(login).trim() : null;
 
   if (!validateRole(req.user.role, targetRole)) {
     return res.status(403).json({ error: 'forbidden_role', message: 'Недостаточно прав для назначения роли' });
   }
-  if (!last_name || !first_name || !login || !password) {
-    return res.status(400).json({ error: 'missing_fields' });
+  if (!last_name || !first_name) {
+    return res.status(400).json({ error: 'missing_fields', message: 'Укажите фамилию и имя' });
+  }
+  if (loginVal && !password) {
+    return res.status(400).json({ error: 'password_required', message: 'При указании логина укажите и пароль для него' });
   }
 
   try {
-    const exists = await query('SELECT id FROM users WHERE login = $1', [login]);
-    if (exists.rows.length > 0) return res.status(409).json({ error: 'login_taken' });
+    if (loginVal) {
+      const exists = await query('SELECT id FROM users WHERE login = $1', [loginVal]);
+      if (exists.rows.length > 0) return res.status(409).json({ error: 'login_taken' });
+    }
 
-    const hash = bcrypt.hashSync(String(password), 10);
+    const hash = loginVal ? bcrypt.hashSync(String(password), 10) : null;
     const result = await query(
       `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-      [last_name, first_name, object || '', department || '', position || '', login, hash, targetRole]
+      [last_name, first_name, object || '', department || '', position || '', loginVal, hash, targetRole]
     );
     res.json({ id: result.rows[0].id });
   } catch (e) {
@@ -361,12 +402,29 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
     if (object !== undefined) { params.push(object); fields.push(`object = $${params.length}`); }
     if (department !== undefined) { params.push(department); fields.push(`department = $${params.length}`); }
     if (position !== undefined) { params.push(position); fields.push(`position = $${params.length}`); }
+
+    // Логин можно оставить пустым (сотрудник без доступа) или назначить/сменить в любой момент.
+    // Пустая строка трактуется как "убрать логин" (сохраняется как NULL — так уникальность
+    // логина не конфликтует между несколькими сотрудниками без доступа).
+    let loginVal;
     if (login !== undefined) {
-      const existing = await query('SELECT id FROM users WHERE login = $1 AND id != $2', [login, id]);
-      if (existing.rows.length > 0) return res.status(409).json({ error: 'login_taken' });
-      params.push(login);
+      loginVal = String(login).trim() ? String(login).trim() : null;
+      if (loginVal) {
+        const existing = await query('SELECT id FROM users WHERE login = $1 AND id != $2', [loginVal, id]);
+        if (existing.rows.length > 0) return res.status(409).json({ error: 'login_taken' });
+      }
+      params.push(loginVal);
       fields.push(`login = $${params.length}`);
     }
+
+    // Если в итоге у сотрудника появляется логин, у него должен быть и пароль —
+    // либо он уже был задан раньше, либо его нужно указать в этом же запросе.
+    const finalLogin = login !== undefined ? loginVal : target.login;
+    const willHavePassword = password || target.password_hash;
+    if (finalLogin && !willHavePassword) {
+      return res.status(400).json({ error: 'password_required', message: 'При указании логина укажите и пароль для него' });
+    }
+
     if (active !== undefined) { params.push(active ? 1 : 0); fields.push(`active = $${params.length}`); }
     if (password) {
       params.push(bcrypt.hashSync(String(password), 10));
