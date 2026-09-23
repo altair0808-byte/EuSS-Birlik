@@ -5,6 +5,7 @@ const ExcelJS = require('exceljs');
 const { query, pool } = require('../db');
 const { authRequired, requireRole } = require('./auth');
 const { makeUploader } = require('../upload');
+const { buildHistoricalFields, advanceProtocolCounter } = require('./assignments');
 
 const upload = makeUploader('imports');
 
@@ -32,7 +33,11 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, re
 });
 
 // Bulk import from Excel
-// Expected columns (header row, any order): Фамилия, Имя, Объект, Отдел, Должность, Логин, Пароль
+// Обязательные колонки (шапка, порядок любой): Фамилия, Имя, Логин
+// Опционально: Объект, Отдел, Должность, Пароль
+// Опционально (чтобы сразу зафиксировать уже пройденное ранее обучение —
+// например, из старого бумажного/Excel-журнала — вместе с созданием сотрудника):
+// Курс, № протокола, Дата протокола, Дата прохождения, № сертификата, Действителен до, Результат %
 router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'no_file' });
 
@@ -45,8 +50,35 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
     'должность': 'position',
     'логин': 'login',
     'табельный номер': 'login',
-    'пароль': 'password'
+    'пароль': 'password',
+    'курс': 'course',
+    'название курса': 'course',
+    'номер протокола': 'protocol_number',
+    '№ протокола': 'protocol_number',
+    'дата протокола': 'protocol_date',
+    'дата прохождения': 'test_date',
+    'дата тестирования': 'test_date',
+    'номер сертификата': 'certificate_number',
+    '№ сертификата': 'certificate_number',
+    'действителен до': 'next_test_date',
+    'дата след. прохождения': 'next_test_date',
+    'результат %': 'score_percent',
+    'балл': 'score_percent'
   };
+
+  // Excel хранит даты как объекты Date — приводим к формату YYYY-MM-DD,
+  // как их вводят вручную в форме "Назначить тест" (input type="date"),
+  // чтобы даты выглядели одинаково независимо от способа ввода.
+  function cellToDateStr(cellValue) {
+    if (!cellValue) return '';
+    if (cellValue instanceof Date) {
+      const y = cellValue.getUTCFullYear();
+      const m = String(cellValue.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(cellValue.getUTCDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+    return String(cellValue).trim();
+  }
 
   try {
     const wb = new ExcelJS.Workbook();
@@ -64,12 +96,17 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
       return res.status(400).json({ error: 'missing_columns', message: 'В файле должны быть колонки: Фамилия, Имя, Логин (и опционально Объект, Отдел, Должность, Пароль)' });
     }
 
-    let created = 0, skipped = 0;
+    const DATE_FIELDS = new Set(['protocol_date', 'test_date', 'next_test_date']);
+    let created = 0, skipped = 0, historyCreated = 0;
     const errors = [];
 
     for (let r = 2; r <= ws.rowCount; r++) {
       const row = ws.getRow(r);
-      const get = (field) => colByField[field] ? String(row.getCell(colByField[field]).value || '').trim() : '';
+      const get = (field) => {
+        if (!colByField[field]) return '';
+        const raw = row.getCell(colByField[field]).value;
+        return DATE_FIELDS.has(field) ? cellToDateStr(raw) : String(raw || '').trim();
+      };
       const last_name = get('last_name');
       const first_name = get('first_name');
       const login = get('login');
@@ -90,15 +127,59 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
 
       const password = get('password') || Math.random().toString(36).slice(-8);
       const hash = bcrypt.hashSync(password, 10);
-      await query(
+      const userResult = await query(
         `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'employee')`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'employee') RETURNING id`,
         [last_name, first_name, get('object'), get('department'), get('position'), login, hash]
       );
       created++;
+
+      // Если в строке указан курс — параллельно заносим уже пройденное ранее
+      // обучение (протокол + сертификат) как историческую запись, чтобы не
+      // вбивать её вручную по каждому сотруднику после импорта.
+      const courseTitle = get('course');
+      if (courseTitle) {
+        const protocol_number = get('protocol_number');
+        const protocol_date = get('protocol_date');
+        const test_date = get('test_date');
+
+        if (!protocol_number || !protocol_date || !test_date) {
+          errors.push(`Строка ${r}: сотрудник создан, но обучение не внесено — для курса "${courseTitle}" нужны № протокола, дата протокола и дата прохождения`);
+          continue;
+        }
+
+        const cRes = await query(
+          `SELECT id FROM courses WHERE lower(title_ru) = lower($1) OR lower(title_kz) = lower($1) LIMIT 1`,
+          [courseTitle]
+        );
+        const course = cRes.rows[0];
+        if (!course) {
+          errors.push(`Строка ${r}: курс "${courseTitle}" не найден — обучение не внесено`);
+          continue;
+        }
+
+        try {
+          const h = await buildHistoricalFields(course.id, {
+            test_date,
+            next_test_date: get('next_test_date'),
+            certificate_number: get('certificate_number'),
+            score_percent: get('score_percent')
+          });
+          await query(`
+            INSERT INTO assignments (user_id, course_id, protocol_number, protocol_date, assigned_by,
+              status, score_percent, test_date, next_test_date, certificate_number)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          `, [userResult.rows[0].id, course.id, protocol_number, protocol_date, req.user.id,
+              h.status, h.score_percent, h.test_date, h.next_test_date, h.certificate_number]);
+          await advanceProtocolCounter(protocol_number);
+          historyCreated++;
+        } catch (histErr) {
+          errors.push(`Строка ${r}: сотрудник создан, но не удалось внести обучение — ${histErr.message}`);
+        }
+      }
     }
 
-    res.json({ created, skipped, errors });
+    res.json({ created, skipped, historyCreated, errors });
   } catch (e) {
     console.error('Error importing users:', e);
     res.status(500).json({ error: 'import_failed', details: e.message });
@@ -109,6 +190,9 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
 // Должен быть объявлен раньше '/:id', иначе Express примет "import-template.xlsx" за id
 router.get('/import-template.xlsx', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
+    const courseRes = await query('SELECT title_ru FROM courses ORDER BY id LIMIT 1');
+    const exampleCourse = courseRes.rows[0]?.title_ru || 'Точное название курса из вкладки "Курсы"';
+
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('Сотрудники');
     ws.columns = [
@@ -118,16 +202,29 @@ router.get('/import-template.xlsx', authRequired, requireRole('admin', 'superadm
       { header: 'Отдел', key: 'department', width: 20 },
       { header: 'Должность', key: 'position', width: 22 },
       { header: 'Логин', key: 'login', width: 16 },
-      { header: 'Пароль', key: 'password', width: 16 }
+      { header: 'Пароль', key: 'password', width: 16 },
+      { header: 'Курс', key: 'course', width: 32 },
+      { header: '№ протокола', key: 'protocol_number', width: 16 },
+      { header: 'Дата протокола', key: 'protocol_date', width: 16 },
+      { header: 'Дата прохождения', key: 'test_date', width: 18 },
+      { header: '№ сертификата', key: 'certificate_number', width: 18 },
+      { header: 'Действителен до', key: 'next_test_date', width: 18 },
+      { header: 'Результат %', key: 'score_percent', width: 14 }
     ];
     ws.getRow(1).font = { bold: true };
+    ws.getColumn('protocol_date').numFmt = 'yyyy-mm-dd';
+    ws.getColumn('test_date').numFmt = 'yyyy-mm-dd';
+    ws.getColumn('next_test_date').numFmt = 'yyyy-mm-dd';
     ws.addRow({
       last_name: 'Иванов', first_name: 'Иван', object: 'Объект 1', department: 'Отдел ОТ',
-      position: 'Инженер', login: '10001', password: ''
+      position: 'Инженер', login: '10001', password: '',
+      course: '', protocol_number: '', protocol_date: '', test_date: '', certificate_number: '', next_test_date: '', score_percent: ''
     });
     ws.addRow({
       last_name: 'Петрова', first_name: 'Анна', object: 'Объект 2', department: 'Производство',
-      position: 'Мастер', login: '10002', password: 'MyPass123'
+      position: 'Мастер', login: '10002', password: 'MyPass123',
+      course: exampleCourse, protocol_number: '1', protocol_date: '2026-01-15', test_date: '2026-01-15',
+      certificate_number: '', next_test_date: '', score_percent: '100'
     });
 
     const notes = wb.addWorksheet('Инструкция');
@@ -139,8 +236,20 @@ router.get('/import-template.xlsx', authRequired, requireRole('admin', 'superadm
       '3. Колонки Объект, Отдел, Должность, Пароль — необязательные.',
       '4. Если оставить колонку "Пароль" пустой, система сгенерирует случайный пароль автоматически.',
       '5. Все загруженные сотрудники получают роль "Сотрудник" (employee).',
-      '6. Удалите строки-примеры перед загрузкой своего списка.',
-      '7. Загрузите готовый файл на вкладке "Сотрудники" кнопкой "Импорт из Excel (.xlsx)".'
+      '',
+      'Колонки Курс / № протокола / Дата протокола / Дата прохождения / № сертификата / Действителен до / Результат %',
+      'нужны только если у сотрудника уже ЕСТЬ пройденное ранее обучение (например, из бумажного или',
+      'старого Excel-журнала), и вы хотите сразу занести его вместе с созданием сотрудника — иначе',
+      'оставьте эти колонки пустыми, обучение можно будет назначить или внести позже вручную.',
+      '6. Колонка "Курс" — точное название курса, как оно указано во вкладке "Курсы" (регистр не важен).',
+      '7. Если заполнена колонка "Курс", обязательно заполните и № протокола, Дату протокола, Дату прохождения.',
+      '8. № сертификата можно оставить пустым — он будет присвоен автоматически по текущей нумерации из',
+      '   вкладки "Настройки". Действителен до — тоже необязательно, рассчитывается автоматически по сроку',
+      '   действия курса и дате прохождения. Результат % по умолчанию — 100.',
+      '9. Даты указывайте в формате ГГГГ-ММ-ДД (например, 2026-01-15) либо как дату в ячейке Excel.',
+      '10. Такому сотруднику обучение будет сразу отмечено как пройденное — статус "СДАЛ", без прохождения теста в системе.',
+      '11. Удалите строки-примеры перед загрузкой своего списка.',
+      '12. Загрузите готовый файл на вкладке "Сотрудники" кнопкой "Импорт из Excel (.xlsx)".'
     ].forEach(line => notes.addRow([line]));
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

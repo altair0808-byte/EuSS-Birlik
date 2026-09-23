@@ -3,7 +3,6 @@ const router = express.Router();
 const ExcelJS = require('exceljs');
 const { query, pool } = require('../db');
 const { authRequired, requireRole } = require('./auth');
-const { generateCertificatePdf } = require('./certificate');
 const { makeUploader } = require('../upload');
 
 const uploadImport = makeUploader('imports');
@@ -385,25 +384,9 @@ router.delete('/:id', authRequired, requireRole('admin', 'superadmin'), async (r
   }
 });
 
-// PDF certificate route directly on assignments
-router.get('/:id/certificate.pdf', authRequired, async (req, res) => {
-  try {
-    const aRes = await query('SELECT * FROM assignments WHERE id = $1', [req.params.id]);
-    const assignment = aRes.rows[0];
-    if (!assignment || !assignment.certificate_number) return res.status(404).send('Not found');
-
-    const uRes = await query('SELECT * FROM users WHERE id = $1', [assignment.user_id]);
-    const user = uRes.rows[0];
-    const cRes = await query('SELECT * FROM courses WHERE id = $1', [assignment.course_id]);
-    const course = cRes.rows[0];
-    const sRes = await query('SELECT * FROM settings WHERE id = 1');
-    const settings = sRes.rows[0] || {};
-
-    const lang = req.query.lang || 'ru';
-    generateCertificatePdf(res, { assignment, user, course, settings, lang });
-  } catch (e) {
-    res.status(500).send(e.message);
-  }
-});
-
+// Общие хелперы для исторических (уже пройденных ранее) записей обучения —
+// используются также при массовом импорте сотрудников из Excel (routes/users.js),
+// когда в том же файле сразу указаны протокол/сертификат/дата прохождения.
 module.exports = router;
+router.buildHistoricalFields = buildHistoricalFields;
+router.advanceProtocolCounter = advanceProtocolCounter;

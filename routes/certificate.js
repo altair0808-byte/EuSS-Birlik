@@ -146,39 +146,52 @@ router.get('/:id', authRequired, async (req, res) => {
     const protStr = a.protocol_number ? `Протокол № ${a.protocol_number}` : '';
     doc.text(`Дата выдачи: ${issueDateStr}     Действителен до: ${validUntilStr}     ${protStr}`, 0, 345, { align: 'center' });
 
-    // Блок председателя (сменщик 1 или 2 на вахте)
+    // Блок подписей комиссии: председатель (сменщик 1 или 2 на вахте) + до двух членов комиссии
     const isShift2 = parseInt(s.active_chairman, 10) === 2;
     const chairName = isShift2 ? (s.chairman2_name || s.chairman1_name) : (s.chairman1_name || s.chairman_name || 'Председатель комиссии');
     const chairPos = isShift2 ? (s.chairman2_position || 'Председатель комиссии') : (s.chairman1_position || 'Председатель комиссии');
     const chairSigData = isShift2 ? (s.chairman2_signature || s.chairman1_signature) : (s.chairman1_signature || s.signature_path);
 
-    const signBaseY = 415;
-    fBold(10);
-    doc.fillColor('#000000');
-    doc.text(chairPos, 80, signBaseY);
+    const committee = [{ role: chairPos, name: chairName, sig: chairSigData }];
+    if (s.member2_name) committee.push({ role: 'Член комиссии', name: s.member2_name, sig: null });
+    if (s.member3_name) committee.push({ role: 'Член комиссии', name: s.member3_name, sig: null });
 
-    fRegular(10);
-    doc.text(chairName, 520, signBaseY, { width: 240, align: 'right' });
+    const areaX = 60, areaW = 722;
+    const colW = areaW / committee.length;
+    const signBaseY = 400;
+    const lineY = signBaseY + 34;
 
-    doc.moveTo(270, signBaseY + 12).lineTo(510, signBaseY + 12).strokeColor('#888888').lineWidth(0.8).stroke();
+    committee.forEach((m, i) => {
+      const colX = areaX + i * colW;
+      fBold(9.5);
+      doc.fillColor('#000000');
+      doc.text(m.role, colX, signBaseY, { width: colW, align: 'center' });
 
-    // Подпись руководителя
-    const sigBuf = resolveImageBuffer(chairSigData);
-    if (sigBuf) {
-      try {
-        doc.image(sigBuf, 320, signBaseY - 26, { width: 130, height: 42, fit: [130, 42] });
-      } catch (e) {
-        console.error('Ошибка вставки подписи:', e);
+      doc.moveTo(colX + colW * 0.15, lineY).lineTo(colX + colW * 0.85, lineY).strokeColor('#888888').lineWidth(0.8).stroke();
+
+      if (m.sig) {
+        const sigBuf = resolveImageBuffer(m.sig);
+        if (sigBuf) {
+          try {
+            doc.image(sigBuf, colX + colW / 2 - 55, lineY - 30, { width: 110, height: 34, fit: [110, 34] });
+          } catch (e) {
+            console.error('Ошибка вставки подписи:', e);
+          }
+        }
       }
-    }
 
-    // Печать (накладывается частично на подпись)
+      fRegular(9.5);
+      doc.text(m.name, colX, lineY + 5, { width: colW, align: 'center' });
+    });
+
+    // Печать (накладывается частично на подпись председателя, первая колонка)
     const stampBuf = resolveImageBuffer(s.stamp_data || s.stamp_path);
     if (stampBuf) {
       try {
+        const chairCenterX = areaX + colW / 2;
         doc.save();
         doc.opacity(0.88);
-        doc.image(stampBuf, 410, signBaseY - 45, { width: 105, height: 105, fit: [105, 105] });
+        doc.image(stampBuf, chairCenterX - 52, lineY - 55, { width: 105, height: 105, fit: [105, 105] });
         doc.restore();
       } catch (e) {
         console.error('Ошибка вставки печати:', e);
