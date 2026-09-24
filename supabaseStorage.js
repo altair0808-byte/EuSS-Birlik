@@ -22,7 +22,7 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABA
 const BUCKET = process.env.SUPABASE_BUCKET || 'app-uploads';
 
 let client = null;
-let bucketReady = false;
+let bucketConfirmed = false; // ставим true ТОЛЬКО после подтверждённого успеха
 
 function getClient() {
   if (!SUPABASE_URL || !SUPABASE_KEY) {
@@ -38,21 +38,25 @@ function getClient() {
   return client;
 }
 
-async function ensureBucket() {
-  if (bucketReady) return;
+function isBucketMissingError(err) {
+  const msg = (err && (err.message || err.error || '')).toString().toLowerCase();
+  return msg.includes('bucket not found') || msg.includes('not_found') || msg.includes('does not exist');
+}
+
+// Пытается создать bucket. Не бросает ошибку, если bucket уже есть (в т.ч. если
+// создан кем-то параллельно) — бросает только если создание реально не удалось
+// по другой причине (например, недостаточно прав у ключа).
+async function createBucketIfMissing() {
   const supabase = getClient();
-  try {
-    const { data, error } = await supabase.storage.getBucket(BUCKET);
-    if (!data && error) {
-      const { error: createErr } = await supabase.storage.createBucket(BUCKET, { public: true });
-      if (createErr && !/already exists/i.test(createErr.message || '')) {
-        console.error('Не удалось создать bucket Supabase Storage:', createErr.message);
-      }
-    }
-  } catch (e) {
-    console.error('Ошибка проверки/создания bucket Supabase Storage:', e.message);
+  const { error } = await supabase.storage.createBucket(BUCKET, { public: true });
+  if (error && !/already exists|duplicate/i.test(error.message || '')) {
+    throw new Error(
+      `Не удалось создать bucket "${BUCKET}" в Supabase Storage: ${error.message}. ` +
+      'Проверьте, что SUPABASE_SERVICE_ROLE_KEY — это именно service_role ключ (не anon), ' +
+      'либо создайте bucket вручную в Supabase Dashboard → Storage.'
+    );
   }
-  bucketReady = true;
+  bucketConfirmed = true;
 }
 
 function safeExt(originalName) {
@@ -62,15 +66,33 @@ function safeExt(originalName) {
 
 // Загружает буфер в Supabase Storage и возвращает публичную ссылку.
 // folder: логическая подпапка внутри bucket'а (logo/stamp/signature/materials/videos/...)
+// Если bucket ещё не создан (или создание в прошлый раз не удалось), пытаемся
+// создать его прямо сейчас и повторить загрузку один раз.
 async function uploadBuffer(folder, originalName, buffer, mimetype) {
-  await ensureBucket();
   const supabase = getClient();
   const key = `${folder}/${Date.now()}_${Math.round(Math.random() * 1e9)}${safeExt(originalName)}`;
-  const { error } = await supabase.storage.from(BUCKET).upload(key, buffer, {
+
+  if (!bucketConfirmed) {
+    await createBucketIfMissing();
+  }
+
+  let { error } = await supabase.storage.from(BUCKET).upload(key, buffer, {
     contentType: mimetype || 'application/octet-stream',
     upsert: false
   });
+
+  if (error && isBucketMissingError(error)) {
+    // Bucket пропал/не создался — пробуем создать ещё раз и повторить один раз.
+    bucketConfirmed = false;
+    await createBucketIfMissing();
+    ({ error } = await supabase.storage.from(BUCKET).upload(key, buffer, {
+      contentType: mimetype || 'application/octet-stream',
+      upsert: false
+    }));
+  }
+
   if (error) throw error;
+
   const { data } = supabase.storage.from(BUCKET).getPublicUrl(key);
   return { url: data.publicUrl, key };
 }
