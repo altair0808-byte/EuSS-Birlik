@@ -66,6 +66,9 @@ const MM = 72 / 25.4;
 const STAMP_D = 42 * MM;      // круглая печать организации: обычно 40–45 мм, берём 42 мм (≈119 pt)
 const SIG_MAX_W = 55 * MM;    // рукописная подпись: до 55 мм в ширину (≈156 pt)
 const SIG_MAX_H = 22 * MM;    // ...и до 22 мм в высоту (≈62 pt)
+// Печать была замечена смещённой слишком далеко вправо от подписи — сдвигаем
+// её обратно к центру примерно на 3 см (по просьбе заказчика).
+const STAMP_SHIFT_LEFT = 30 * MM; // 3 см влево (≈85 pt)
 
 // sharp нужен только для «подчистки» загруженных изображений печати/подписи. Если пакет
 // вдруг не установлен — сертификат всё равно формируется, просто без автообрезки полей.
@@ -338,7 +341,7 @@ router.get('/:id', authRequired, async (req, res) => {
           nameHalfW + gap + chordHalf(nameY, 11),
           r * 0.6
         );
-        const stampCenterX = centerX + offset;
+        const stampCenterX = centerX + offset - STAMP_SHIFT_LEFT;
         doc.save();
         doc.opacity(0.9);
         doc.image(stampBuf, stampCenterX - r, stampCenterY - r, {

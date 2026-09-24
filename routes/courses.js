@@ -65,11 +65,70 @@ function clampVariant(n) {
 // List courses
 router.get('/', authRequired, async (req, res) => {
   try {
+    // untrained_count считается только для обязательных курсов (is_mandatory) —
+    // сколько активных сотрудников ещё ни разу не сдали этот курс ('passed').
+    // Нужно, чтобы на карточке курса и на главной странице сразу видеть
+    // сотрудников, которых добавили в систему, но обучение по БиОТ они ещё не прошли.
     const result = await query(`
-      SELECT c.*, (SELECT COUNT(*)::int FROM questions q WHERE q.course_id = c.id) as questions_count
+      SELECT c.*, (SELECT COUNT(*)::int FROM questions q WHERE q.course_id = c.id) as questions_count,
+        CASE WHEN c.is_mandatory THEN (
+          SELECT COUNT(*)::int FROM users u
+          WHERE u.role = 'employee' AND u.active = 1
+            AND NOT EXISTS (
+              SELECT 1 FROM assignments a
+              WHERE a.user_id = u.id AND a.course_id = c.id AND a.status = 'passed'
+            )
+        ) ELSE NULL END AS untrained_count
       FROM courses c ORDER BY c.created_at DESC
     `);
     res.json(result.rows);
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
+// Сводная статистика по каждому курсу для главной страницы (п.5 запроса —
+// разбивка статистики по видам курсов) + общее число сотрудников, которые ещё
+// не прошли хотя бы один обязательный курс (п.4 запроса).
+router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+  try {
+    const coursesRes = await query(`
+      SELECT c.id, c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.is_mandatory,
+        (SELECT COUNT(*)::int FROM users u WHERE u.role = 'employee' AND u.active = 1) AS total_employees,
+        (SELECT COUNT(DISTINCT a.user_id)::int FROM assignments a WHERE a.course_id = c.id AND a.status = 'passed') AS trained_employees,
+        (SELECT COUNT(*)::int FROM assignments a WHERE a.course_id = c.id AND a.status IN ('pending','in_progress')) AS pending,
+        (SELECT COUNT(*)::int FROM assignments a WHERE a.course_id = c.id AND a.status = 'failed') AS failed,
+        (SELECT COUNT(*)::int FROM assignments a WHERE a.course_id = c.id AND a.status = 'passed'
+            AND a.next_test_date IS NOT NULL AND a.next_test_date < NOW()) AS overdue,
+        CASE WHEN c.is_mandatory THEN (
+          SELECT COUNT(*)::int FROM users u
+          WHERE u.role = 'employee' AND u.active = 1
+            AND NOT EXISTS (
+              SELECT 1 FROM assignments a WHERE a.user_id = u.id AND a.course_id = c.id AND a.status = 'passed'
+            )
+        ) ELSE NULL END AS untrained
+      FROM courses c
+      ORDER BY c.title_ru
+    `);
+
+    const overallRes = await query(`
+      SELECT
+        (SELECT COUNT(*)::int FROM users WHERE role = 'employee' AND active = 1) AS total_employees,
+        (SELECT COUNT(DISTINCT u.id)::int
+           FROM users u
+           WHERE u.role = 'employee' AND u.active = 1
+             AND EXISTS (
+               SELECT 1 FROM courses c
+               WHERE c.is_mandatory = true
+                 AND NOT EXISTS (
+                   SELECT 1 FROM assignments a
+                   WHERE a.user_id = u.id AND a.course_id = c.id AND a.status = 'passed'
+                 )
+             )
+        ) AS employees_missing_mandatory
+    `);
+
+    res.json({ courses: coursesRes.rows, overall: overallRes.rows[0] });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }
@@ -151,18 +210,19 @@ router.get('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
 
 // Create course
 router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry } = req.body;
+  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry, is_mandatory } = req.body;
   if (!title_ru || !title_kz) return res.status(400).json({ error: 'missing_title' });
 
   try {
     const result = await query(`
-      INSERT INTO courses (title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, created_by, category_ru, category_kz, no_expiry)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id
+      INSERT INTO courses (title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, created_by, category_ru, category_kz, no_expiry, is_mandatory)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id
     `, [
       title_ru, title_kz, description_ru || '', description_kz || '', video_url || '',
       video_url_ru || '', video_url_kz || '',
       time_limit_minutes || 20, pass_score_percent || 80, validity_months || 12, req.user.id,
-      cleanCategory(category_ru), cleanCategory(category_kz), no_expiry === true || no_expiry === 'true'
+      cleanCategory(category_ru), cleanCategory(category_kz), no_expiry === true || no_expiry === 'true',
+      is_mandatory === true || is_mandatory === 'true'
     ]);
     res.json({ id: result.rows[0].id });
   } catch (e) {
@@ -172,25 +232,29 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
 
 // Update course
 router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry } = req.body;
+  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry, is_mandatory } = req.body;
   try {
     const prev = (await query('SELECT no_expiry FROM courses WHERE id = $1', [req.params.id])).rows[0];
     // no_expiry не пришёл (старый клиент) -> null -> COALESCE оставляет прежнее значение
     const noExpiry = (no_expiry === undefined || no_expiry === null) ? null : (no_expiry === true || no_expiry === 'true');
+    // is_mandatory не пришёл (старый клиент) -> null -> COALESCE оставляет прежнее значение
+    const mandatory = (is_mandatory === undefined || is_mandatory === null) ? null : (is_mandatory === true || is_mandatory === 'true');
     // category_* не пришли (старый клиент) -> null -> COALESCE оставляет прежнее значение
     await query(`
       UPDATE courses
       SET title_ru=$1, title_kz=$2, description_ru=$3, description_kz=$4, video_url=$5,
           video_url_ru=$6, video_url_kz=$7, time_limit_minutes=$8, pass_score_percent=$9, validity_months=$10,
           category_ru=COALESCE($12, category_ru), category_kz=COALESCE($13, category_kz),
-          no_expiry=COALESCE($14, no_expiry)
+          no_expiry=COALESCE($14, no_expiry),
+          is_mandatory=COALESCE($15, is_mandatory)
       WHERE id=$11
     `, [
       title_ru, title_kz, description_ru, description_kz, video_url,
       video_url_ru || '', video_url_kz || '', time_limit_minutes, pass_score_percent, validity_months, req.params.id,
       category_ru === undefined ? null : cleanCategory(category_ru),
       category_kz === undefined ? null : cleanCategory(category_kz),
-      noExpiry
+      noExpiry,
+      mandatory
     ]);
 
     // Переключили «бессрочный»: приводим уже сданные тесты этого курса в соответствие.
@@ -290,6 +354,28 @@ router.delete('/:id/video/:lang', authRequired, requireRole('admin', 'superadmin
 // ===================== Тесты: варианты (билеты) =====================
 
 // Сводка по вариантам — сколько вопросов заполнено в каждом из 10 билетов
+// Список активных сотрудников, которые ещё ни разу не сдали этот курс (п.4 запроса).
+// Работает для любого курса, но осмысленно использовать именно для обязательных.
+router.get('/:id/untrained', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT u.id, u.last_name, u.first_name, u.object, u.department, u.position,
+        EXISTS (
+          SELECT 1 FROM assignments a WHERE a.user_id = u.id AND a.course_id = $1
+        ) AS has_assignment
+      FROM users u
+      WHERE u.role = 'employee' AND u.active = 1
+        AND NOT EXISTS (
+          SELECT 1 FROM assignments a WHERE a.user_id = u.id AND a.course_id = $1 AND a.status = 'passed'
+        )
+      ORDER BY u.last_name, u.first_name
+    `, [req.params.id]);
+    res.json(result.rows);
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
 router.get('/:id/variants', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
     const result = await query(
