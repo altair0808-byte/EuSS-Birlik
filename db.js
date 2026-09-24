@@ -42,6 +42,8 @@ async function initDb() {
     ALTER TABLE assignments ADD COLUMN IF NOT EXISTS user_answers JSONB;
     ALTER TABLE assignments ADD COLUMN IF NOT EXISTS protocol_id BIGINT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS permanent_certificate_number TEXT;
+    -- № пропуска ТШО (TCO Badge) — попадает в колонку «ТШО рұқсатнама / № пропуска ТШО» Word-протокола
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS tco_badge TEXT;
 
     -- Материалы и видео курса отдельно на русском и казахском языке (п.3 запроса):
     -- раньше был один файл на курс, теперь администратор может загрузить свою

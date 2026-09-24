@@ -384,6 +384,8 @@ const state = {
   calendarDate: new Date(),
   protocols: [],
   activeProtocols: [],
+  protocolYear: null,          // выбранная вкладка-год во вкладке «Протоколы»
+  protocolSortDesc: true,      // сортировка по дате открытия: true — новые сверху
   courseFilter: { q: '', cat: '*' },   // cat: '*' = все, '' = без категории, иначе ключ категории
   collapsedCats: new Set(),
   assignCat: '*'
@@ -458,6 +460,7 @@ const api = {
   // Протоколы (открытие/закрытие, п.1 и п.4)
   getProtocols(filter = {}) { return this.req('/api/protocols' + qs(filter)); },
   getActiveProtocols() { return this.req('/api/protocols/active'); },
+  getNextProtocolNumber(year) { return this.req('/api/protocols/next-number' + qs({ year })); },
   openProtocol(data) { return this.req('/api/protocols', { method: 'POST', body: data }); },
   updateProtocol(id, data) { return this.req('/api/protocols/' + id, { method: 'PATCH', body: data }); },
   closeProtocol(id) { return this.req('/api/protocols/' + id + '/close', { method: 'POST' }); },
@@ -993,6 +996,11 @@ async function loadTabContent() {
               <input id="uCertNumber" placeholder="Например, 0125" class="w-full border p-2 rounded text-sm">
               <p class="text-[11px] text-slate-400 mt-1">Можно исправить вручную в любой момент — история пройденных тестов сотрудника при этом не меняется.</p>
             </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">№ пропуска ТШО (TCO Badge)</label>
+              <input id="uTcoBadge" placeholder="Например, 300375" class="w-full border p-2 rounded text-sm">
+              <p class="text-[11px] text-slate-400 mt-1">Подставляется в колонку «ТШО рұқсатнама / № пропуска ТШО» Word-протокола.</p>
+            </div>
             <p class="text-xs text-slate-400 -mt-1">Логин и пароль можно не указывать сейчас, а добавить позже — просто откройте карточку сотрудника ещё раз и нажмите «Изменить». При указании логина обязательно укажите и пароль.</p>
             <div id="roleFieldWrapper">
               <label class="text-xs font-semibold text-slate-600">Роль</label>
@@ -1236,11 +1244,16 @@ async function loadTabContent() {
         </div>
         ${orgNoteHtml('Показаны протоколы, по которым есть сотрудники:')}
         <p class="text-xs text-slate-500 mb-4">
-          Откройте протокол — укажите его номер и период (дату открытия и дату закрытия).
+          Откройте протокол — номер по умолчанию предлагается следующий по нумерации выбранного года
+          (его можно ввести вручную), затем укажите период (дату открытия и дату закрытия).
           Пока протокол открыт и сегодняшняя дата попадает в этот период, каждому сотруднику,
-          который сдаст тест в эти дни, номер этого протокола присвоится автоматически —
-          вручную вводить номер протокола при назначении теста не обязательно.
+          который сдаст тест в эти дни, номер этого протокола присвоится автоматически.
+          Готовый протокол скачивается в Word кнопкой «Скачать Word».
         </p>
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <div id="protocolYearTabs" class="flex flex-wrap gap-1"></div>
+          <button type="button" onclick="toggleProtocolSort()" id="protocolSortBtn" class="px-3 py-1.5 border rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-50"></button>
+        </div>
         <div class="overflow-x-auto">
           <table class="min-w-full divide-y divide-slate-200 text-sm">
             <thead class="bg-slate-50">
@@ -1262,9 +1275,13 @@ async function loadTabContent() {
           <h3 class="text-lg font-bold mb-4" id="protocolModalTitle">Открыть протокол</h3>
           <form onsubmit="saveProtocolForm(event)" class="space-y-3">
             <input type="hidden" id="protocolId">
-            <div><label class="text-xs font-semibold text-slate-600">Номер протокола</label><input id="protoNumber" required class="w-full border p-2 rounded text-sm" placeholder="Например, 1"></div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Номер протокола</label>
+              <input id="protoNumber" required oninput="this.dataset.auto = ''" class="w-full border p-2 rounded text-sm" placeholder="Например, 001">
+              <p id="protoNumberHint" class="text-[11px] text-slate-400 mt-1"></p>
+            </div>
             <div class="grid grid-cols-2 gap-3">
-              <div><label class="text-xs font-semibold text-slate-600">Дата открытия</label><input type="date" id="protoOpenDate" required class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Дата открытия</label><input type="date" id="protoOpenDate" required onchange="protoOpenDateChanged()" class="w-full border p-2 rounded text-sm"></div>
               <div><label class="text-xs font-semibold text-slate-600">Дата закрытия</label><input type="date" id="protoCloseDate" required class="w-full border p-2 rounded text-sm"></div>
             </div>
             <p class="text-[11px] text-slate-500">Всем сотрудникам, кто сдаст тест в этот период, номер протокола присвоится автоматически.</p>
@@ -1395,16 +1412,8 @@ async function loadTabContent() {
               <p class="text-[11px] text-slate-500 mt-2">На сертификате будут указаны ФИО, должность, подпись и печать только того председателя, у кого отмечена галочка. Данные второго председателя на сертификат не попадают.</p>
             </div>
             <div class="border-t pt-4">
-              <h3 class="text-sm font-bold text-slate-900 mb-2">Нумерация протоколов и сертификатов</h3>
+              <h3 class="text-sm font-bold text-slate-900 mb-2">Нумерация сертификатов</h3>
               <div class="grid grid-cols-2 gap-3">
-                <div>
-                  <label class="text-xs font-semibold text-slate-600">Префикс номера протокола</label>
-                  <input id="setProtPrefix" placeholder="напр. П-" class="w-full border p-2.5 rounded-lg text-sm">
-                </div>
-                <div>
-                  <label class="text-xs font-semibold text-slate-600">Следующий номер протокола</label>
-                  <input id="setProtNext" type="number" min="1" class="w-full border p-2.5 rounded-lg text-sm">
-                </div>
                 <div>
                   <label class="text-xs font-semibold text-slate-600">Префикс номера сертификата</label>
                   <input id="setCertPrefix" placeholder="напр. СЕРТ-" class="w-full border p-2.5 rounded-lg text-sm">
@@ -1917,6 +1926,7 @@ function openUserModal(u = null) {
   document.getElementById('uLogin').value = u ? u.login : '';
   document.getElementById('uPass').value = '';
   document.getElementById('uCertNumber').value = u ? (u.permanent_certificate_number || '') : '';
+  document.getElementById('uTcoBadge').value = u ? (u.tco_badge || '') : '';
   document.getElementById('uRole').value = u ? u.role : 'employee';
   const roleWrapper = document.getElementById('roleFieldWrapper');
   if (roleWrapper) {
@@ -1956,7 +1966,8 @@ async function saveUserForm(e) {
     position: document.getElementById('uPos').value.trim(),
     login: document.getElementById('uLogin').value.trim(),
     role: document.getElementById('uRole').value,
-    permanent_certificate_number: document.getElementById('uCertNumber').value.trim()
+    permanent_certificate_number: document.getElementById('uCertNumber').value.trim(),
+    tco_badge: document.getElementById('uTcoBadge').value.trim()
   };
   const pass = document.getElementById('uPass').value;
   if (pass) data.password = pass;
@@ -2961,52 +2972,151 @@ function fmtDate(d) {
   return parts.length === 3 ? `${parts[2]}.${parts[1]}.${parts[0]}` : s;
 }
 
+function protocolYearOf(p) {
+  return parseInt(String(p.open_date).slice(0, 4), 10);
+}
+
+function selectProtocolYear(year) {
+  state.protocolYear = year;
+  renderProtocolsView();
+}
+
+function toggleProtocolSort() {
+  state.protocolSortDesc = !state.protocolSortDesc;
+  renderProtocolsView();
+}
+
 async function loadProtocolsList() {
   const tbody = document.getElementById('protocolsTable');
   if (!tbody) return;
   try {
-    const list = await api.getProtocols(orgParams());
-    state.protocols = list;
-    if (!list.length) {
-      tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-slate-400">${orgActive() ? 'По выбранному объекту/отделу протоколов нет — сбросьте фильтр, чтобы увидеть все' : 'Пока нет ни одного протокола'}</td></tr>`;
-      return;
-    }
-    const todayStr = toLocalDateStr(new Date());
-    tbody.innerHTML = list.map(p => {
-      const isActiveNow = p.status === 'open' && String(p.open_date).slice(0,10) <= todayStr && todayStr <= String(p.close_date).slice(0,10);
-      return `
-      <tr class="hover:bg-slate-50">
-        <td class="px-4 py-3 font-bold text-slate-900">№ ${esc(p.protocol_number)}</td>
-        <td class="px-4 py-3 text-slate-600">${fmtDate(p.open_date)}</td>
-        <td class="px-4 py-3 text-slate-600">${fmtDate(p.close_date)}</td>
-        <td class="px-4 py-3">
-          <span class="text-xs font-bold px-2 py-1 rounded ${p.status === 'open' ? (isActiveNow ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800') : 'bg-slate-100 text-slate-600'}">
-            ${p.status === 'open' ? (isActiveNow ? 'ОТКРЫТ (действует сегодня)' : 'ОТКРЫТ') : 'ЗАКРЫТ'}
-          </span>
-        </td>
-        <td class="px-4 py-3 text-slate-600">${p.assignments_count || 0}</td>
-        <td class="px-4 py-3 text-right space-x-2 whitespace-nowrap">
-          <button onclick="editProtocol(${p.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>
-          ${p.status === 'open'
-            ? `<button onclick="closeProtocolAction(${p.id})" class="text-amber-600 hover:underline text-xs">Закрыть</button>`
-            : `<button onclick="reopenProtocolAction(${p.id})" class="text-emerald-600 hover:underline text-xs">Открыть снова</button>`}
-          <button onclick="deleteProtocolAction(${p.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
-        </td>
-      </tr>
-    `;
-    }).join('');
+    state.protocols = await api.getProtocols(orgParams());
+    renderProtocolsView();
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-red-500">${t('error_generic')}</td></tr>`;
   }
 }
 
+// Вкладки по годам (год = год даты открытия протокола) + сортировка по дате открытия внутри года
+function renderProtocolsView() {
+  const tbody = document.getElementById('protocolsTable');
+  const tabsEl = document.getElementById('protocolYearTabs');
+  if (!tbody || !tabsEl) return;
+  const list = state.protocols || [];
+  const currentYear = new Date().getFullYear();
+
+  const counts = {};
+  list.forEach(p => { const y = protocolYearOf(p); counts[y] = (counts[y] || 0) + 1; });
+  const years = Object.keys(counts).map(Number);
+  if (!years.includes(currentYear)) years.push(currentYear);
+  years.sort((x, y) => x - y);
+
+  // По умолчанию — текущий год; если выбранного года больше нет в списке — тоже текущий
+  if (!state.protocolYear || !years.includes(state.protocolYear)) state.protocolYear = currentYear;
+
+  tabsEl.innerHTML = years.map(y => `
+    <button type="button" onclick="selectProtocolYear(${y})"
+      class="px-4 py-1.5 rounded-lg text-sm font-semibold border ${y === state.protocolYear ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}">
+      ${y}<span class="ml-1.5 text-xs font-normal ${y === state.protocolYear ? 'text-blue-100' : 'text-slate-400'}">${counts[y] || 0}</span>
+    </button>
+  `).join('');
+
+  const sortBtn = document.getElementById('protocolSortBtn');
+  if (sortBtn) sortBtn.textContent = state.protocolSortDesc ? 'По дате открытия: новые сверху ↓' : 'По дате открытия: старые сверху ↑';
+
+  const rows = list.filter(p => protocolYearOf(p) === state.protocolYear).sort((p1, p2) => {
+    const d = String(p1.open_date).localeCompare(String(p2.open_date)) || (Number(p1.id) - Number(p2.id));
+    return state.protocolSortDesc ? -d : d;
+  });
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-slate-400">${
+      list.length && orgActive() ? 'По выбранному объекту/отделу за ' + state.protocolYear + ' год протоколов нет — сбросьте фильтр, чтобы увидеть все'
+      : (!list.length && orgActive() ? 'По выбранному объекту/отделу протоколов нет — сбросьте фильтр, чтобы увидеть все'
+      : 'За ' + state.protocolYear + ' год протоколов пока нет')}</td></tr>`;
+    return;
+  }
+
+  const todayStr = toLocalDateStr(new Date());
+  tbody.innerHTML = rows.map(p => {
+    const isActiveNow = p.status === 'open' && String(p.open_date).slice(0,10) <= todayStr && todayStr <= String(p.close_date).slice(0,10);
+    return `
+    <tr class="hover:bg-slate-50">
+      <td class="px-4 py-3 font-bold text-slate-900">№ ${esc(p.protocol_number)}</td>
+      <td class="px-4 py-3 text-slate-600">${fmtDate(p.open_date)}</td>
+      <td class="px-4 py-3 text-slate-600">${fmtDate(p.close_date)}</td>
+      <td class="px-4 py-3">
+        <span class="text-xs font-bold px-2 py-1 rounded ${p.status === 'open' ? (isActiveNow ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800') : 'bg-slate-100 text-slate-600'}">
+          ${p.status === 'open' ? (isActiveNow ? 'ОТКРЫТ (действует сегодня)' : 'ОТКРЫТ') : 'ЗАКРЫТ'}
+        </span>
+      </td>
+      <td class="px-4 py-3 text-slate-600">${p.assignments_count || 0}</td>
+      <td class="px-4 py-3 text-right space-x-2 whitespace-nowrap">
+        <button onclick="downloadProtocolDocx(${p.id})" class="text-indigo-600 hover:underline text-xs font-semibold">Скачать Word</button>
+        <button onclick="editProtocol(${p.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>
+        ${p.status === 'open'
+          ? `<button onclick="closeProtocolAction(${p.id})" class="text-amber-600 hover:underline text-xs">Закрыть</button>`
+          : `<button onclick="reopenProtocolAction(${p.id})" class="text-emerald-600 hover:underline text-xs">Открыть снова</button>`}
+        <button onclick="deleteProtocolAction(${p.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
+      </td>
+    </tr>
+  `;
+  }).join('');
+}
+
+async function downloadProtocolDocx(id) {
+  try {
+    const res = await api.req('/api/protocols/' + id + '/download');
+    const blob = await res.blob();
+    // Имя файла приходит с сервера: «2026-09-20 Протокол по БиОТ № 027.docx»
+    let name = 'protocol.docx';
+    const m = (res.headers.get('content-disposition') || '').match(/filename\*=UTF-8''([^;]+)/i);
+    if (m) { try { name = decodeURIComponent(m[1]); } catch (e) {} }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('Не удалось скачать протокол: ' + e.message);
+  }
+}
+
+// Предложить следующий номер по нумерации года даты открытия (пока номер не правили вручную)
+async function suggestProtocolNumber() {
+  const numEl = document.getElementById('protoNumber');
+  const hintEl = document.getElementById('protoNumberHint');
+  if (!numEl || numEl.dataset.auto !== '1') return;
+  const year = String(document.getElementById('protoOpenDate').value || '').slice(0, 4) || String(new Date().getFullYear());
+  try {
+    const r = await api.getNextProtocolNumber(year);
+    if (numEl.dataset.auto !== '1') return;   // пока грузилось, пользователь начал вводить вручную
+    numEl.value = r.next_number;
+    if (hintEl) hintEl.textContent = `Предложен следующий номер по нумерации ${year} года — можно изменить вручную.`;
+  } catch (e) {
+    if (hintEl) hintEl.textContent = 'Не удалось получить следующий номер — введите его вручную.';
+  }
+}
+
+function protoOpenDateChanged() {
+  suggestProtocolNumber();
+}
+
 function openProtocolModal(p = null) {
+  const numEl = document.getElementById('protoNumber');
+  const hintEl = document.getElementById('protoNumberHint');
   document.getElementById('protocolId').value = p ? p.id : '';
-  document.getElementById('protoNumber').value = p ? p.protocol_number : '';
+  numEl.value = p ? p.protocol_number : '';
+  numEl.dataset.auto = p ? '' : '1';
+  if (hintEl) hintEl.textContent = p ? '' : 'Подбираем следующий номер…';
   document.getElementById('protoOpenDate').value = p ? String(p.open_date).slice(0, 10) : toLocalDateStr(new Date());
   document.getElementById('protoCloseDate').value = p ? String(p.close_date).slice(0, 10) : toLocalDateStr(new Date());
   document.getElementById('protocolModalTitle').textContent = p ? 'Изменить протокол' : 'Открыть протокол';
   document.getElementById('protocolModal').classList.remove('hidden');
+  if (!p) suggestProtocolNumber();
 }
 
 function editProtocol(id) {
@@ -3026,6 +3136,8 @@ async function saveProtocolForm(e) {
     if (id) await api.updateProtocol(id, data);
     else await api.openProtocol(data);
     document.getElementById('protocolModal').classList.add('hidden');
+    // Переходим на вкладку года, в котором открыт/изменён протокол
+    state.protocolYear = parseInt(String(data.open_date).slice(0, 4), 10) || state.protocolYear;
     loadProtocolsList();
   } catch (e) {
     alert(e.message);
@@ -3576,8 +3688,6 @@ async function loadSettingsData() {
   const activeChair = parseInt(data.active_chairman, 10) === 2 ? '2' : '1';
   const rEl = document.querySelector(`input[name="activeChairman"][value="${activeChair}"]`);
   if (rEl) rEl.checked = true;
-  document.getElementById('setProtPrefix').value = data.protocol_prefix || '';
-  document.getElementById('setProtNext').value = data.protocol_next_number || 1;
   document.getElementById('setCertPrefix').value = data.certificate_prefix || '';
   document.getElementById('setCertDigits').value = data.certificate_digits || 4;
   document.getElementById('setCertNext').value = data.certificate_next_number || 1;
@@ -3606,8 +3716,6 @@ async function saveSettingsForm(e) {
     chairman2_name: document.getElementById('setChair2Name').value.trim(),
     chairman2_position: document.getElementById('setChair2Pos').value.trim(),
     active_chairman: (document.querySelector('input[name="activeChairman"]:checked') || {}).value || '1',
-    protocol_prefix: document.getElementById('setProtPrefix').value.trim(),
-    protocol_next_number: document.getElementById('setProtNext').value,
     certificate_prefix: document.getElementById('setCertPrefix').value.trim(),
     certificate_digits: document.getElementById('setCertDigits').value,
     certificate_next_number: document.getElementById('setCertNext').value
