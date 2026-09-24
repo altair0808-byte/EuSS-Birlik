@@ -3,10 +3,13 @@ const router = express.Router();
 const ExcelJS = require('exceljs');
 const { query, pool } = require('../db');
 const { authRequired, requireRole } = require('./auth');
-const { makeUploader } = require('../upload');
+const { makeMemoryUploader } = require('../upload');
+const supabaseStorage = require('../supabaseStorage');
 
-// Материалы курса — презентация или PDF-методичка
-const uploadMaterial = makeUploader('materials', {
+// Материалы курса — презентация или PDF-методичка. Загружаются в память и сразу
+// отправляются в Supabase Storage (п.2 запроса) — файл не хранится на локальном
+// диске сервера и не пропадает при redeploy, и не грузится повторно.
+const uploadMaterial = makeMemoryUploader({
   maxSizeMB: 50,
   fileFilter: (req, file, cb) => {
     const okExt = /\.(pdf|ppt|pptx)$/i.test(file.originalname || '');
@@ -17,7 +20,7 @@ const uploadMaterial = makeUploader('materials', {
 });
 
 // Видео курса — отдельный файл (необязательный, вместо/вместе со ссылкой)
-const uploadVideo = makeUploader('videos', {
+const uploadVideo = makeMemoryUploader({
   maxSizeMB: 300,
   fileFilter: (req, file, cb) => {
     const okExt = /\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(file.originalname || '');
@@ -27,8 +30,19 @@ const uploadVideo = makeUploader('videos', {
   }
 });
 
-// Excel-файл с базой тестовых вопросов (билеты/варианты)
-const uploadImport = makeUploader('imports');
+// Excel-файл с базой тестовых вопросов (билеты/варианты) — тоже читается прямо
+// из памяти, на диск не пишется.
+const uploadImport = makeMemoryUploader({ maxSizeMB: 20 });
+
+async function uploadToStorage(folder, file) {
+  if (!supabaseStorage.isConfigured()) {
+    throw new Error(
+      'Supabase Storage не настроен: задайте SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY в переменных окружения'
+    );
+  }
+  const { url } = await supabaseStorage.uploadBuffer(folder, file.originalname, file.buffer, file.mimetype);
+  return url;
+}
 
 const MAX_VARIANTS = 10;
 const QUESTIONS_PER_VARIANT = 10;
@@ -191,12 +205,12 @@ router.post('/:id/material/:lang', authRequired, requireRole('admin', 'superadmi
     if (err) return res.status(400).json({ error: 'bad_file_type', message: 'Допустимы файлы PDF, PPT или PPTX' });
     if (!req.file) return res.status(400).json({ error: 'no_file' });
     const col = langCol('material_pdf_path', req.params.lang);
-    const p = `/uploads/materials/${req.file.filename}`;
     try {
-      await query(`UPDATE courses SET ${col} = $1 WHERE id = $2`, [p, req.params.id]);
-      res.json({ [col]: p });
+      const url = await uploadToStorage('materials', req.file);
+      await query(`UPDATE courses SET ${col} = $1 WHERE id = $2`, [url, req.params.id]);
+      res.json({ [col]: url });
     } catch (e) {
-      res.status(500).json({ error: 'db_error', details: e.message });
+      res.status(500).json({ error: 'upload_error', details: e.message });
     }
   });
 });
@@ -220,12 +234,12 @@ router.post('/:id/video/:lang', authRequired, requireRole('admin', 'superadmin')
     if (err) return res.status(400).json({ error: 'bad_file_type', message: 'Допустимы видеофайлы (mp4, webm, mov и т.п.)' });
     if (!req.file) return res.status(400).json({ error: 'no_file' });
     const col = langCol('video_path', req.params.lang);
-    const p = `/uploads/videos/${req.file.filename}`;
     try {
-      await query(`UPDATE courses SET ${col} = $1 WHERE id = $2`, [p, req.params.id]);
-      res.json({ [col]: p });
+      const url = await uploadToStorage('videos', req.file);
+      await query(`UPDATE courses SET ${col} = $1 WHERE id = $2`, [url, req.params.id]);
+      res.json({ [col]: url });
     } catch (e) {
-      res.status(500).json({ error: 'db_error', details: e.message });
+      res.status(500).json({ error: 'upload_error', details: e.message });
     }
   });
 });
@@ -282,7 +296,7 @@ router.post('/:id/questions/import', authRequired, requireRole('admin', 'superad
 
     try {
       const wb = new ExcelJS.Workbook();
-      await wb.xlsx.readFile(req.file.path);
+      await wb.xlsx.load(req.file.buffer);
       const ws = wb.worksheets[0];
       if (!ws) return res.status(400).json({ error: 'empty_file' });
 

@@ -1,19 +1,30 @@
 const express = require('express');
 const router = express.Router();
-const fs = require('fs');
 const { query } = require('../db');
 const { authRequired, requireRole } = require('./auth');
-const { makeUploader } = require('../upload');
+const { makeMemoryUploader } = require('../upload');
+const supabaseStorage = require('../supabaseStorage');
 
-const uploadLogo = makeUploader('logo');
-const uploadStamp = makeUploader('stamp');
-const uploadSignature = makeUploader('signature');
+const imageUpload = makeMemoryUploader({
+  maxSizeMB: 8,
+  fileFilter: (req, file, cb) => {
+    const ok = /^image\//i.test(file.mimetype || '') || /\.(png|jpe?g|webp|gif|svg)$/i.test(file.originalname || '');
+    if (ok) return cb(null, true);
+    cb(new Error('bad_file_type'));
+  }
+});
 
-function fileToDataUrl(file) {
-  if (!file || !file.path) return null;
-  const mime = file.mimetype || 'image/png';
-  const b64 = fs.readFileSync(file.path).toString('base64');
-  return 'data:' + mime + ';base64,' + b64;
+// Загружает файл (буфер из памяти) в Supabase Storage и возвращает публичную
+// ссылку. Файл загружается ОДИН раз — дальше в базе хранится только ссылка,
+// повторных загрузок того же файла при сохранении других настроек не требуется.
+async function uploadToStorage(folder, file) {
+  if (!supabaseStorage.isConfigured()) {
+    throw new Error(
+      'Supabase Storage не настроен: задайте SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY в переменных окружения'
+    );
+  }
+  const { url } = await supabaseStorage.uploadBuffer(folder, file.originalname, file.buffer, file.mimetype);
+  return url;
 }
 
 router.get('/', authRequired, async (req, res) => {
@@ -34,43 +45,37 @@ router.get('/public', async (req, res) => {
   }
 });
 
+// Настройки комиссии и нумерации. Комиссия теперь — строго два председателя
+// (без "членов комиссии"): у каждого своё ФИО, должность и подпись, оба
+// подписывают сертификат.
 router.put('/', authRequired, requireRole('superadmin'), async (req, res) => {
   const {
-    company_name, chairman_name, member2_name, member3_name,
+    company_name,
     chairman1_name, chairman1_position,
     chairman2_name, chairman2_position,
-    active_chairman,
     protocol_prefix, protocol_next_number,
     certificate_prefix, certificate_digits, certificate_next_number
   } = req.body;
 
   try {
-    const actChair = parseInt(active_chairman, 10) === 2 ? 2 : 1;
-    const cName = (actChair === 2 ? chairman2_name : (chairman1_name || chairman_name)) || '';
-
     const result = await query(
       `UPDATE settings SET
         company_name = COALESCE($1, company_name),
-        chairman_name = COALESCE($2, chairman_name),
-        member2_name = COALESCE($3, member2_name),
-        member3_name = COALESCE($4, member3_name),
-        chairman1_name = COALESCE($5, chairman1_name),
-        chairman1_position = COALESCE($6, chairman1_position),
-        chairman2_name = COALESCE($7, chairman2_name),
-        chairman2_position = COALESCE($8, chairman2_position),
-        active_chairman = $9,
-        protocol_prefix = COALESCE($10, protocol_prefix),
-        protocol_next_number = COALESCE($11, protocol_next_number),
-        certificate_prefix = COALESCE($12, certificate_prefix),
-        certificate_digits = COALESCE($13, certificate_digits),
-        certificate_next_number = COALESCE($14, certificate_next_number)
+        chairman1_name = COALESCE($2, chairman1_name),
+        chairman1_position = COALESCE($3, chairman1_position),
+        chairman2_name = COALESCE($4, chairman2_name),
+        chairman2_position = COALESCE($5, chairman2_position),
+        protocol_prefix = COALESCE($6, protocol_prefix),
+        protocol_next_number = COALESCE($7, protocol_next_number),
+        certificate_prefix = COALESCE($8, certificate_prefix),
+        certificate_digits = COALESCE($9, certificate_digits),
+        certificate_next_number = COALESCE($10, certificate_next_number)
       WHERE id = 1
       RETURNING *`,
       [
-        company_name, cName, member2_name, member3_name,
-        chairman1_name || chairman_name, chairman1_position,
+        company_name,
+        chairman1_name, chairman1_position,
         chairman2_name, chairman2_position,
-        actChair,
         protocol_prefix,
         protocol_next_number !== undefined ? Number(protocol_next_number) : null,
         certificate_prefix,
@@ -85,58 +90,56 @@ router.put('/', authRequired, requireRole('superadmin'), async (req, res) => {
 });
 
 router.post('/logo', authRequired, requireRole('superadmin'), (req, res) => {
-  uploadLogo.single('file')(req, res, async (err) => {
+  imageUpload.single('file')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: 'bad_file', message: err.message || 'Не удалось загрузить файл' });
     if (!req.file) return res.status(400).json({ error: 'no_file', message: 'Файл не выбран' });
-    const dataUrl = fileToDataUrl(req.file);
-    const webPath = '/uploads/logo/' + req.file.filename;
     try {
+      const url = await uploadToStorage('logo', req.file);
       const result = await query(
-        'UPDATE settings SET logo_path = $1, logo_data = $2 WHERE id = 1 RETURNING *',
-        [webPath, dataUrl]
+        'UPDATE settings SET logo_path = $1, logo_data = NULL WHERE id = 1 RETURNING *',
+        [url]
       );
       res.json(result.rows[0]);
     } catch (e) {
-      res.status(500).json({ error: 'db_error', details: e.message });
+      res.status(500).json({ error: 'upload_error', details: e.message });
     }
   });
 });
 
 router.post('/stamp', authRequired, requireRole('superadmin'), (req, res) => {
-  uploadStamp.single('file')(req, res, async (err) => {
+  imageUpload.single('file')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: 'bad_file', message: err.message || 'Не удалось загрузить файл' });
     if (!req.file) return res.status(400).json({ error: 'no_file', message: 'Файл не выбран' });
-    const dataUrl = fileToDataUrl(req.file);
-    const webPath = '/uploads/stamp/' + req.file.filename;
     try {
+      const url = await uploadToStorage('stamp', req.file);
       const result = await query(
-        'UPDATE settings SET stamp_path = $1, stamp_data = $2 WHERE id = 1 RETURNING *',
-        [webPath, dataUrl]
+        'UPDATE settings SET stamp_path = $1, stamp_data = NULL WHERE id = 1 RETURNING *',
+        [url]
       );
       res.json(result.rows[0]);
     } catch (e) {
-      res.status(500).json({ error: 'db_error', details: e.message });
+      res.status(500).json({ error: 'upload_error', details: e.message });
     }
   });
 });
 
+// Подпись одного из двух председателей: ?chairman=1 или ?chairman=2
 router.post('/signature', authRequired, requireRole('superadmin'), (req, res) => {
-  uploadSignature.single('file')(req, res, async (err) => {
+  imageUpload.single('file')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: 'bad_file', message: err.message || 'Не удалось загрузить файл' });
     if (!req.file) return res.status(400).json({ error: 'no_file', message: 'Файл не выбран' });
-    const dataUrl = fileToDataUrl(req.file);
-    const webPath = '/uploads/signature/' + req.file.filename;
     const chairNum = req.query.chairman === '2' ? 2 : 1;
     const colSig = chairNum === 2 ? 'chairman2_signature' : 'chairman1_signature';
 
     try {
+      const url = await uploadToStorage('signature', req.file);
       const result = await query(
-        `UPDATE settings SET signature_path = $1, ${colSig} = $2 WHERE id = 1 RETURNING *`,
-        [webPath, dataUrl]
+        `UPDATE settings SET ${colSig} = $1 WHERE id = 1 RETURNING *`,
+        [url]
       );
       res.json(result.rows[0]);
     } catch (e) {
-      res.status(500).json({ error: 'db_error', details: e.message });
+      res.status(500).json({ error: 'upload_error', details: e.message });
     }
   });
 });
