@@ -1232,10 +1232,13 @@ async function loadTabContent() {
               <input id="setComp" required class="w-full border p-2.5 rounded-lg text-sm">
             </div>
             <div class="border-t pt-4">
-              <h3 class="text-sm font-bold text-slate-900 mb-2">Комиссия (двое председателей, подписывают сертификат вместе)</h3>
+              <h3 class="text-sm font-bold text-slate-900 mb-2">Комиссия (на сертификате используется только выбранный председатель)</h3>
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div class="space-y-2 border rounded-lg p-3">
-                  <div class="text-xs font-bold text-slate-700">Председатель комиссии 1</div>
+                  <label class="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer">
+                    <input type="radio" name="activeChairman" id="setActiveChair1" value="1">
+                    Использовать на сертификате — Председатель комиссии 1
+                  </label>
                   <div>
                     <label class="text-xs font-semibold text-slate-600">ФИО</label>
                     <input id="setChair1Name" required class="w-full border p-2.5 rounded-lg text-sm">
@@ -1246,7 +1249,10 @@ async function loadTabContent() {
                   </div>
                 </div>
                 <div class="space-y-2 border rounded-lg p-3">
-                  <div class="text-xs font-bold text-slate-700">Председатель комиссии 2</div>
+                  <label class="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer">
+                    <input type="radio" name="activeChairman" id="setActiveChair2" value="2">
+                    Использовать на сертификате — Председатель комиссии 2
+                  </label>
                   <div>
                     <label class="text-xs font-semibold text-slate-600">ФИО</label>
                     <input id="setChair2Name" class="w-full border p-2.5 rounded-lg text-sm">
@@ -1257,6 +1263,7 @@ async function loadTabContent() {
                   </div>
                 </div>
               </div>
+              <p class="text-[11px] text-slate-500 mt-2">На сертификате будут указаны ФИО, должность, подпись и печать только того председателя, у кого отмечена галочка. Данные второго председателя на сертификат не попадают.</p>
             </div>
             <div class="border-t pt-4">
               <h3 class="text-sm font-bold text-slate-900 mb-2">Нумерация протоколов и сертификатов</h3>
@@ -2716,6 +2723,9 @@ async function loadSettingsData() {
   document.getElementById('setChair1Pos').value = data.chairman1_position || '';
   document.getElementById('setChair2Name').value = data.chairman2_name || '';
   document.getElementById('setChair2Pos').value = data.chairman2_position || '';
+  const activeChair = parseInt(data.active_chairman, 10) === 2 ? '2' : '1';
+  const rEl = document.querySelector(`input[name="activeChairman"][value="${activeChair}"]`);
+  if (rEl) rEl.checked = true;
   document.getElementById('setProtPrefix').value = data.protocol_prefix || '';
   document.getElementById('setProtNext').value = data.protocol_next_number || 1;
   document.getElementById('setCertPrefix').value = data.certificate_prefix || '';
@@ -2745,6 +2755,7 @@ async function saveSettingsForm(e) {
     chairman1_position: document.getElementById('setChair1Pos').value.trim(),
     chairman2_name: document.getElementById('setChair2Name').value.trim(),
     chairman2_position: document.getElementById('setChair2Pos').value.trim(),
+    active_chairman: (document.querySelector('input[name="activeChairman"]:checked') || {}).value || '1',
     protocol_prefix: document.getElementById('setProtPrefix').value.trim(),
     protocol_next_number: document.getElementById('setProtNext').value,
     certificate_prefix: document.getElementById('setCertPrefix').value.trim(),
