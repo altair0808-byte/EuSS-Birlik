@@ -167,6 +167,13 @@ const I18N = {
 
     loading: 'Загрузка...',
     no_data: 'Нет данных',
+    cat_none: 'Без категории',
+    cat_all: 'Все',
+    all_categories: 'Все категории',
+    course_search_placeholder: 'Поиск по названию или категории...',
+    my_todo: 'К прохождению',
+    my_passed: 'Сдано',
+    my_failed: 'Не сдано',
     required_field: 'Обязательное поле',
     save_success: 'Сохранено',
     error_generic: 'Произошла ошибка. Попробуйте снова.',
@@ -317,6 +324,13 @@ const I18N = {
 
     loading: 'Жүктелуде...',
     no_data: 'Деректер жоқ',
+    cat_none: 'Санатсыз',
+    cat_all: 'Барлығы',
+    all_categories: 'Барлық санаттар',
+    course_search_placeholder: 'Атауы немесе санаты бойынша іздеу...',
+    my_todo: 'Тапсыруға',
+    my_passed: 'Тапсырылды',
+    my_failed: 'Тапсырылмады',
     required_field: 'Міндетті өріс',
     save_success: 'Сақталды',
     error_generic: 'Қате орын алды. Қайталап көріңіз.',
@@ -366,7 +380,10 @@ const state = {
   profileUserId: null,
   calendarDate: new Date(),
   protocols: [],
-  activeProtocols: []
+  activeProtocols: [],
+  courseFilter: { q: '', cat: '*' },   // cat: '*' = все, '' = без категории, иначе ключ категории
+  collapsedCats: new Set(),
+  assignCat: '*'
 };
 
 function qs(obj) {
@@ -885,7 +902,11 @@ async function loadTabContent() {
           <h2 class="text-lg font-bold text-slate-900">${t('courses_title')}</h2>
           <button onclick="openCourseModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold">+ ${t('add_course')}</button>
         </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="coursesList"><div class="p-4 text-slate-400">Загрузка курсов...</div></div>
+        <div class="flex flex-wrap items-center gap-2 mb-5">
+          <input id="cFilterQ" type="text" placeholder="${t('course_search_placeholder')}" value="${esc(state.courseFilter.q)}" oninput="onCourseFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm w-full sm:w-72">
+          <div id="courseCatChips" class="flex flex-wrap gap-1.5"></div>
+        </div>
+        <div id="coursesList" class="space-y-7"><div class="p-4 text-slate-400">Загрузка курсов...</div></div>
       </div>
       <div id="courseModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
         <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
@@ -896,6 +917,13 @@ async function loadTabContent() {
             <div><label class="text-xs font-semibold text-slate-600">Название (KZ)</label><input id="cTitleKz" required class="w-full border p-2 rounded text-sm"></div>
             <div><label class="text-xs font-semibold text-slate-600">Описание (RU)</label><textarea id="cDescRu" rows="2" class="w-full border p-2 rounded text-sm"></textarea></div>
             <div><label class="text-xs font-semibold text-slate-600">Описание (KZ)</label><textarea id="cDescKz" rows="2" class="w-full border p-2 rounded text-sm"></textarea></div>
+            <div class="border rounded-lg p-3 bg-slate-50">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div><label class="text-xs font-semibold text-slate-600">Категория (RU)</label><input id="cCatRu" list="courseCatListRu" autocomplete="off" oninput="onCourseCatRuInput()" placeholder="Например: Охрана труда" class="w-full border p-2 rounded text-sm bg-white"><datalist id="courseCatListRu"></datalist></div>
+                <div><label class="text-xs font-semibold text-slate-600">Категория (KZ)</label><input id="cCatKz" list="courseCatListKz" autocomplete="off" placeholder="Мысалы: Еңбекті қорғау" class="w-full border p-2 rounded text-sm bg-white"><datalist id="courseCatListKz"></datalist></div>
+              </div>
+              <p class="text-[11px] text-slate-500 mt-2">Курсы с одной категорией собираются в один раздел: в списке курсов, при назначении теста и в кабинете сотрудника. Выберите категорию из списка или впишите новую.</p>
+            </div>
             <div class="grid grid-cols-3 gap-3">
               <div><label class="text-xs font-semibold text-slate-600">Время (мин)</label><input type="number" id="cTime" value="20" class="w-full border p-2 rounded text-sm"></div>
               <div><label class="text-xs font-semibold text-slate-600">Проходной (%)</label><input type="number" id="cPass" value="80" class="w-full border p-2 rounded text-sm"></div>
@@ -1012,7 +1040,7 @@ async function loadTabContent() {
           <h2 class="text-lg font-bold text-slate-900">${t('nav_assignments')}</h2>
           <button onclick="openAssignModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold">+ Назначить тест</button>
         </div>
-        <div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-4">
+        <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2 mb-4">
           <input id="aFilterQ" type="text" placeholder="${t('search_placeholder')}" value="${esc(state.assignFilter.q)}" oninput="onAssignFilterChange()" class="col-span-2 border border-slate-300 rounded-lg px-3 py-2 text-sm">
           <select id="aFilterObject" onchange="onAssignFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm"><option value="">${t('all_objects')}</option></select>
           <select id="aFilterDept" onchange="onAssignFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm"><option value="">${t('all_departments')}</option></select>
@@ -1023,6 +1051,7 @@ async function loadTabContent() {
             <option value="passed">${t('status_passed')}</option>
             <option value="failed">${t('status_failed')}</option>
           </select>
+          <select id="aFilterCat" onchange="onAssignCatChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm"><option value="*">${t('all_categories')}</option></select>
           <div class="flex gap-1 col-span-2 md:col-span-1">
             <input id="aFilterFrom" type="date" title="${t('date_from')}" onchange="onAssignFilterChange()" class="w-full border border-slate-300 rounded-lg px-2 py-2 text-xs">
           </div>
@@ -1506,19 +1535,77 @@ async function saveUserForm(e) {
 }
 
 // --- COURSES LOGIC ---
+// --- КАТЕГОРИИ КУРСОВ: единая систематизация обучения (список курсов, назначения, кабинет сотрудника) ---
+const CAT_PALETTE = [
+  { fg: '#1d4ed8', bg: '#eff6ff', bd: '#bfdbfe' },
+  { fg: '#047857', bg: '#ecfdf5', bd: '#a7f3d0' },
+  { fg: '#b45309', bg: '#fffbeb', bd: '#fde68a' },
+  { fg: '#be123c', bg: '#fff1f2', bd: '#fecdd3' },
+  { fg: '#6d28d9', bg: '#f5f3ff', bd: '#ddd6fe' },
+  { fg: '#0e7490', bg: '#ecfeff', bd: '#a5f3fc' },
+  { fg: '#c2410c', bg: '#fff7ed', bd: '#fed7aa' }
+];
+const CAT_NONE_COLOR = { fg: '#475569', bg: '#f1f5f9', bd: '#e2e8f0' };
+
+// Ключ категории — русское название в нижнем регистре (если его нет — казахское). Пустая строка = без категории.
+function catKeyOf(c) { return String((c && (c.category_ru || c.category_kz)) || '').trim().toLowerCase(); }
+function catLabelOf(c) {
+  const ru = String((c && c.category_ru) || '').trim();
+  const kz = String((c && c.category_kz) || '').trim();
+  return CURRENT_LANG === 'kz' ? (kz || ru) : (ru || kz);
+}
+// Цвет категории считается от её названия — поэтому одна и та же категория имеет один и тот же цвет на всех страницах
+function catColorOf(key) {
+  if (!key) return CAT_NONE_COLOR;
+  let h = 0;
+  for (const ch of key) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return CAT_PALETTE[h % CAT_PALETTE.length];
+}
+function catBadgeHtml(c) {
+  const key = catKeyOf(c);
+  if (!key) return '';
+  const col = catColorOf(key);
+  return `<span class="inline-block text-[11px] font-semibold px-2 py-0.5 rounded-full border" style="background:${col.bg};color:${col.fg};border-color:${col.bd}">${esc(catLabelOf(c))}</span>`;
+}
+// Группы: категории по алфавиту, «Без категории» всегда в конце
+function groupCoursesByCategory(items) {
+  const map = new Map();
+  items.forEach(it => {
+    const key = catKeyOf(it);
+    if (!map.has(key)) map.set(key, { key, label: catLabelOf(it) || t('cat_none'), color: catColorOf(key), items: [] });
+    map.get(key).items.push(it);
+  });
+  const loc = CURRENT_LANG === 'kz' ? 'kk' : 'ru';
+  return [...map.values()].sort((a, b) => (!a.key - !b.key) || a.label.localeCompare(b.label, loc));
+}
+function courseTitleOf(c) { return (CURRENT_LANG === 'kz' ? c.title_kz : c.title_ru) || c.title_ru || c.title_kz || ''; }
+
+// --- COURSES LOGIC ---
 async function loadCoursesList() {
-  const courses = await api.getCourses();
-  state.courses = courses;
-  const div = document.getElementById('coursesList');
-  if (!div) return;
-  div.innerHTML = courses.map(c => `
-    <div class="border border-slate-200 p-4 rounded-xl hover:shadow-sm transition bg-white flex flex-col justify-between">
+  state.courses = await api.getCourses();
+  renderCoursesList();
+}
+
+function onCourseFilterChange() {
+  state.courseFilter.q = document.getElementById('cFilterQ').value;
+  renderCoursesList();
+}
+function setCourseCat(key) { state.courseFilter.cat = key; renderCoursesList(); }
+function toggleCourseCat(key) {
+  if (state.collapsedCats.has(key)) state.collapsedCats.delete(key); else state.collapsedCats.add(key);
+  renderCoursesList();
+}
+
+function courseCardHtml(c, color) {
+  const hasQ = (c.questions_count || 0) > 0;
+  return `
+    <div class="border border-slate-200 p-4 rounded-xl hover:shadow-sm transition bg-white flex flex-col justify-between" style="border-left:4px solid ${color.fg}">
       <div>
-        <div class="flex justify-between items-start">
-          <h4 class="font-bold text-slate-900 text-base">${esc(CURRENT_LANG === 'kz' ? c.title_kz : c.title_ru)}</h4>
-          <span class="text-xs font-semibold bg-blue-50 text-blue-700 px-2 py-0.5 rounded">${c.time_limit_minutes} мин | ${c.pass_score_percent}%</span>
+        <div class="flex justify-between items-start gap-2">
+          <h4 class="font-bold text-slate-900 text-base">${esc(courseTitleOf(c))}</h4>
+          <span class="text-xs font-semibold px-2 py-0.5 rounded whitespace-nowrap" style="background:${color.bg};color:${color.fg}">${c.time_limit_minutes} мин | ${c.pass_score_percent}% | ${c.validity_months} мес</span>
         </div>
-        <p class="text-xs text-slate-500 mt-2">Вопросов в базе: ${c.questions_count || 0}</p>
+        <p class="text-xs mt-2 ${hasQ ? 'text-slate-500' : 'text-amber-600 font-semibold'}">${hasQ ? 'Вопросов в базе: ' + c.questions_count : 'Вопросы не добавлены — тест пока пройти нельзя'}</p>
         <div class="flex flex-wrap gap-1.5 mt-2">
           ${(c.material_pdf_path_ru || c.material_pdf_path) ? '<span class="text-[11px] font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">📄 RU материалы</span>' : '<span class="text-[11px] font-semibold bg-amber-50 text-amber-600 px-2 py-0.5 rounded">📄 нет RU материалов</span>'}
           ${c.material_pdf_path_kz ? '<span class="text-[11px] font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">📄 KZ материалы</span>' : '<span class="text-[11px] font-semibold bg-amber-50 text-amber-600 px-2 py-0.5 rounded">📄 нет KZ материалов</span>'}
@@ -1531,11 +1618,90 @@ async function loadCoursesList() {
         <button onclick="openCourseModal(${c.id})" class="text-blue-600 hover:underline">Изменить</button>
         <button onclick="delCourse(${c.id})" class="text-red-600 hover:underline">Удалить</button>
       </div>
-    </div>
-  `).join('');
+    </div>`;
+}
+
+function renderCoursesList() {
+  const div = document.getElementById('coursesList');
+  if (!div) return;
+  const all = state.courses || [];
+  const q = (state.courseFilter.q || '').trim().toLowerCase();
+  const found = q
+    ? all.filter(c => `${c.title_ru} ${c.title_kz} ${c.category_ru || ''} ${c.category_kz || ''}`.toLowerCase().includes(q))
+    : all;
+  const groupsAll = groupCoursesByCategory(found);
+
+  // Если выбранной категории больше нет (удалили/переименовали) — показываем все
+  if (state.courseFilter.cat !== '*' && !groupsAll.some(g => g.key === state.courseFilter.cat)) state.courseFilter.cat = '*';
+  const cur = state.courseFilter.cat;
+
+  // Чипы категорий (быстрый фильтр). Если категорий нет вообще — чипы не нужны.
+  const chips = document.getElementById('courseCatChips');
+  const hasCategories = groupsAll.some(g => g.key);
+  if (chips) {
+    const chip = (key, label, n, col) => {
+      const on = cur === key;
+      const st = on ? `background:${col.fg};color:#fff;border-color:${col.fg}` : `background:${col.bg};color:${col.fg};border-color:${col.bd}`;
+      return `<button type="button" data-key="${esc(key)}" onclick="setCourseCat(this.dataset.key)" class="px-3 py-1.5 rounded-full text-xs font-semibold border" style="${st}">${esc(label)} <span style="opacity:.7">${n}</span></button>`;
+    };
+    chips.innerHTML = hasCategories
+      ? chip('*', t('cat_all'), found.length, { fg: '#1e293b', bg: '#ffffff', bd: '#cbd5e1' }) + groupsAll.map(g => chip(g.key, g.label, g.items.length, g.color)).join('')
+      : '';
+  }
+
+  if (!all.length) {
+    div.innerHTML = '<div class="p-8 text-center text-slate-500 border border-dashed rounded-xl">Курсов пока нет. Нажмите «+ Добавить курс», чтобы создать первый.</div>';
+    return;
+  }
+  if (!found.length) {
+    div.innerHTML = `<div class="p-6 text-center text-slate-400">${t('no_data')}</div>`;
+    return;
+  }
+
+  const groups = cur === '*' ? groupsAll : groupsAll.filter(g => g.key === cur);
+  const showHeaders = hasCategories;   // без категорий — плоский список, как раньше
+  div.innerHTML = groups.map(g => {
+    const collapsed = showHeaders && cur === '*' && state.collapsedCats.has(g.key);
+    const cards = g.items.slice()
+      .sort((a, b) => courseTitleOf(a).localeCompare(courseTitleOf(b), CURRENT_LANG === 'kz' ? 'kk' : 'ru'))
+      .map(c => courseCardHtml(c, g.color)).join('');
+    const header = showHeaders ? `
+      <button type="button" data-key="${esc(g.key)}" onclick="toggleCourseCat(this.dataset.key)" class="w-full flex items-center gap-3 text-left mb-3 pb-2 border-b" style="border-color:${g.color.bd}">
+        <span class="inline-block w-1.5 h-6 rounded-full" style="background:${g.color.fg}"></span>
+        <span class="text-base font-bold text-slate-900">${esc(g.label)}</span>
+        <span class="text-xs font-bold px-2 py-0.5 rounded-full" style="background:${g.color.bg};color:${g.color.fg}">${g.items.length}</span>
+        <span class="ml-auto text-slate-400 text-xs">${collapsed ? '▸' : '▾'}</span>
+      </button>` : '';
+    return `<section>${header}${collapsed ? '' : `<div class="grid grid-cols-1 md:grid-cols-2 gap-4">${cards}</div>`}</section>`;
+  }).join('');
+}
+
+// Списки подсказок для полей «Категория» в карточке курса
+function fillCourseCategoryLists() {
+  const seen = new Map();
+  (state.courses || []).forEach(c => {
+    const key = catKeyOf(c);
+    if (key && !seen.has(key)) seen.set(key, c);
+  });
+  const ru = [...seen.values()].map(c => c.category_ru).filter(Boolean);
+  const kz = [...seen.values()].map(c => c.category_kz).filter(Boolean);
+  const ruList = document.getElementById('courseCatListRu');
+  const kzList = document.getElementById('courseCatListKz');
+  if (ruList) ruList.innerHTML = ru.map(v => `<option value="${esc(v)}"></option>`).join('');
+  if (kzList) kzList.innerHTML = kz.map(v => `<option value="${esc(v)}"></option>`).join('');
+}
+// Выбрали существующую RU-категорию — KZ-название подставляется само
+function onCourseCatRuInput() {
+  const kzInput = document.getElementById('cCatKz');
+  if (!kzInput || kzInput.value.trim()) return;
+  const key = document.getElementById('cCatRu').value.trim().toLowerCase();
+  const match = (state.courses || []).find(c => c.category_kz && String(c.category_ru || '').trim().toLowerCase() === key);
+  if (match) kzInput.value = match.category_kz;
 }
 
 async function openCourseModal(id) {
+  if (!(state.courses || []).length) { try { state.courses = await api.getCourses(); } catch (e) {} }
+  fillCourseCategoryLists();
   ['Ru', 'Kz'].forEach(L => {
     document.getElementById('cMaterialStatus' + L).textContent = '';
     document.getElementById('cMaterialFile' + L).value = '';
@@ -1549,6 +1715,8 @@ async function openCourseModal(id) {
     document.getElementById('cTitleKz').value = course.title_kz || '';
     document.getElementById('cDescRu').value = course.description_ru || '';
     document.getElementById('cDescKz').value = course.description_kz || '';
+    document.getElementById('cCatRu').value = course.category_ru || '';
+    document.getElementById('cCatKz').value = course.category_kz || '';
     document.getElementById('cTime').value = course.time_limit_minutes;
     document.getElementById('cPass').value = course.pass_score_percent;
     document.getElementById('cValid').value = course.validity_months;
@@ -1566,6 +1734,11 @@ async function openCourseModal(id) {
     document.getElementById('cTitleKz').value = '';
     document.getElementById('cDescRu').value = '';
     document.getElementById('cDescKz').value = '';
+    // Новый курс: если сейчас открыт раздел (категория) — подставляем её, чтобы курс сразу попал куда надо
+    const curCat = state.courseFilter.cat;
+    const curCourse = (curCat && curCat !== '*') ? (state.courses || []).find(c => catKeyOf(c) === curCat) : null;
+    document.getElementById('cCatRu').value = curCourse ? (curCourse.category_ru || '') : '';
+    document.getElementById('cCatKz').value = curCourse ? (curCourse.category_kz || '') : '';
     document.getElementById('cTime').value = 20;
     document.getElementById('cPass').value = 80;
     document.getElementById('cValid').value = 12;
@@ -1604,6 +1777,8 @@ async function saveCourseForm(e) {
     title_kz: document.getElementById('cTitleKz').value.trim(),
     description_ru: document.getElementById('cDescRu').value.trim(),
     description_kz: document.getElementById('cDescKz').value.trim(),
+    category_ru: document.getElementById('cCatRu').value.trim(),
+    category_kz: document.getElementById('cCatKz').value.trim(),
     time_limit_minutes: parseInt(document.getElementById('cTime').value) || 20,
     pass_score_percent: parseInt(document.getElementById('cPass').value) || 80,
     validity_months: parseInt(document.getElementById('cValid').value) || 12,
@@ -1930,6 +2105,23 @@ function onAssignFilterChange() {
   assignFilterTimeout = setTimeout(loadAssignmentsList, 250);
 }
 
+function onAssignCatChange() {
+  state.assignCat = document.getElementById('aFilterCat').value;
+  loadAssignmentsList();
+}
+
+// Список категорий для фильтра берётся из самих назначений (до фильтрации), чтобы в нём были только реально используемые
+function populateAssignCatFilter(fullList) {
+  const sel = document.getElementById('aFilterCat');
+  if (!sel) return;
+  const groups = groupCoursesByCategory(fullList);
+  if (state.assignCat !== '*' && !groups.some(g => g.key === state.assignCat)) state.assignCat = '*';
+  const hasCategories = groups.some(g => g.key);
+  sel.classList.toggle('hidden', !hasCategories);
+  sel.innerHTML = `<option value="*">${t('all_categories')}</option>` +
+    groups.map(g => `<option value="${esc(g.key)}" ${state.assignCat === g.key ? 'selected' : ''}>${esc(g.label)} (${g.items.length})</option>`).join('');
+}
+
 async function populateAssignMetaFilters() {
   try {
     const meta = await api.getUsersMeta();
@@ -1948,7 +2140,9 @@ async function loadAssignmentsList() {
   const toInput = document.getElementById('aFilterTo');
   if (toInput) toInput.value = state.assignFilter.date_to;
 
-  const list = await api.getAssignments(state.assignFilter);
+  let list = await api.getAssignments(state.assignFilter);
+  populateAssignCatFilter(list);
+  if (state.assignCat !== '*') list = list.filter(a => catKeyOf(a) === state.assignCat);
   state.assignments = list;
   const tbody = document.getElementById('assignTable');
   if (!tbody) return;
@@ -1961,7 +2155,7 @@ async function loadAssignmentsList() {
           <button onclick="openUserProfile(${a.user_id})" class="hover:text-blue-600 hover:underline text-left">${esc(a.last_name)} ${esc(a.first_name)}</button>
           <br><span class="text-xs text-slate-400">${esc(a.position || '')}</span>
         </td>
-        <td class="px-4 py-3">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</td>
+        <td class="px-4 py-3">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}${catKeyOf(a) ? `<br>${catBadgeHtml(a)}` : ''}</td>
         <td class="px-4 py-3 text-xs text-slate-600">№ ${esc(a.protocol_number)}<br>${esc(a.protocol_date)}${a.test_date ? `<br><span class="text-slate-400">${t('test_date')}: ${new Date(a.test_date).toLocaleDateString('ru-RU')}</span>` : ''}</td>
         <td class="px-4 py-3">
           <span class="text-xs font-bold px-2 py-1 rounded ${a.status === 'passed' ? 'bg-emerald-100 text-emerald-800' : a.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}">
@@ -1989,7 +2183,14 @@ async function openAssignModal() {
   asSelectedIds = new Set();
 
   const cSel = document.getElementById('asCourseId');
-  cSel.innerHTML = courses.map(c => `<option value="${c.id}">${esc(c.title_ru)}</option>`).join('');
+  // Курсы в выпадающем списке сгруппированы по категориям — так проще найти нужный, когда курсов много
+  const courseGroups = groupCoursesByCategory(courses);
+  const flat = courseGroups.length === 1 && !courseGroups[0].key;
+  const optHtml = c => `<option value="${c.id}">${esc(c.title_ru)}</option>`;
+  const sortByRu = (a, b) => String(a.title_ru).localeCompare(String(b.title_ru), 'ru');
+  cSel.innerHTML = flat
+    ? courses.map(optHtml).join('')
+    : courseGroups.map(g => `<optgroup label="${esc(g.label)}">${g.items.slice().sort(sortByRu).map(optHtml).join('')}</optgroup>`).join('');
 
   // Фильтры по объекту/отделу для списка сотрудников
   const objects = [...new Set(asAllEmployees.map(u => u.object).filter(Boolean))].sort();
@@ -2474,38 +2675,73 @@ async function loadMyTests() {
     div.innerHTML = '<div class="p-6 text-center text-slate-500">У вас нет назначенных тестов.</div>';
     return;
   }
-  div.innerHTML = list.map(a => {
-    const isKz = CURRENT_LANG === 'kz';
+  const isKz = CURRENT_LANG === 'kz';
+
+  // Что сотруднику нужно сделать (0), что завершено неудачно без права пересдачи (1), что уже сдано (2)
+  const rankOf = a => a.status === 'passed' ? 2 : (a.status === 'failed' && !a.retake_allowed) ? 1 : 0;
+  const nTodo = list.filter(a => rankOf(a) === 0).length;
+  const nFailed = list.filter(a => rankOf(a) === 1).length;
+  const nPassed = list.filter(a => rankOf(a) === 2).length;
+
+  const pill = (n, label, fg, bg) => n ? `<span class="text-xs font-bold px-3 py-1.5 rounded-full" style="background:${bg};color:${fg}">${label}: ${n}</span>` : '';
+  const summary = `<div class="flex flex-wrap gap-2 mb-1">
+    ${pill(nTodo, t('my_todo'), '#b45309', '#fffbeb')}
+    ${pill(nPassed, t('my_passed'), '#047857', '#ecfdf5')}
+    ${pill(nFailed, t('my_failed'), '#be123c', '#fff1f2')}
+  </div>`;
+
+  const cardHtml = (a, color) => {
+    const title = isKz ? a.title_kz : a.title_ru;
     // Материалы/видео на языке интерфейса сотрудника; если для этого языка не загружено — берём другой язык, затем старые (legacy) поля
     const materialPath = (isKz ? a.material_pdf_path_kz : a.material_pdf_path_ru) || a.material_pdf_path_ru || a.material_pdf_path_kz || a.material_pdf_path;
     const videoPath = (isKz ? a.video_path_kz : a.video_path_ru) || a.video_path_ru || a.video_path_kz || a.video_path;
     const videoUrl = (isKz ? a.video_url_kz : a.video_url_ru) || a.video_url_ru || a.video_url_kz || a.video_url;
+    const videoSrc = videoPath || videoUrl;
     return `
-    <div class="p-5 border border-slate-200 rounded-xl bg-white flex flex-wrap justify-between items-center gap-4">
+    <div class="p-5 border border-slate-200 rounded-xl bg-white flex flex-wrap justify-between items-center gap-4" style="border-left:4px solid ${color.fg}">
       <div>
-        <h4 class="text-base font-bold text-slate-900">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</h4>
+        <h4 class="text-base font-bold text-slate-900">${esc(title)}</h4>
         <p class="text-xs text-slate-500 mt-1">Протокол № ${esc(a.protocol_number)} от ${esc(a.protocol_date)}</p>
-        ${(materialPath || videoPath || videoUrl) ? `
+        ${(materialPath || videoSrc) ? `
           <div class="mt-2 space-x-3 text-xs font-semibold">
-            ${materialPath ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(materialPath)}', '${jsAttrEsc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}')" class="text-blue-600 hover:underline">📄 Материалы курса</button>` : ''}
-            ${videoPath ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(videoPath)}', '${jsAttrEsc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}')" class="text-blue-600 hover:underline">🎬 Видео</button>` : (videoUrl ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(videoUrl)}', '${jsAttrEsc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}')" class="text-blue-600 hover:underline">🎬 Видео</button>` : '')}
+            ${materialPath ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(materialPath)}', '${jsAttrEsc(title)}')" class="text-blue-600 hover:underline">📄 ${t('view_material')}</button>` : ''}
+            ${videoSrc ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(videoSrc)}', '${jsAttrEsc(title)}')" class="text-blue-600 hover:underline">🎬 Видео</button>` : ''}
           </div>
         ` : ''}
       </div>
       <div class="flex items-center space-x-3">
         ${a.status === 'passed' ? `
           <span class="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg">Сдано (${a.score_percent}%)</span>
-          <a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold">Скачать сертификат</a>
+          <a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold">${t('download_cert')}</a>
         ` : a.status === 'failed' && !a.retake_allowed ? `
           <span class="text-xs font-bold text-red-700 bg-red-50 px-3 py-1.5 rounded-lg">Не сдано (${a.score_percent}%)</span>
         ` : `
-          <button type="button" onclick="runTest(${a.id}, '${jsAttrEsc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}', ${a.time_limit_minutes || 20})" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-sm shadow">
+          <button type="button" onclick="runTest(${a.id}, '${jsAttrEsc(title)}', ${a.time_limit_minutes || 20})" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-sm shadow">
             ${a.retake_allowed ? 'Пересдать тест' : 'Начать тестирование'}
           </button>
         `}
       </div>
-    </div>
-  `;
+    </div>`;
+  };
+
+  // Разделы по категориям: сначала те, где есть что проходить; «Без категории» — в конце.
+  // Внутри раздела: сначала то, что нужно пройти, затем неудачные, затем сданные (порядок по дате назначения сохраняется).
+  const groups = groupCoursesByCategory(list).sort((g1, g2) =>
+    (!g1.key - !g2.key) ||
+    (g1.items.some(a => rankOf(a) === 0) ? 0 : 1) - (g2.items.some(a => rankOf(a) === 0) ? 0 : 1) ||
+    g1.label.localeCompare(g2.label, isKz ? 'kk' : 'ru'));
+  const showHeaders = groups.some(g => g.key);
+
+  div.innerHTML = summary + groups.map(g => {
+    const items = g.items.slice().sort((x, y) => rankOf(x) - rankOf(y));
+    const doneCount = items.filter(a => rankOf(a) === 2).length;
+    const header = showHeaders ? `
+      <div class="flex items-center gap-3 mb-3 pb-2 border-b" style="border-color:${g.color.bd}">
+        <span class="inline-block w-1.5 h-6 rounded-full" style="background:${g.color.fg}"></span>
+        <h3 class="text-base font-bold text-slate-900">${esc(g.label)}</h3>
+        <span class="ml-auto text-xs font-bold px-2 py-0.5 rounded-full" style="background:${g.color.bg};color:${g.color.fg}">${doneCount} / ${items.length}</span>
+      </div>` : '';
+    return `<section class="mt-5">${header}<div class="space-y-3">${items.map(a => cardHtml(a, g.color)).join('')}</div></section>`;
   }).join('');
 }
 

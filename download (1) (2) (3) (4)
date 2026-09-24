@@ -1,0 +1,12 @@
+PORT=3000
+JWT_SECRET=change_this_secret_in_production_please
+SUPERADMIN_LOGIN=8888
+SUPERADMIN_PASSWORD=88885555
+
+# Supabase Storage (файлы: логотип, печать, подписи, материалы курсов, видео, тесты).
+# Это НЕ то же самое, что DATABASE_URL — тот подключается к Postgres напрямую,
+# а эти два нужны для Storage API. Взять в Supabase Dashboard → Project Settings → API.
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+# Необязательно: имя bucket'а в Supabase Storage (создастся автоматически, если его нет)
+SUPABASE_BUCKET=app-uploads
