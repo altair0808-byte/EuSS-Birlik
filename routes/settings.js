@@ -45,7 +45,7 @@ router.get('/public', async (req, res) => {
   }
 });
 
-// Настройки комиссии и нумерации. Комиссия — два председателя (без "членов
+// Настройки комиссии и нумерации сертификатов (нумерация протоколов живёт во вкладке «Протоколы»). Комиссия — два председателя (без "членов
 // комиссии"): у каждого своё ФИО, должность и подпись. На сертификате
 // используется только ОДИН из них — тот, что выбран переключателем
 // active_chairman (1 или 2) — его данные и печать; второй не показывается.
@@ -55,7 +55,6 @@ router.put('/', authRequired, requireRole('superadmin'), async (req, res) => {
     chairman1_name, chairman1_position,
     chairman2_name, chairman2_position,
     active_chairman,
-    protocol_prefix, protocol_next_number,
     certificate_prefix, certificate_digits, certificate_next_number
   } = req.body;
 
@@ -69,11 +68,9 @@ router.put('/', authRequired, requireRole('superadmin'), async (req, res) => {
         chairman2_name = COALESCE($4, chairman2_name),
         chairman2_position = COALESCE($5, chairman2_position),
         active_chairman = COALESCE($6, active_chairman),
-        protocol_prefix = COALESCE($7, protocol_prefix),
-        protocol_next_number = COALESCE($8, protocol_next_number),
-        certificate_prefix = COALESCE($9, certificate_prefix),
-        certificate_digits = COALESCE($10, certificate_digits),
-        certificate_next_number = COALESCE($11, certificate_next_number)
+        certificate_prefix = COALESCE($7, certificate_prefix),
+        certificate_digits = COALESCE($8, certificate_digits),
+        certificate_next_number = COALESCE($9, certificate_next_number)
       WHERE id = 1
       RETURNING *`,
       [
@@ -81,8 +78,6 @@ router.put('/', authRequired, requireRole('superadmin'), async (req, res) => {
         chairman1_name, chairman1_position,
         chairman2_name, chairman2_position,
         actChair,
-        protocol_prefix,
-        protocol_next_number !== undefined ? Number(protocol_next_number) : null,
         certificate_prefix,
         certificate_digits !== undefined ? Number(certificate_digits) : null,
         certificate_next_number !== undefined ? Number(certificate_next_number) : null

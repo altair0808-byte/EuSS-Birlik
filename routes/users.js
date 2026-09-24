@@ -9,7 +9,7 @@ const XLSX = require('xlsx'); // для ЧТЕНИЯ загружаемых фа
 const { query, pool } = require('../db');
 const { authRequired, requireRole } = require('./auth');
 const { makeUploader } = require('../upload');
-const { buildHistoricalFields, advanceProtocolCounter } = require('./assignments');
+const { buildHistoricalFields } = require('./assignments');
 
 const upload = makeUploader('imports');
 
@@ -17,7 +17,7 @@ const upload = makeUploader('imports');
 router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
     const { object, department, role, q } = req.query;
-    let sql = `SELECT id, last_name, first_name, object, department, position, login, role, active, created_at, permanent_certificate_number
+    let sql = `SELECT id, last_name, first_name, object, department, position, login, role, active, created_at, permanent_certificate_number, tco_badge
                FROM users WHERE role != 'superadmin'`;
     const params = [];
     if (object) { params.push(object); sql += ` AND object = $${params.length}`; }
@@ -77,7 +77,10 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
     'действителен до': 'next_test_date',
     'дата след. прохождения': 'next_test_date',
     'результат %': 'score_percent',
-    'балл': 'score_percent'
+    'балл': 'score_percent',
+    '№ пропуска тшо': 'tco_badge',
+    'пропуск тшо': 'tco_badge',
+    'tco badge': 'tco_badge'
   };
 
   // Excel хранит даты как объекты Date — приводим к формату YYYY-MM-DD,
@@ -161,9 +164,9 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
         const password = login ? (get('password') || Math.random().toString(36).slice(-8)) : null;
         const hash = password ? bcrypt.hashSync(password, 10) : null;
         const userResult = await query(
-          `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'employee') RETURNING id`,
-          [last_name, first_name, get('object'), get('department'), get('position'), login, hash]
+          `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role, tco_badge)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'employee', $8) RETURNING id`,
+          [last_name, first_name, get('object'), get('department'), get('position'), login, hash, get('tco_badge') || null]
         );
         created++;
 
@@ -204,7 +207,6 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             `, [userResult.rows[0].id, course.id, protocol_number, protocol_date, req.user.id,
                 h.status, h.score_percent, h.test_date, h.next_test_date, h.certificate_number]);
-            await advanceProtocolCounter(protocol_number);
             historyCreated++;
           } catch (histErr) {
             errors.push(`Строка ${rowNum}: сотрудник создан, но не удалось внести обучение — ${histErr.message}`);
@@ -324,7 +326,7 @@ router.get('/meta/objects', authRequired, requireRole('admin', 'superadmin'), as
 router.get('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
     const result = await query(
-      `SELECT id, last_name, first_name, object, department, position, login, role, active, created_at, permanent_certificate_number
+      `SELECT id, last_name, first_name, object, department, position, login, role, active, created_at, permanent_certificate_number, tco_badge
        FROM users WHERE id = $1 AND role != 'superadmin'`,
       [req.params.id]
     );
@@ -347,7 +349,7 @@ function validateRole(requesterRole, targetRole) {
 // Логин и пароль необязательны при создании — можно добавить сотрудника
 // только по ФИО и назначить ему доступ позже через редактирование карточки.
 router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { last_name, first_name, object, department, position, login, password, role, permanent_certificate_number } = req.body;
+  const { last_name, first_name, object, department, position, login, password, role, permanent_certificate_number, tco_badge } = req.body;
   const targetRole = role || 'employee';
   const loginVal = login && String(login).trim() ? String(login).trim() : null;
 
@@ -369,10 +371,11 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
 
     const hash = loginVal ? bcrypt.hashSync(String(password), 10) : null;
     const result = await query(
-      `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role, permanent_certificate_number)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+      `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role, permanent_certificate_number, tco_badge)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
       [last_name, first_name, object || '', department || '', position || '', loginVal, hash, targetRole,
-       String(permanent_certificate_number || '').trim() || null]
+       String(permanent_certificate_number || '').trim() || null,
+       String(tco_badge || '').trim() || null]
     );
     res.json({ id: result.rows[0].id });
   } catch (e) {
@@ -393,7 +396,7 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
       return res.status(403).json({ error: 'forbidden', message: 'Администратор может редактировать только обычных сотрудников' });
     }
 
-    const { last_name, first_name, object, department, position, login, password, active, role, permanent_certificate_number } = req.body;
+    const { last_name, first_name, object, department, position, login, password, active, role, permanent_certificate_number, tco_badge } = req.body;
     const fields = [];
     const params = [];
 
@@ -423,6 +426,12 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
     if (permanent_certificate_number !== undefined) {
       params.push(String(permanent_certificate_number).trim() || null);
       fields.push(`permanent_certificate_number = $${params.length}`);
+    }
+
+    // № пропуска ТШО — попадает в Word-протокол (вкладка «Протоколы»)
+    if (tco_badge !== undefined) {
+      params.push(String(tco_badge).trim() || null);
+      fields.push(`tco_badge = $${params.length}`);
     }
 
     // Логин можно оставить пустым (сотрудник без доступа) или назначить/сменить в любой момент.
