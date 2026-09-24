@@ -433,6 +433,8 @@ const api = {
   getCourse(id) { return this.req('/api/courses/' + id); },
   saveCourse(data, id) { return this.req(id ? '/api/courses/' + id : '/api/courses', { method: id ? 'PUT' : 'POST', body: data }); },
   deleteCourse(id) { return this.req('/api/courses/' + id, { method: 'DELETE' }); },
+  getUntrainedEmployees(courseId) { return this.req('/api/courses/' + courseId + '/untrained'); },
+  getCourseStatsSummary() { return this.req('/api/courses/stats/summary'); },
   addQuestion(cid, data) { return this.req('/api/courses/' + cid + '/questions', { method: 'POST', body: data }); },
   deleteQuestion(cid, qid) { return this.req('/api/courses/' + cid + '/questions/' + qid, { method: 'DELETE' }); },
   updateQuestion(cid, qid, data) { return this.req('/api/courses/' + cid + '/questions/' + qid, { method: 'PUT', body: data }); },
@@ -771,6 +773,13 @@ async function loadTabContent() {
           <div class="text-2xl font-black text-emerald-600 mt-1" id="dashValid">...</div>
         </div>
       </div>
+      <div id="dashMandatoryCard" class="hidden bg-white p-4 rounded-xl border border-red-200 bg-red-50/40 shadow-sm mb-6">
+        <div class="text-xs font-bold text-red-700 uppercase">Не прошли обязательное обучение (хотя бы по одному курсу)</div>
+        <div class="flex items-center justify-between">
+          <div class="text-2xl font-black text-red-600 mt-1" id="dashMandatoryMissing">...</div>
+          <button type="button" onclick="setTab('courses')" class="text-xs font-semibold text-red-700 hover:underline">Посмотреть курсы &rarr;</button>
+        </div>
+      </div>
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
         <h3 class="text-base font-bold mb-4">Быстрые действия</h3>
         <div class="flex flex-wrap gap-3">
@@ -778,6 +787,11 @@ async function loadTabContent() {
           <button onclick="setTab('users')" class="px-4 py-2 bg-slate-100 text-slate-800 rounded-lg text-sm font-semibold hover:bg-slate-200">Добавить сотрудника</button>
           <button onclick="setTab('courses')" class="px-4 py-2 bg-slate-100 text-slate-800 rounded-lg text-sm font-semibold hover:bg-slate-200">Создать курс</button>
         </div>
+      </div>
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
+        <h3 class="text-base font-bold mb-4">📊 Статистика по курсам</h3>
+        <div id="dashCourseTabs" class="flex flex-wrap gap-1.5 mb-4"><div class="text-slate-400 text-sm">${t('loading')}</div></div>
+        <div id="dashCoursePanel"></div>
       </div>
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
         <h3 class="text-base font-bold mb-4">⏰ ${t('expiring_soon_title')} (30 ${CURRENT_LANG === 'kz' ? 'күн' : 'дней'})</h3>
@@ -805,6 +819,7 @@ async function loadTabContent() {
       document.getElementById('dashOverdue').textContent = overdue;
       document.getElementById('dashValid').textContent = valid;
     } catch (e) {}
+    loadDashboardCourseStats();
     loadExpiringWidget();
   }
 
@@ -892,6 +907,7 @@ async function loadTabContent() {
     container.innerHTML = `
       <button onclick="setTab('users')" class="text-sm text-blue-600 hover:underline mb-4">&larr; ${t('back_to_users')}</button>
       <div id="profileContent"><div class="text-slate-400">${t('loading')}</div></div>
+      ${assignModalHtml()}
     `;
     loadUserProfile(state.profileUserId);
   }
@@ -908,6 +924,19 @@ async function loadTabContent() {
           <div id="courseCatChips" class="flex flex-wrap gap-1.5"></div>
         </div>
         <div id="coursesList" class="space-y-7"><div class="p-4 text-slate-400">Загрузка курсов...</div></div>
+      </div>
+      <div id="untrainedModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[85vh] flex flex-col">
+          <div class="flex justify-between items-center mb-3">
+            <h3 class="text-lg font-bold" id="untrainedModalTitle">Не прошли обучение</h3>
+            <button onclick="document.getElementById('untrainedModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-700 text-xl leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-slate-500 mb-3">Активные сотрудники, которые добавлены в систему, но ещё ни разу не сдали этот курс.</p>
+          <div id="untrainedModalBody" class="space-y-1 overflow-y-auto flex-1"></div>
+          <div class="flex justify-end pt-3 border-t mt-3">
+            <button type="button" id="untrainedAssignAllBtn" onclick="assignCourseToUntrained()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700">Назначить курс всем из списка</button>
+          </div>
+        </div>
       </div>
       <div id="courseModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
         <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
@@ -933,6 +962,10 @@ async function loadTabContent() {
             <label class="flex items-start gap-2 text-xs text-slate-700 cursor-pointer -mt-1">
               <input type="checkbox" id="cNoExpiry" onchange="onCourseNoExpiryToggle()" class="mt-0.5 rounded text-blue-600">
               <span><b>Бессрочный курс</b> — сертификат не истекает, повторно проходить не нужно. Такой курс не попадает в список «Скоро истекает срок», а на сертификате пишется «бессрочно».</span>
+            </label>
+            <label class="flex items-start gap-2 text-xs text-slate-700 cursor-pointer -mt-1">
+              <input type="checkbox" id="cMandatory" class="mt-0.5 rounded text-blue-600">
+              <span><b>Обязательный курс для всех сотрудников</b> — сотрудники, которых добавили в систему, но ещё не прошедшие этот курс, будут отдельно показаны на карточке курса и в общей статистике на главной странице.</span>
             </label>
             <div class="border-t pt-3">
               <label class="text-xs font-semibold text-slate-600">Материалы курса (презентация PPT/PPTX или PDF) — отдельно на русском и казахском</label>
@@ -1034,6 +1067,7 @@ async function loadTabContent() {
           </form>
         </div>
       </div>
+      ${assignModalHtml()}
     `;
     loadCoursesList();
   }
@@ -1080,55 +1114,7 @@ async function loadTabContent() {
           </table>
         </div>
       </div>
-      <div id="assignModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
-        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] flex flex-col">
-          <h3 class="text-lg font-bold mb-4">Назначить тестирование</h3>
-          <form onsubmit="submitAssignForm(event)" class="space-y-3 overflow-y-auto flex-1 pr-1">
-            <div>
-              <label class="text-xs font-semibold text-slate-600">Курс</label>
-              <select id="asCourseId" required class="w-full border p-2 rounded text-sm"></select>
-            </div>
-            <div class="grid grid-cols-2 gap-3">
-              <div><label class="text-xs font-semibold text-slate-600">Номер протокола</label><input id="asProtNum" required class="w-full border p-2 rounded text-sm"></div>
-              <div><label class="text-xs font-semibold text-slate-600">Дата протокола</label><input type="date" id="asProtDate" required class="w-full border p-2 rounded text-sm"></div>
-            </div>
-            <div class="text-[11px] text-slate-500 -mt-1">Один номер протокола будет присвоен всем выбранным ниже сотрудникам. Номер подставлен автоматически по счётчику из настроек — при необходимости его можно исправить вручную.</div>
-            <div id="asActiveProtocolHint" class="text-[11px] text-emerald-700 font-semibold -mt-1"></div>
-            <div id="asNextCertHint" class="text-[11px] text-blue-600 font-semibold -mt-1"></div>
-            <div class="border-t pt-3">
-              <label class="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
-                <input type="checkbox" id="asHistorical" onchange="onAsHistoricalToggle()">
-                Внести уже пройденное ранее обучение (старые данные, без сдачи теста в системе)
-              </label>
-              <div id="asHistoricalFields" class="hidden grid grid-cols-2 gap-3 mt-2">
-                <div><label class="text-xs font-semibold text-slate-600">Дата прохождения</label><input type="date" id="asTestDate" class="w-full border p-2 rounded text-sm"></div>
-                <div><label class="text-xs font-semibold text-slate-600">Дата след. прохождения</label><input type="date" id="asNextTestDate" class="w-full border p-2 rounded text-sm"></div>
-                <div><label class="text-xs font-semibold text-slate-600">Результат, % (по умолчанию 100)</label><input type="number" min="0" max="100" id="asScorePercent" class="w-full border p-2 rounded text-sm"></div>
-                <div class="text-[11px] text-slate-500 self-end pb-2">Номер сертификата будет присвоен автоматически. Если дату след. прохождения не указать, она рассчитается по сроку действия курса (у бессрочных курсов даты нет).</div>
-              </div>
-            </div>
-            <div class="border-t pt-3">
-              <div class="flex items-center justify-between mb-2">
-                <label class="text-xs font-semibold text-slate-600">Сотрудники <span id="asSelectedCount" class="text-blue-600 font-bold"></span></label>
-                <div class="space-x-2 text-xs">
-                  <button type="button" onclick="asSelectAll(true)" class="text-blue-600 hover:underline">Выбрать всех</button>
-                  <button type="button" onclick="asSelectAll(false)" class="text-slate-500 hover:underline">Снять всё</button>
-                </div>
-              </div>
-              <div class="grid grid-cols-2 gap-2 mb-2">
-                <input id="asFilterQ" type="text" placeholder="${t('search_placeholder')}" oninput="renderAssignEmployeeList()" class="border border-slate-300 rounded-lg px-2 py-1.5 text-xs col-span-2">
-                <select id="asFilterObject" onchange="renderAssignEmployeeList()" class="border border-slate-300 rounded-lg px-2 py-1.5 text-xs"><option value="">${t('all_objects')}</option></select>
-                <select id="asFilterDept" onchange="renderAssignEmployeeList()" class="border border-slate-300 rounded-lg px-2 py-1.5 text-xs"><option value="">${t('all_departments')}</option></select>
-              </div>
-              <div id="asEmployeeList" class="border rounded-lg divide-y max-h-52 overflow-y-auto"></div>
-            </div>
-            <div class="flex justify-end space-x-2 pt-3 border-t sticky bottom-0 bg-white">
-              <button type="button" onclick="document.getElementById('assignModal').classList.add('hidden')" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
-              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Назначить</button>
-            </div>
-          </form>
-        </div>
-      </div>
+      ${assignModalHtml()}
     `;
     loadAssignmentsList();
   }
@@ -1356,6 +1342,90 @@ async function loadTabContent() {
     `;
     loadSettingsData();
   }
+}
+
+// --- DASHBOARD: STATISTICS SPLIT BY COURSE (п.5 запроса) ---
+let dashCourseStats = [];
+let dashSelectedCourseId = null;
+
+async function loadDashboardCourseStats() {
+  const tabsDiv = document.getElementById('dashCourseTabs');
+  const panelDiv = document.getElementById('dashCoursePanel');
+  const mandCard = document.getElementById('dashMandatoryCard');
+  if (!tabsDiv || !panelDiv) return;
+  try {
+    const summary = await api.getCourseStatsSummary();
+    dashCourseStats = summary.courses || [];
+
+    if (mandCard) {
+      const missing = summary.overall ? (summary.overall.employees_missing_mandatory || 0) : 0;
+      const hasMandatory = dashCourseStats.some(c => c.is_mandatory);
+      mandCard.classList.toggle('hidden', !hasMandatory);
+      document.getElementById('dashMandatoryMissing').textContent = missing;
+    }
+
+    if (!dashCourseStats.length) {
+      tabsDiv.innerHTML = `<div class="text-slate-400 text-sm">${t('no_data')}</div>`;
+      panelDiv.innerHTML = '';
+      return;
+    }
+    if (!dashSelectedCourseId || !dashCourseStats.some(c => c.id === dashSelectedCourseId)) {
+      dashSelectedCourseId = dashCourseStats[0].id;
+    }
+    renderDashCourseTabs();
+    renderDashCoursePanel();
+  } catch (e) {
+    tabsDiv.innerHTML = `<div class="text-red-600 text-sm">${t('error_generic')}</div>`;
+  }
+}
+
+function selectDashCourse(id) {
+  dashSelectedCourseId = id;
+  renderDashCourseTabs();
+  renderDashCoursePanel();
+}
+
+function renderDashCourseTabs() {
+  const tabsDiv = document.getElementById('dashCourseTabs');
+  if (!tabsDiv) return;
+  tabsDiv.innerHTML = dashCourseStats.map(c => {
+    const on = c.id === dashSelectedCourseId;
+    const title = CURRENT_LANG === 'kz' ? (c.title_kz || c.title_ru) : (c.title_ru || c.title_kz);
+    const flag = c.is_mandatory && (c.untrained || 0) > 0 ? ' ⚠' : '';
+    return `<button type="button" onclick="selectDashCourse(${c.id})" class="px-3 py-1.5 rounded-full text-xs font-semibold border ${on ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}">${esc(title)}${flag}</button>`;
+  }).join('');
+}
+
+function renderDashCoursePanel() {
+  const panelDiv = document.getElementById('dashCoursePanel');
+  if (!panelDiv) return;
+  const c = dashCourseStats.find(x => x.id === dashSelectedCourseId);
+  if (!c) { panelDiv.innerHTML = ''; return; }
+  const cards = [
+    { label: 'Сотрудников всего', value: c.total_employees, cls: 'text-slate-900' },
+    { label: 'Прошли обучение', value: c.trained_employees, cls: 'text-emerald-600' },
+    { label: 'Ожидают прохождения', value: c.pending, cls: 'text-amber-600' },
+    { label: 'Не сдали', value: c.failed, cls: 'text-red-600' },
+    { label: 'Просрочено', value: c.overdue, cls: 'text-red-600' }
+  ];
+  if (c.is_mandatory) {
+    cards.push({ label: 'Не прошли обучение (обязательный курс)', value: c.untrained || 0, cls: (c.untrained || 0) > 0 ? 'text-red-600' : 'text-emerald-600' });
+  }
+  panelDiv.innerHTML = `
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+      ${cards.map(x => `
+        <div class="border border-slate-200 rounded-lg p-3">
+          <div class="text-[11px] font-bold text-slate-500 uppercase">${esc(x.label)}</div>
+          <div class="text-xl font-black mt-1 ${x.cls}">${x.value}</div>
+        </div>
+      `).join('')}
+    </div>
+    ${c.is_mandatory ? `
+      <div class="mt-3">
+        <button type="button" onclick="setTab('courses'); setTimeout(() => openUntrainedModal(${c.id}, '${jsAttrEsc(CURRENT_LANG === 'kz' ? (c.title_kz || c.title_ru) : (c.title_ru || c.title_kz))}'), 50)" class="text-xs font-semibold text-blue-600 hover:underline">Список сотрудников, не прошедших курс &rarr;</button>
+      </div>
+    ` : ''}
+  `;
 }
 
 // --- DASHBOARD: EXPIRING CERTIFICATES WIDGET ---
@@ -1595,6 +1665,50 @@ async function loadCoursesList() {
   renderCoursesList();
 }
 
+// --- Сотрудники, не прошедшие обязательный курс (п.4 запроса) ---
+let untrainedModalCourseId = null;
+let untrainedModalUserIds = [];
+
+async function openUntrainedModal(courseId, title) {
+  untrainedModalCourseId = courseId;
+  const modal = document.getElementById('untrainedModal');
+  const body = document.getElementById('untrainedModalBody');
+  const titleEl = document.getElementById('untrainedModalTitle');
+  const btn = document.getElementById('untrainedAssignAllBtn');
+  if (!modal || !body) return;
+  if (titleEl) titleEl.textContent = `Не прошли обучение — ${title}`;
+  if (btn) btn.classList.add('hidden');
+  body.innerHTML = `<div class="text-slate-400 text-sm">${t('loading')}</div>`;
+  modal.classList.remove('hidden');
+  try {
+    const list = await api.getUntrainedEmployees(courseId);
+    untrainedModalUserIds = list.map(u => u.id);
+    if (btn) btn.classList.toggle('hidden', list.length === 0);
+    if (!list.length) {
+      body.innerHTML = `<div class="text-emerald-600 text-sm font-semibold text-center py-6">✓ Все активные сотрудники прошли этот курс.</div>`;
+      return;
+    }
+    body.innerHTML = list.map(u => `
+      <div class="flex items-center justify-between px-3 py-2 border rounded-lg text-sm hover:bg-slate-50">
+        <div>
+          <div class="font-semibold text-slate-800">${esc(u.last_name)} ${esc(u.first_name)}</div>
+          <div class="text-xs text-slate-400">${esc(u.position || '—')} · ${esc(u.object || '—')} / ${esc(u.department || '—')}${u.has_assignment ? '' : ' · курс ещё не назначался'}</div>
+        </div>
+        <button type="button" onclick="document.getElementById('untrainedModal').classList.add('hidden'); openUserProfile(${u.id})" class="text-xs text-blue-600 hover:underline whitespace-nowrap">Карточка</button>
+      </div>
+    `).join('');
+  } catch (e) {
+    body.innerHTML = `<div class="text-red-600 text-sm">${t('error_generic')}</div>`;
+  }
+}
+
+// Открывает модалку назначения теста с уже отмеченными всеми, кто ещё не прошёл курс
+async function assignCourseToUntrained() {
+  if (!untrainedModalUserIds.length) return;
+  document.getElementById('untrainedModal').classList.add('hidden');
+  await openAssignModal(null, untrainedModalUserIds, untrainedModalCourseId);
+}
+
 function onCourseFilterChange() {
   state.courseFilter.q = document.getElementById('cFilterQ').value;
   renderCoursesList();
@@ -1615,6 +1729,10 @@ function courseCardHtml(c, color) {
           <span class="text-xs font-semibold px-2 py-0.5 rounded whitespace-nowrap" style="background:${color.bg};color:${color.fg}">${c.time_limit_minutes} мин | ${c.pass_score_percent}% | ${c.no_expiry ? '∞ бессрочно' : c.validity_months + ' мес'}</span>
         </div>
         <p class="text-xs mt-2 ${hasQ ? 'text-slate-500' : 'text-amber-600 font-semibold'}">${hasQ ? 'Вопросов в базе: ' + c.questions_count : 'Вопросы не добавлены — тест пока пройти нельзя'}</p>
+        ${c.is_mandatory ? `
+        <button type="button" onclick="openUntrainedModal(${c.id}, '${jsAttrEsc(courseTitleOf(c))}')" class="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded ${(c.untrained_count || 0) > 0 ? 'bg-red-50 text-red-700 hover:bg-red-100' : 'bg-emerald-50 text-emerald-700'}">
+          ${(c.untrained_count || 0) > 0 ? `⚠ Не прошли обучение: ${c.untrained_count}` : '✓ Все сотрудники прошли обучение'}
+        </button>` : ''}
         <div class="flex flex-wrap gap-1.5 mt-2">
           ${(c.material_pdf_path_ru || c.material_pdf_path) ? '<span class="text-[11px] font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">📄 RU материалы</span>' : '<span class="text-[11px] font-semibold bg-amber-50 text-amber-600 px-2 py-0.5 rounded">📄 нет RU материалов</span>'}
           ${c.material_pdf_path_kz ? '<span class="text-[11px] font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">📄 KZ материалы</span>' : '<span class="text-[11px] font-semibold bg-amber-50 text-amber-600 px-2 py-0.5 rounded">📄 нет KZ материалов</span>'}
@@ -1737,6 +1855,7 @@ async function openCourseModal(id) {
     document.getElementById('cPass').value = course.pass_score_percent;
     document.getElementById('cValid').value = course.validity_months;
     document.getElementById('cNoExpiry').checked = !!course.no_expiry;
+    document.getElementById('cMandatory').checked = !!course.is_mandatory;
     onCourseNoExpiryToggle();
     // video_url_ru/kz — новые поля; video_url — старое поле для курсов, созданных до этого обновления
     document.getElementById('cVideoRu').value = course.video_url_ru || course.video_url || '';
@@ -1761,6 +1880,7 @@ async function openCourseModal(id) {
     document.getElementById('cPass').value = 80;
     document.getElementById('cValid').value = 12;
     document.getElementById('cNoExpiry').checked = false;
+    document.getElementById('cMandatory').checked = false;
     onCourseNoExpiryToggle();
     document.getElementById('cVideoRu').value = '';
     document.getElementById('cVideoKz').value = '';
@@ -1803,6 +1923,7 @@ async function saveCourseForm(e) {
     pass_score_percent: parseInt(document.getElementById('cPass').value) || 80,
     validity_months: parseInt(document.getElementById('cValid').value) || 12,
     no_expiry: document.getElementById('cNoExpiry').checked,
+    is_mandatory: document.getElementById('cMandatory').checked,
     video_url_ru: document.getElementById('cVideoRu').value.trim(),
     video_url_kz: document.getElementById('cVideoKz').value.trim()
   };
@@ -2195,13 +2316,85 @@ async function loadAssignmentsList() {
   populateAssignMetaFilters();
 }
 
+// Разметка модалки "Назначить тестирование" вынесена в функцию, т.к. используется
+// в двух местах: на вкладке "Назначения" (массовое назначение) и на карточке
+// сотрудника (назначение курса конкретно этому сотруднику, п.1 запроса).
+function assignModalHtml() {
+  return `
+      <div id="assignModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] flex flex-col">
+          <h3 class="text-lg font-bold mb-4" id="assignModalTitle">Назначить тестирование</h3>
+          <form onsubmit="submitAssignForm(event)" class="space-y-3 overflow-y-auto flex-1 pr-1">
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Курс</label>
+              <select id="asCourseId" required class="w-full border p-2 rounded text-sm"></select>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="text-xs font-semibold text-slate-600">Номер протокола</label><input id="asProtNum" required class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Дата протокола</label><input type="date" id="asProtDate" required class="w-full border p-2 rounded text-sm"></div>
+            </div>
+            <div class="text-[11px] text-slate-500 -mt-1">Номер подставлен автоматически по счётчику из настроек — при необходимости его можно исправить вручную.</div>
+            <div id="asActiveProtocolHint" class="text-[11px] text-emerald-700 font-semibold -mt-1"></div>
+            <div id="asNextCertHint" class="text-[11px] text-blue-600 font-semibold -mt-1"></div>
+            <div class="border-t pt-3">
+              <label class="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                <input type="checkbox" id="asHistorical" onchange="onAsHistoricalToggle()">
+                Внести уже пройденное ранее обучение (старые данные, без сдачи теста в системе)
+              </label>
+              <div id="asHistoricalFields" class="hidden grid grid-cols-2 gap-3 mt-2">
+                <div><label class="text-xs font-semibold text-slate-600">Дата прохождения</label><input type="date" id="asTestDate" class="w-full border p-2 rounded text-sm"></div>
+                <div><label class="text-xs font-semibold text-slate-600">Дата след. прохождения</label><input type="date" id="asNextTestDate" class="w-full border p-2 rounded text-sm"></div>
+                <div><label class="text-xs font-semibold text-slate-600">Результат, % (по умолчанию 100)</label><input type="number" min="0" max="100" id="asScorePercent" class="w-full border p-2 rounded text-sm"></div>
+                <div class="text-[11px] text-slate-500 self-end pb-2">Номер сертификата будет присвоен автоматически. Если дату след. прохождения не указать, она рассчитается по сроку действия курса (у бессрочных курсов даты нет).</div>
+              </div>
+            </div>
+            <div id="asLockedEmployeeInfo" class="hidden border-t pt-3 text-sm">
+              <span class="text-xs font-semibold text-slate-600">Сотрудник</span>
+              <div class="font-bold text-slate-900 mt-0.5"></div>
+            </div>
+            <div id="asEmployeeSelectionBlock" class="border-t pt-3">
+              <div class="flex items-center justify-between mb-2">
+                <label class="text-xs font-semibold text-slate-600">Сотрудники <span id="asSelectedCount" class="text-blue-600 font-bold"></span></label>
+                <div class="space-x-2 text-xs">
+                  <button type="button" onclick="asSelectAll(true)" class="text-blue-600 hover:underline">Выбрать всех</button>
+                  <button type="button" onclick="asSelectAll(false)" class="text-slate-500 hover:underline">Снять всё</button>
+                </div>
+              </div>
+              <div class="text-[11px] text-slate-500 -mt-1 mb-2">Один номер протокола будет присвоен всем выбранным ниже сотрудникам.</div>
+              <div class="grid grid-cols-2 gap-2 mb-2">
+                <input id="asFilterQ" type="text" placeholder="${t('search_placeholder')}" oninput="renderAssignEmployeeList()" class="border border-slate-300 rounded-lg px-2 py-1.5 text-xs col-span-2">
+                <select id="asFilterObject" onchange="renderAssignEmployeeList()" class="border border-slate-300 rounded-lg px-2 py-1.5 text-xs"><option value="">${t('all_objects')}</option></select>
+                <select id="asFilterDept" onchange="renderAssignEmployeeList()" class="border border-slate-300 rounded-lg px-2 py-1.5 text-xs"><option value="">${t('all_departments')}</option></select>
+              </div>
+              <div id="asEmployeeList" class="border rounded-lg divide-y max-h-52 overflow-y-auto"></div>
+            </div>
+            <div class="flex justify-end space-x-2 pt-3 border-t sticky bottom-0 bg-white">
+              <button type="button" onclick="document.getElementById('assignModal').classList.add('hidden')" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
+              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Назначить</button>
+            </div>
+          </form>
+        </div>
+      </div>
+  `;
+}
+
 let asAllEmployees = [];
 let asSelectedIds = new Set();
+// Если назначение курса открыто с карточки сотрудника (п.1 запроса), сюда
+// попадает id этого сотрудника — выбор в списке ниже блокируется на нём одном.
+let asLockedUserId = null;
 
-async function openAssignModal() {
+async function openAssignModal(presetUserId, presetUserIds, presetCourseId) {
+  asLockedUserId = presetUserId ? Number(presetUserId) : null;
   const [allUsers, courses] = await Promise.all([api.getUsers(), api.getCourses()]);
   asAllEmployees = allUsers.filter(u => u.role === 'employee');
-  asSelectedIds = new Set();
+  if (asLockedUserId) {
+    asSelectedIds = new Set([asLockedUserId]);
+  } else if (presetUserIds && presetUserIds.length) {
+    asSelectedIds = new Set(presetUserIds.map(Number));
+  } else {
+    asSelectedIds = new Set();
+  }
 
   const cSel = document.getElementById('asCourseId');
   // Курсы в выпадающем списке сгруппированы по категориям — так проще найти нужный, когда курсов много
@@ -2212,6 +2405,7 @@ async function openAssignModal() {
   cSel.innerHTML = flat
     ? courses.map(optHtml).join('')
     : courseGroups.map(g => `<optgroup label="${esc(g.label)}">${g.items.slice().sort(sortByRu).map(optHtml).join('')}</optgroup>`).join('');
+  if (presetCourseId) cSel.value = presetCourseId;
 
   // Фильтры по объекту/отделу для списка сотрудников
   const objects = [...new Set(asAllEmployees.map(u => u.object).filter(Boolean))].sort();
@@ -2219,6 +2413,26 @@ async function openAssignModal() {
   document.getElementById('asFilterObject').innerHTML = `<option value="">${t('all_objects')}</option>` + objects.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('');
   document.getElementById('asFilterDept').innerHTML = `<option value="">${t('all_departments')}</option>` + departments.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('');
   document.getElementById('asFilterQ').value = '';
+
+  // Если открыто с карточки сотрудника — скрываем список выбора сотрудников
+  // и жёстко фиксируем назначение на одного человека (п.1 запроса).
+  const titleEl = document.getElementById('assignModalTitle');
+  const lockedInfo = document.getElementById('asLockedEmployeeInfo');
+  const selBlock = document.getElementById('asEmployeeSelectionBlock');
+  if (asLockedUserId) {
+    const emp = asAllEmployees.find(u => u.id === asLockedUserId);
+    if (titleEl) titleEl.textContent = 'Назначить курс сотруднику';
+    if (lockedInfo) {
+      lockedInfo.classList.remove('hidden');
+      lockedInfo.querySelector('div').textContent = emp ? `${emp.last_name} ${emp.first_name}` : '';
+    }
+    if (selBlock) selBlock.classList.add('hidden');
+  } else {
+    if (titleEl) titleEl.textContent = 'Назначить тестирование';
+    if (lockedInfo) lockedInfo.classList.add('hidden');
+    if (selBlock) selBlock.classList.remove('hidden');
+  }
+
   document.getElementById('asHistorical').checked = false;
   document.getElementById('asHistoricalFields').classList.add('hidden');
   document.getElementById('asTestDate').value = '';
@@ -2346,7 +2560,15 @@ async function submitAssignForm(e) {
   if (res.skipped) {
     alert(`Назначено: ${res.created}. Пропущено (некорректный id): ${res.skipped}.`);
   }
-  loadAssignmentsList();
+  // Назначали с карточки сотрудника — обновляем именно её, а не список всех назначений
+  if (asLockedUserId) {
+    loadUserProfile(asLockedUserId);
+  } else if (document.getElementById('assignTable')) {
+    loadAssignmentsList();
+  } else if (document.getElementById('coursesList')) {
+    // Назначали "всем непрошедшим" со страницы курсов — обновляем счётчики на карточках
+    loadCoursesList();
+  }
 }
 
 async function allowRetake(id) {
@@ -2501,6 +2723,7 @@ async function loadUserProfile(userId) {
             <p class="text-xs text-slate-400 mt-1">№ сертификата: <span class="font-mono font-semibold text-slate-600">${user.permanent_certificate_number ? esc(user.permanent_certificate_number) : 'не присвоен'}</span></p>
           </div>
           <div class="flex gap-2">
+            <button onclick="openAssignModal(${user.id})" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold">+ Назначить курс</button>
             <button onclick="editUserFromProfile(${user.id})" class="px-4 py-2 border rounded-lg text-sm font-semibold hover:bg-slate-50">${t('edit')}</button>
             <a href="#" onclick="downloadAuthed('/api/export/excel','journal_export.xlsx');return false;" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold">📥 ${t('download_report')}</a>
           </div>

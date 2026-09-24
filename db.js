@@ -48,6 +48,13 @@ async function initDb() {
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS video_path_kz TEXT;
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS video_url_ru TEXT;
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS video_url_kz TEXT;
+
+    -- Обязательный курс (например, вводный инструктаж по БиОТ) — все активные
+    -- сотрудники должны его пройти. Позволяет отдельно показывать тех, кто ещё
+    -- не прошёл обучение по такому курсу: на карточке курса и в общей
+    -- статистике на главной странице (см. routes/courses.js: GET /:id/untrained
+    -- и GET /stats/summary).
+    ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_mandatory BOOLEAN NOT NULL DEFAULT FALSE;
   `);
 
   // Сотрудника можно создать/импортировать только по ФИО, без логина и пароля,
