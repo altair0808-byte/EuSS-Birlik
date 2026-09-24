@@ -14,12 +14,20 @@ const { authRequired, requireRole } = require('./auth');
 // List all protocols (newest first)
 router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
+    // Единый фильтр по объекту/отделу: считаем только сотрудников выбранного объекта/отдела
+    // и показываем только те протоколы, по которым такие сотрудники есть.
+    const object = String(req.query.object || '').trim() || null;
+    const department = String(req.query.department || '').trim() || null;
     const result = await query(`
-      SELECT p.*, (SELECT COUNT(*)::int FROM assignments a WHERE a.protocol_id = p.id) AS assignments_count
+      SELECT p.*, (
+        SELECT COUNT(*)::int FROM assignments a JOIN users u ON u.id = a.user_id
+        WHERE a.protocol_id = p.id
+          AND ($1::text IS NULL OR u.object = $1) AND ($2::text IS NULL OR u.department = $2)
+      ) AS assignments_count
       FROM protocols p
       ORDER BY p.open_date DESC, p.id DESC
-    `);
-    res.json(result.rows);
+    `, [object, department]);
+    res.json((object || department) ? result.rows.filter(r => r.assignments_count > 0) : result.rows);
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }

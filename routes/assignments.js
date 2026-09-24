@@ -260,6 +260,11 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, re
 router.get('/expiring', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
     const days = Number(req.query.days) || 30;
+    const { object, department } = req.query;
+    const params = [String(days)];
+    let orgSql = '';
+    if (object) { params.push(object); orgSql += ` AND u.object = $${params.length}`; }
+    if (department) { params.push(department); orgSql += ` AND u.department = $${params.length}`; }
     const result = await query(`
       SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position,
              c.title_ru, c.title_kz, c.category_ru, c.category_kz
@@ -270,8 +275,15 @@ router.get('/expiring', authRequired, requireRole('admin', 'superadmin'), async 
         AND a.next_test_date IS NOT NULL
         AND c.no_expiry = FALSE
         AND a.next_test_date::timestamptz <= NOW() + ($1 || ' days')::interval
+        AND NOT EXISTS (
+          SELECT 1 FROM assignments n
+          WHERE n.user_id = a.user_id AND n.course_id = a.course_id AND n.status = 'passed'
+            AND (COALESCE(n.test_date, '') > COALESCE(a.test_date, '')
+                 OR (COALESCE(n.test_date, '') = COALESCE(a.test_date, '') AND n.id > a.id))
+        )
+        ${orgSql}
       ORDER BY a.next_test_date::timestamptz ASC
-    `, [String(days)]);
+    `, params);
     res.json(result.rows);
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });

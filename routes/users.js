@@ -307,9 +307,13 @@ router.get('/meta/objects', authRequired, requireRole('admin', 'superadmin'), as
   try {
     const objRes = await query(`SELECT DISTINCT object FROM users WHERE object != '' AND role != 'superadmin' ORDER BY object`);
     const depRes = await query(`SELECT DISTINCT department FROM users WHERE department != '' AND role != 'superadmin' ORDER BY department`);
+    // pairs — реальные сочетания «объект → отдел», чтобы в фильтре список отделов
+    // сужался после выбора объекта (единый фильтр по объекту/отделу на всех вкладках).
+    const pairRes = await query(`SELECT DISTINCT object, department FROM users WHERE role != 'superadmin' AND (object != '' OR department != '')`);
     res.json({
       objects: objRes.rows.map(r => r.object),
-      departments: depRes.rows.map(r => r.department)
+      departments: depRes.rows.map(r => r.department),
+      pairs: pairRes.rows
     });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });

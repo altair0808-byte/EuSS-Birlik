@@ -63,6 +63,15 @@ function clampVariant(n) {
 // ===================== Список / карточка курса =====================
 
 // List courses
+// Фильтр по объекту/отделу (единый фильтр на всех вкладках): считаем только сотрудников
+// выбранного объекта и/или отдела. Параметры $1 (объект) и $2 (отдел) — NULL, если фильтр не задан.
+const ORG_SQL = `($1::text IS NULL OR u.object = $1) AND ($2::text IS NULL OR u.department = $2)`;
+function orgParams(req) {
+  const o = String(req.query.object || '').trim();
+  const d = String(req.query.department || '').trim();
+  return [o || null, d || null];
+}
+
 router.get('/', authRequired, async (req, res) => {
   try {
     // untrained_count считается только для обязательных курсов (is_mandatory) —
@@ -73,14 +82,14 @@ router.get('/', authRequired, async (req, res) => {
       SELECT c.*, (SELECT COUNT(*)::int FROM questions q WHERE q.course_id = c.id) as questions_count,
         CASE WHEN c.is_mandatory THEN (
           SELECT COUNT(*)::int FROM users u
-          WHERE u.role = 'employee' AND u.active = 1
+          WHERE u.role = 'employee' AND u.active = 1 AND ${ORG_SQL}
             AND NOT EXISTS (
               SELECT 1 FROM assignments a
               WHERE a.user_id = u.id AND a.course_id = c.id AND a.status = 'passed'
             )
         ) ELSE NULL END AS untrained_count
       FROM courses c ORDER BY c.created_at DESC
-    `);
+    `, orgParams(req));
     res.json(result.rows);
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
@@ -94,29 +103,40 @@ router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), a
   try {
     const coursesRes = await query(`
       SELECT c.id, c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.is_mandatory,
-        (SELECT COUNT(*)::int FROM users u WHERE u.role = 'employee' AND u.active = 1) AS total_employees,
-        (SELECT COUNT(DISTINCT a.user_id)::int FROM assignments a WHERE a.course_id = c.id AND a.status = 'passed') AS trained_employees,
-        (SELECT COUNT(*)::int FROM assignments a WHERE a.course_id = c.id AND a.status IN ('pending','in_progress')) AS pending,
-        (SELECT COUNT(*)::int FROM assignments a WHERE a.course_id = c.id AND a.status = 'failed') AS failed,
-        (SELECT COUNT(*)::int FROM assignments a WHERE a.course_id = c.id AND a.status = 'passed'
-            AND NULLIF(a.next_test_date, '') IS NOT NULL AND NULLIF(a.next_test_date, '')::timestamptz < NOW()) AS overdue,
+        (SELECT COUNT(*)::int FROM users u WHERE u.role = 'employee' AND u.active = 1 AND ${ORG_SQL}) AS total_employees,
+        (SELECT COUNT(DISTINCT a.user_id)::int FROM assignments a JOIN users u ON u.id = a.user_id
+           WHERE a.course_id = c.id AND a.status = 'passed' AND ${ORG_SQL}) AS trained_employees,
+        (SELECT COUNT(*)::int FROM assignments a JOIN users u ON u.id = a.user_id
+           WHERE a.course_id = c.id AND a.status IN ('pending','in_progress') AND ${ORG_SQL}) AS pending,
+        (SELECT COUNT(*)::int FROM assignments a JOIN users u ON u.id = a.user_id
+           WHERE a.course_id = c.id AND a.status = 'failed' AND ${ORG_SQL}) AS failed,
+        (SELECT COUNT(*)::int FROM assignments a JOIN users u ON u.id = a.user_id
+           WHERE a.course_id = c.id AND a.status = 'passed' AND ${ORG_SQL}
+            AND NULLIF(a.next_test_date, '') IS NOT NULL AND NULLIF(a.next_test_date, '')::timestamptz < NOW()
+            -- только актуальная запись: если сотрудник уже пересдал курс, старая просроченная не считается
+            AND NOT EXISTS (
+              SELECT 1 FROM assignments n
+              WHERE n.user_id = a.user_id AND n.course_id = a.course_id AND n.status = 'passed'
+                AND (COALESCE(n.test_date, '') > COALESCE(a.test_date, '')
+                     OR (COALESCE(n.test_date, '') = COALESCE(a.test_date, '') AND n.id > a.id))
+            )) AS overdue,
         CASE WHEN c.is_mandatory THEN (
           SELECT COUNT(*)::int FROM users u
-          WHERE u.role = 'employee' AND u.active = 1
+          WHERE u.role = 'employee' AND u.active = 1 AND ${ORG_SQL}
             AND NOT EXISTS (
               SELECT 1 FROM assignments a WHERE a.user_id = u.id AND a.course_id = c.id AND a.status = 'passed'
             )
         ) ELSE NULL END AS untrained
       FROM courses c
       ORDER BY c.title_ru
-    `);
+    `, orgParams(req));
 
     const overallRes = await query(`
       SELECT
-        (SELECT COUNT(*)::int FROM users WHERE role = 'employee' AND active = 1) AS total_employees,
+        (SELECT COUNT(*)::int FROM users u WHERE u.role = 'employee' AND u.active = 1 AND ${ORG_SQL}) AS total_employees,
         (SELECT COUNT(DISTINCT u.id)::int
            FROM users u
-           WHERE u.role = 'employee' AND u.active = 1
+           WHERE u.role = 'employee' AND u.active = 1 AND ${ORG_SQL}
              AND EXISTS (
                SELECT 1 FROM courses c
                WHERE c.is_mandatory = true
@@ -126,7 +146,7 @@ router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), a
                  )
              )
         ) AS employees_missing_mandatory
-    `);
+    `, orgParams(req));
 
     res.json({ courses: coursesRes.rows, overall: overallRes.rows[0] });
   } catch (e) {
@@ -365,11 +385,12 @@ router.get('/:id/untrained', authRequired, requireRole('admin', 'superadmin'), a
         ) AS has_assignment
       FROM users u
       WHERE u.role = 'employee' AND u.active = 1
+        AND ($2::text IS NULL OR u.object = $2) AND ($3::text IS NULL OR u.department = $3)
         AND NOT EXISTS (
           SELECT 1 FROM assignments a WHERE a.user_id = u.id AND a.course_id = $1 AND a.status = 'passed'
         )
       ORDER BY u.last_name, u.first_name
-    `, [req.params.id]);
+    `, [req.params.id, ...orgParams(req)]);
     res.json(result.rows);
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
