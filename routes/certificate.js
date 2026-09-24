@@ -179,35 +179,23 @@ router.get('/:id', authRequired, async (req, res) => {
     const protStr = a.protocol_number ? `Протокол № ${a.protocol_number}` : '';
     doc.text(`Дата выдачи: ${issueDateStr}     Действителен до: ${validUntilStr}     ${protStr}`, 0, 320, { align: 'center' });
 
-    // ===================== Блок подписей: ровно два председателя комиссии =====================
-    // Никаких "членов комиссии" — только два столбца, широко разнесённые, чтобы
-    // печать могла аккуратно лечь на подпись одного из них, не задевая имя,
-    // должность или подпись второго председателя.
-    const committee = [
-      {
-        role: s.chairman1_position || 'Председатель комиссии',
-        name: s.chairman1_name || s.chairman_name || '—',
-        sig: sig1Buf
-      },
-      {
-        role: s.chairman2_position || 'Председатель комиссии',
-        name: s.chairman2_name || '—',
-        sig: sig2Buf
-      }
-    ].filter(m => m.name && m.name !== '—');
-    // Если второй председатель ещё не заполнен в настройках, показываем только первого,
-    // чтобы не рисовать пустой столбец.
-    const finalCommittee = committee.length ? committee : [
-      { role: s.chairman1_position || 'Председатель комиссии', name: s.chairman1_name || s.chairman_name || 'Председатель комиссии', sig: sig1Buf }
-    ];
+    // ===================== Блок подписи: используется ТОЛЬКО выбранный председатель =====================
+    // На сертификате всегда показывается один председатель — тот, кто отмечен
+    // галочкой "Использовать на сертификате" в настройках (active_chairman).
+    // Данные второго председателя (ФИО, должность, подпись) на сертификат не
+    // попадают вовсе, пока не выбран именно он.
+    const isChair2Active = parseInt(s.active_chairman, 10) === 2;
+    const activeChair = isChair2Active
+      ? { role: s.chairman2_position || 'Председатель комиссии', name: s.chairman2_name || '—', sig: sig2Buf }
+      : { role: s.chairman1_position || 'Председатель комиссии', name: s.chairman1_name || s.chairman_name || '—', sig: sig1Buf };
+    const finalCommittee = [activeChair];
 
-    // Две колонки шириной 260 с зазором 90 между ними (если председатель один —
-    // одна широкая колонка по центру). Зазор нужен, чтобы печать могла аккуратно
-    // лечь на край подписи первого председателя, не задевая вторую колонку.
-    const twoUp = finalCommittee.length === 2;
-    const colW = twoUp ? 260 : 320;
+    // Одна широкая колонка по центру — печать ляжет на подпись выбранного
+    // председателя, слегка смещённая в сторону, не закрывая его ФИО.
+    const twoUp = false;
+    const colW = 320;
     const gap = 90;
-    const totalW = twoUp ? colW * 2 + gap : colW;
+    const totalW = colW;
     const startX = (PAGE_W - totalW) / 2;
 
     const roleY = 400;      // должность
