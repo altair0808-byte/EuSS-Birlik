@@ -1232,19 +1232,29 @@ async function loadTabContent() {
               <input id="setComp" required class="w-full border p-2.5 rounded-lg text-sm">
             </div>
             <div class="border-t pt-4">
-              <h3 class="text-sm font-bold text-slate-900 mb-2">Комиссия (указывается на сертификате)</h3>
-              <div class="space-y-3">
-                <div>
-                  <label class="text-xs font-semibold text-slate-600">Председатель комиссии (ФИО, должность)</label>
-                  <input id="setChair" required class="w-full border p-2.5 rounded-lg text-sm">
+              <h3 class="text-sm font-bold text-slate-900 mb-2">Комиссия (двое председателей, подписывают сертификат вместе)</h3>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div class="space-y-2 border rounded-lg p-3">
+                  <div class="text-xs font-bold text-slate-700">Председатель комиссии 1</div>
+                  <div>
+                    <label class="text-xs font-semibold text-slate-600">ФИО</label>
+                    <input id="setChair1Name" required class="w-full border p-2.5 rounded-lg text-sm">
+                  </div>
+                  <div>
+                    <label class="text-xs font-semibold text-slate-600">Должность</label>
+                    <input id="setChair1Pos" class="w-full border p-2.5 rounded-lg text-sm" placeholder="Председатель комиссии">
+                  </div>
                 </div>
-                <div>
-                  <label class="text-xs font-semibold text-slate-600">${t('member2_name')}</label>
-                  <input id="setMember2" class="w-full border p-2.5 rounded-lg text-sm">
-                </div>
-                <div>
-                  <label class="text-xs font-semibold text-slate-600">${t('member3_name')}</label>
-                  <input id="setMember3" class="w-full border p-2.5 rounded-lg text-sm">
+                <div class="space-y-2 border rounded-lg p-3">
+                  <div class="text-xs font-bold text-slate-700">Председатель комиссии 2</div>
+                  <div>
+                    <label class="text-xs font-semibold text-slate-600">ФИО</label>
+                    <input id="setChair2Name" class="w-full border p-2.5 rounded-lg text-sm">
+                  </div>
+                  <div>
+                    <label class="text-xs font-semibold text-slate-600">Должность</label>
+                    <input id="setChair2Pos" class="w-full border p-2.5 rounded-lg text-sm" placeholder="Председатель комиссии">
+                  </div>
                 </div>
               </div>
             </div>
@@ -1278,7 +1288,8 @@ async function loadTabContent() {
           </form>
           <div class="border-t mt-6 pt-6 space-y-4">
             <h3 class="text-sm font-bold text-slate-900">Фирменный бланк сертификата</h3>
-            ${['logo', 'stamp', 'signature'].map(kind => `
+            <p class="text-[11px] text-slate-500">Файлы загружаются в облачное хранилище (Supabase Storage) один раз — повторно грузить их не нужно.</p>
+            ${['logo', 'stamp'].map(kind => `
               <div>
                 <label class="text-xs font-semibold text-slate-600">${t(kind + '_upload')}</label>
                 <div class="flex items-center gap-2">
@@ -1286,6 +1297,16 @@ async function loadTabContent() {
                   <button type="button" onclick="uploadBrandingFile('${kind}')" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить</button>
                 </div>
                 <div id="set_${kind}_status" class="text-xs text-slate-500 mt-1"></div>
+              </div>
+            `).join('')}
+            ${[1, 2].map(n => `
+              <div>
+                <label class="text-xs font-semibold text-slate-600">Подпись председателя ${n}</label>
+                <div class="flex items-center gap-2">
+                  <input type="file" id="set_signature${n}_file" accept="image/*" class="w-full border p-2 rounded-lg text-sm">
+                  <button type="button" onclick="uploadChairmanSignature(${n})" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap">Загрузить</button>
+                </div>
+                <div id="set_signature${n}_status" class="text-xs text-slate-500 mt-1"></div>
               </div>
             `).join('')}
           </div>
@@ -2691,19 +2712,27 @@ async function finishTest(auto) {
 async function loadSettingsData() {
   const data = await api.getSettings();
   document.getElementById('setComp').value = data.company_name || '';
-  document.getElementById('setChair').value = data.chairman_name || '';
-  document.getElementById('setMember2').value = data.member2_name || '';
-  document.getElementById('setMember3').value = data.member3_name || '';
+  document.getElementById('setChair1Name').value = data.chairman1_name || data.chairman_name || '';
+  document.getElementById('setChair1Pos').value = data.chairman1_position || '';
+  document.getElementById('setChair2Name').value = data.chairman2_name || '';
+  document.getElementById('setChair2Pos').value = data.chairman2_position || '';
   document.getElementById('setProtPrefix').value = data.protocol_prefix || '';
   document.getElementById('setProtNext').value = data.protocol_next_number || 1;
   document.getElementById('setCertPrefix').value = data.certificate_prefix || '';
   document.getElementById('setCertDigits').value = data.certificate_digits || 4;
   document.getElementById('setCertNext').value = data.certificate_next_number || 1;
-  const pathField = { logo: 'logo_path', stamp: 'stamp_path', signature: 'signature_path' };
-  ['logo', 'stamp', 'signature'].forEach(kind => {
+  const pathField = { logo: 'logo_path', stamp: 'stamp_path' };
+  ['logo', 'stamp'].forEach(kind => {
     const el = document.getElementById('set_' + kind + '_status');
     if (el && data[pathField[kind]]) {
       el.innerHTML = `Загружено: <a href="${data[pathField[kind]]}" target="_blank" class="text-blue-600 underline">открыть</a>`;
+    }
+  });
+  [1, 2].forEach(n => {
+    const el = document.getElementById('set_signature' + n + '_status');
+    const val = data['chairman' + n + '_signature'];
+    if (el && val) {
+      el.innerHTML = `Загружено: <a href="${val}" target="_blank" class="text-blue-600 underline">открыть</a>`;
     }
   });
 }
@@ -2712,9 +2741,10 @@ async function saveSettingsForm(e) {
   e.preventDefault();
   await api.saveSettings({
     company_name: document.getElementById('setComp').value.trim(),
-    chairman_name: document.getElementById('setChair').value.trim(),
-    member2_name: document.getElementById('setMember2').value.trim(),
-    member3_name: document.getElementById('setMember3').value.trim(),
+    chairman1_name: document.getElementById('setChair1Name').value.trim(),
+    chairman1_position: document.getElementById('setChair1Pos').value.trim(),
+    chairman2_name: document.getElementById('setChair2Name').value.trim(),
+    chairman2_position: document.getElementById('setChair2Pos').value.trim(),
     protocol_prefix: document.getElementById('setProtPrefix').value.trim(),
     protocol_next_number: document.getElementById('setProtNext').value,
     certificate_prefix: document.getElementById('setCertPrefix').value.trim(),
@@ -2737,13 +2767,31 @@ async function uploadBrandingFile(kind) {
     const fd = new FormData();
     fd.append('file', file);
     const res = await api.req('/api/settings/' + kind, { method: 'POST', body: fd });
-    const pathField = { logo: 'logo_path', stamp: 'stamp_path', signature: 'signature_path' };
+    const pathField = { logo: 'logo_path', stamp: 'stamp_path' };
     if (statusEl) statusEl.innerHTML = `Загружено: <a href="${res[pathField[kind]]}" target="_blank" class="text-blue-600 underline">открыть</a>`;
     if (kind === 'logo') {
       // Логотип теперь должен отображаться и в шапке сайта, и на экране входа
       PUBLIC_SETTINGS.logo_path = res.logo_path;
       render();
     }
+  } catch (e) {
+    if (statusEl) statusEl.textContent = '';
+    alert('Не удалось загрузить файл: ' + e.message);
+  }
+}
+
+async function uploadChairmanSignature(n) {
+  const input = document.getElementById('set_signature' + n + '_file');
+  const file = input.files[0];
+  if (!file) { alert('Выберите файл.'); return; }
+  const statusEl = document.getElementById('set_signature' + n + '_status');
+  try {
+    if (statusEl) statusEl.textContent = 'Загрузка...';
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await api.req('/api/settings/signature?chairman=' + n, { method: 'POST', body: fd });
+    const val = res['chairman' + n + '_signature'];
+    if (statusEl) statusEl.innerHTML = `Загружено: <a href="${val}" target="_blank" class="text-blue-600 underline">открыть</a>`;
   } catch (e) {
     if (statusEl) statusEl.textContent = '';
     alert('Не удалось загрузить файл: ' + e.message);
