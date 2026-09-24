@@ -609,6 +609,7 @@ function logout() {
   localStorage.removeItem('user');
   sessionStorage.removeItem('orgFilter');
   state.org = { object: '', department: '' };
+  myTestsTab = 'todo';
   render();
 }
 
@@ -809,6 +810,7 @@ function renderMain(app) {
           ${!isEmployee ? `
             <button onclick="setTab('dashboard')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'dashboard' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_dashboard')}</button>
             <button onclick="setTab('users')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_users')}</button>
+            ${state.user.role === 'superadmin' ? `<button onclick="setTab('admins')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'admins' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Администраторы', 'Әкімшілер')}</button>` : ''}
             <button onclick="setTab('courses')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'courses' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_courses')}</button>
             <button onclick="setTab('assignments')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'assignments' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_assignments')}</button>
             <button onclick="setTab('protocols')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'protocols' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">Протоколы</button>
@@ -937,25 +939,24 @@ async function loadTabContent() {
     loadExpiringWidget();
   }
 
-  if (state.tab === 'users') {
+  if (state.tab === 'users' || state.tab === 'admins') {
+    // «Администраторы» — отдельная вкладка (только суперадмин): админы не входят в список сотрудников и статистику
+    const isAdminsTab = state.tab === 'admins';
     container.innerHTML = `
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
         <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
-          <h2 class="text-lg font-bold text-slate-900">${t('users_title')}</h2>
+          <h2 class="text-lg font-bold text-slate-900">${isAdminsTab ? _L('Администраторы', 'Әкімшілер') : t('users_title')}</h2>
           <div class="flex gap-2">
-            <input type="file" id="importFile" accept=".xlsx" class="hidden" onchange="handleImportFile(this)">
+            ${isAdminsTab ? '' : `<input type="file" id="importFile" accept=".xlsx" class="hidden" onchange="handleImportFile(this)">
             <button onclick="downloadUsersTemplate()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">⬇ Скачать бланк</button>
-            <button onclick="document.getElementById('importFile').click()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">📥 ${t('import_excel')}</button>
-            <button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${t('add_user')}</button>
+            <button onclick="document.getElementById('importFile').click()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">📥 ${t('import_excel')}</button>`}
+            <button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${isAdminsTab ? _L('Добавить администратора', 'Әкімші қосу') : t('add_user')}</button>
           </div>
         </div>
+        ${isAdminsTab ? `<p class="text-xs text-slate-500 mb-4">${_L('Администраторы управляют системой. Они не входят в список сотрудников, статистику, назначения, протоколы и экспорт.', 'Әкімшілер жүйені басқарады. Олар қызметкерлер тізіміне, статистикаға, тағайындауларға, хаттамаларға және экспортқа кірмейді.')}</p>` : ''}
         <div class="flex flex-wrap gap-2 mb-4">
           <input id="uFilterQ" type="text" placeholder="${t('search_placeholder')}" value="${esc(state.usersFilter.q)}" oninput="onUsersFilterChange()" class="flex-1 min-w-[200px] border border-slate-300 rounded-lg px-3 py-2 text-sm">
-          <select id="uFilterRole" onchange="onUsersFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm">
-            <option value="">${t('all_roles')}</option>
-            <option value="employee">${t('role_employee')}</option>
-            <option value="admin">${t('role_admin')}</option>
-          </select>
+          
         </div>
         <div class="overflow-x-auto">
           <table class="min-w-full divide-y divide-slate-200 text-sm">
@@ -1137,19 +1138,27 @@ async function loadTabContent() {
           </form>
         </div>
       </div>
-      <div id="questionsModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
-        <div class="bg-white rounded-xl shadow-2xl max-w-4xl w-full p-6 max-h-[90vh] flex flex-col">
-          <div class="flex justify-between items-center mb-3">
-            <h3 class="text-lg font-bold" id="questionsModalTitle">Тесты курса</h3>
-            <button onclick="document.getElementById('questionsModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-700 text-xl leading-none">&times;</button>
+      <div id="questionsModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-2 sm:p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-6xl h-[94vh] flex flex-col overflow-hidden">
+          <!-- Шапка -->
+          <div class="flex items-start justify-between gap-3 px-4 sm:px-6 py-3 border-b shrink-0">
+            <div class="min-w-0">
+              <h3 class="text-lg font-bold text-slate-900 truncate" id="questionsModalTitle">Тесты курса</h3>
+              <p class="text-xs text-slate-500 mt-0.5" id="questionsModalSummary"></p>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button type="button" onclick="toggleTestImportPanel()" class="px-3 py-1.5 border rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap">📥 <span class="hidden sm:inline">Загрузка из </span>Excel</button>
+              <button type="button" onclick="closeTestsModal()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none px-1" title="Закрыть">&times;</button>
+            </div>
           </div>
 
-          <div class="bg-slate-50 border rounded-lg p-3 mb-3">
-            <p class="text-xs font-semibold text-slate-700 mb-2">Автоматическая загрузка теста из Excel (10 вариантов по 10 вопросов, по 4 ответа)</p>
+          <!-- Импорт из Excel (свёрнут по умолчанию, чтобы не занимать место) -->
+          <div id="testImportPanel" class="hidden px-4 sm:px-6 py-3 bg-slate-50 border-b shrink-0">
+            <p class="text-xs font-semibold text-slate-700 mb-2">Автоматическая загрузка теста из Excel (10 билетов по 10 вопросов, по 4 ответа)</p>
             <div class="flex flex-wrap items-center gap-2">
-              <button type="button" onclick="downloadTestTemplate()" class="px-3 py-1.5 border rounded-lg text-xs font-semibold whitespace-nowrap">⬇ Скачать шаблон Excel</button>
-              <input type="file" id="testImportFile" accept=".xlsx" class="border p-1.5 rounded text-xs flex-1 min-w-[160px]">
-              <select id="testImportMode" class="border p-1.5 rounded text-xs">
+              <button type="button" onclick="downloadTestTemplate()" class="px-3 py-1.5 border bg-white rounded-lg text-xs font-semibold whitespace-nowrap">⬇ Скачать шаблон Excel</button>
+              <input type="file" id="testImportFile" accept=".xlsx" class="border bg-white p-1.5 rounded text-xs flex-1 min-w-[160px]">
+              <select id="testImportMode" class="border bg-white p-1.5 rounded text-xs">
                 <option value="replace">Заменить всю базу тестов</option>
                 <option value="append">Добавить к существующим</option>
               </select>
@@ -1158,32 +1167,72 @@ async function loadTabContent() {
             <div id="testImportStatus" class="text-xs mt-2"></div>
           </div>
 
-          <div id="variantTabs" class="flex flex-wrap gap-1.5 mb-3"></div>
+          <div class="flex flex-col md:flex-row flex-1 min-h-0">
+            <!-- Билеты: слева столбцом (на телефоне — лентой сверху) -->
+            <aside class="md:w-56 shrink-0 border-b md:border-b-0 md:border-r bg-slate-50 md:overflow-y-auto">
+              <div id="variantTabs" class="flex md:flex-col gap-1.5 p-2 md:p-3 overflow-x-auto md:overflow-x-visible"></div>
+            </aside>
 
-          <div id="questionsList" class="space-y-3 overflow-y-auto flex-1 mb-4"></div>
+            <!-- Вопросы выбранного билета -->
+            <section class="flex-1 min-w-0 min-h-0 flex flex-col">
+              <div class="flex flex-wrap items-center gap-2 px-4 sm:px-6 py-3 border-b shrink-0">
+                <div class="mr-auto min-w-0">
+                  <div class="text-base font-bold text-slate-900" id="variantHeading">Билет 1</div>
+                  <div class="text-xs text-slate-500" id="variantCountText"></div>
+                </div>
+                <input id="qSearch" type="search" placeholder="Поиск по всем билетам…" oninput="onQuestionSearch()" class="border rounded-lg px-3 py-1.5 text-sm w-44 sm:w-56">
+                <div class="inline-flex rounded-lg border overflow-hidden text-xs font-semibold" id="qLangSwitch" title="Язык, на котором показаны вопросы"></div>
+                <button type="button" id="addQuestionBtn" onclick="openQuestionForm()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed">+ Добавить вопрос</button>
+              </div>
+              <div id="questionsList" class="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 py-4 space-y-3"></div>
+            </section>
+          </div>
+        </div>
+      </div>
 
-          <form id="questionForm" onsubmit="saveQuestionForm(event)" novalidate class="border-t pt-4 space-y-2">
-            <input type="hidden" id="qId">
-            <input type="hidden" id="qVariant" value="1">
-            <p class="text-xs font-semibold text-slate-500">Вопрос для билета (варианта) <span id="qVariantLabel">1</span></p>
-            <div><label class="text-xs font-semibold text-slate-600">Вопрос (RU)</label><input id="qTextRu" required class="w-full border p-2 rounded text-sm"></div>
-            <div><label class="text-xs font-semibold text-slate-600">Вопрос (KZ)</label><input id="qTextKz" required class="w-full border p-2 rounded text-sm"></div>
-            <div class="space-y-1.5">
-              <label class="text-xs font-semibold text-slate-600">Варианты ответа — отметьте ✓ правильный</label>
+      <!-- Форма вопроса: открывается поверх списка, поэтому список не «сжимается» -->
+      <div id="questionFormModal" class="fixed inset-0 bg-slate-900/60 hidden flex items-center justify-center p-2 sm:p-4 z-[60]">
+        <form id="questionForm" onsubmit="saveQuestionForm(event)" novalidate class="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[94vh] flex flex-col overflow-hidden">
+          <div class="flex items-center justify-between px-5 py-3 border-b shrink-0">
+            <h4 class="text-base font-bold text-slate-900" id="qFormTitle">Новый вопрос</h4>
+            <button type="button" onclick="closeQuestionForm()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none px-1" title="Закрыть">&times;</button>
+          </div>
+          <input type="hidden" id="qId">
+          <input type="hidden" id="qVariant" value="1">
+          <div class="flex-1 overflow-y-auto p-5 space-y-5">
+            <div class="grid md:grid-cols-2 gap-4">
+              <div>
+                <label class="text-xs font-semibold text-slate-600">Вопрос (RU)</label>
+                <textarea id="qTextRu" rows="3" class="w-full border p-2 rounded-lg text-sm mt-1 resize-y"></textarea>
+              </div>
+              <div>
+                <label class="text-xs font-semibold text-slate-600">Вопрос (KZ)</label>
+                <textarea id="qTextKz" rows="3" class="w-full border p-2 rounded-lg text-sm mt-1 resize-y"></textarea>
+              </div>
+            </div>
+            <div class="space-y-2.5">
+              <p class="text-xs font-semibold text-slate-600">Варианты ответа — отметьте кружком правильный</p>
               ${[0, 1, 2, 3].map(i => `
-                <div class="flex items-center gap-2 border rounded-lg p-2 bg-slate-50">
-                  <input type="radio" name="qCorrectRadio" value="${i}" id="qCorrectR${i}" ${i === 0 ? 'checked' : ''} class="w-4 h-4 accent-emerald-600 shrink-0" title="Отметить как правильный ответ">
-                  <input id="qOpt${i}Ru" placeholder="Ответ ${i + 1} (RU)" required class="flex-1 border p-2 rounded text-sm">
-                  <input id="qOpt${i}Kz" placeholder="Жауап ${i + 1} (KZ)" required class="flex-1 border p-2 rounded text-sm">
+                <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 has-[:checked]:border-emerald-400 has-[:checked]:bg-emerald-50">
+                  <label class="flex items-center gap-2 cursor-pointer mb-2">
+                    <input type="radio" name="qCorrectRadio" value="${i}" id="qCorrectR${i}" ${i === 0 ? 'checked' : ''} class="w-4 h-4 accent-emerald-600 shrink-0">
+                    <span class="text-sm font-bold text-slate-800">Вариант ${'ABCD'[i]}</span>
+                    <span class="text-[11px] text-slate-500">отметить как правильный</span>
+                  </label>
+                  <div class="grid md:grid-cols-2 gap-2">
+                    <textarea id="qOpt${i}Ru" rows="2" placeholder="Ответ ${'ABCD'[i]} (RU)" class="w-full border p-2 rounded text-sm bg-white resize-y"></textarea>
+                    <textarea id="qOpt${i}Kz" rows="2" placeholder="Жауап ${'ABCD'[i]} (KZ)" class="w-full border p-2 rounded text-sm bg-white resize-y"></textarea>
+                  </div>
                 </div>
               `).join('')}
             </div>
-            <div class="flex justify-end space-x-2">
-              <button type="button" onclick="resetQuestionForm()" class="px-4 py-2 border rounded-lg text-sm">Очистить</button>
-              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить вопрос</button>
-            </div>
-          </form>
-        </div>
+          </div>
+          <div class="flex flex-wrap justify-end gap-2 px-5 py-3 border-t bg-slate-50 shrink-0">
+            <button type="button" onclick="closeQuestionForm()" class="px-4 py-2 border bg-white rounded-lg text-sm">Отмена</button>
+            <button type="button" id="qSaveNextBtn" onclick="saveQuestionForm(null, true)" class="px-4 py-2 border border-blue-300 bg-white text-blue-700 font-semibold rounded-lg text-sm">Сохранить и добавить ещё</button>
+            <button type="submit" class="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-sm">Сохранить вопрос</button>
+          </div>
+        </form>
       </div>
       ${assignModalHtml()}
     `;
@@ -1872,7 +1921,6 @@ async function handleImportFile(input) {
 let usersFilterTimeout = null;
 function onUsersFilterChange() {
   state.usersFilter.q = document.getElementById('uFilterQ').value;
-  state.usersFilter.role = document.getElementById('uFilterRole').value;
   clearTimeout(usersFilterTimeout);
   usersFilterTimeout = setTimeout(loadUsersList, 250);
 }
@@ -1882,12 +1930,11 @@ function onUsersFilterChange() {
 function populateUsersMetaFilters() { refreshOrgMeta(); }
 
 async function loadUsersList() {
-  const roleFilter = document.getElementById('uFilterRole');
-  if (roleFilter) roleFilter.value = state.usersFilter.role;
   const tbody = document.getElementById('usersTable');
   let users;
   try {
-    users = await api.getUsers({ ...state.usersFilter, ...orgParams() });
+    const isAdminsTab = state.tab === 'admins';
+    users = await api.getUsers({ q: state.usersFilter.q, ...(isAdminsTab ? { role: 'admin' } : orgParams()) });
   } catch (e) {
     if (tbody) tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-red-600">${t('error_generic')}${e && e.message ? ': ' + esc(e.message) : ''}</td></tr>`;
     return;
@@ -1901,7 +1948,7 @@ async function loadUsersList() {
   tbody.innerHTML = state.users.map(u => `
     <tr class="hover:bg-slate-50">
       <td class="px-4 py-3 font-medium text-slate-900">
-        <button onclick="openUserProfile(${u.id})" class="hover:text-blue-600 hover:underline text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>
+        ${u.role === 'admin' ? `${esc(u.last_name)} ${esc(u.first_name)}` : `<button onclick="openUserProfile(${u.id})" class="hover:text-blue-600 hover:underline text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>`}
       </td>
       <td class="px-4 py-3 font-mono text-slate-600">${u.login ? esc(u.login) : '<span class="text-slate-400 italic font-sans">не назначен</span>'}</td>
       <td class="px-4 py-3 text-slate-600">${esc(u.object || '—')} / ${esc(u.department || '—')}</td>
@@ -1927,7 +1974,7 @@ function openUserModal(u = null) {
   document.getElementById('uPass').value = '';
   document.getElementById('uCertNumber').value = u ? (u.permanent_certificate_number || '') : '';
   document.getElementById('uTcoBadge').value = u ? (u.tco_badge || '') : '';
-  document.getElementById('uRole').value = u ? u.role : 'employee';
+  document.getElementById('uRole').value = u ? u.role : (state.tab === 'admins' ? 'admin' : 'employee');
   const roleWrapper = document.getElementById('roleFieldWrapper');
   if (roleWrapper) {
     if (state.user && state.user.role === 'superadmin') {
@@ -1936,7 +1983,9 @@ function openUserModal(u = null) {
       roleWrapper.classList.add('hidden');
     }
   }
-  document.getElementById('userModalTitle').textContent = u ? 'Редактировать сотрудника' : 'Добавить сотрудника';
+  document.getElementById('userModalTitle').textContent = state.tab === 'admins'
+    ? (u ? _L('Редактировать администратора', 'Әкімшіні өзгерту') : _L('Добавить администратора', 'Әкімші қосу'))
+    : (u ? 'Редактировать сотрудника' : 'Добавить сотрудника');
   document.getElementById('userModal').classList.remove('hidden');
 }
 
@@ -2390,14 +2439,27 @@ async function delCourse(id) {
 // Тестовая база курса организована как до 10 вариантов (билетов) по 10 вопросов,
 // по 4 варианта ответа в каждом. Это позволяет выдавать сотрудникам разные билеты.
 const TEST_VARIANTS_COUNT = 10;
+const QUESTIONS_PER_VARIANT = 10;
 let currentQuestionsCourseId = null;
 let currentTestVariant = 1;
 let allCourseQuestions = [];
+let qViewLang = 'ru';      // на каком языке показывать вопросы в списке: 'ru' | 'kz'
+let qSearchText = '';      // поиск по всем билетам курса
+
+function parseQuestionOptions(raw) {
+  if (Array.isArray(raw)) return raw;
+  try { const v = JSON.parse(raw || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; }
+}
 
 async function openTestsModal(courseId) {
   currentQuestionsCourseId = courseId;
   currentTestVariant = 1;
+  qSearchText = '';
+  const searchEl = document.getElementById('qSearch');
+  if (searchEl) searchEl.value = '';
   resetQuestionForm();
+  closeQuestionForm();
+  document.getElementById('testImportPanel').classList.add('hidden');
   document.getElementById('testImportStatus').innerHTML = '';
   document.getElementById('testImportFile').value = '';
   await loadQuestionsForCourse();
@@ -2406,75 +2468,185 @@ async function openTestsModal(courseId) {
 // Сохраняем старое имя как алиас на случай, если где-то ещё осталась ссылка на него
 function openQuestionsModal(courseId) { return openTestsModal(courseId); }
 
+function closeTestsModal() {
+  closeQuestionForm();
+  document.getElementById('questionsModal').classList.add('hidden');
+}
+
+function toggleTestImportPanel() {
+  document.getElementById('testImportPanel').classList.toggle('hidden');
+}
+
 async function loadQuestionsForCourse() {
   const { course, questions } = await api.getCourse(currentQuestionsCourseId);
   document.getElementById('questionsModalTitle').textContent = 'Тесты курса: ' + course.title_ru;
   allCourseQuestions = questions;
   renderVariantTabs();
-  renderVariantQuestions();
+  renderVariantQuestions(true);
+}
+
+function questionCountsByVariant() {
+  const counts = {};
+  allCourseQuestions.forEach(q => { const v = q.variant_number || 1; counts[v] = (counts[v] || 0) + 1; });
+  return counts;
 }
 
 function renderVariantTabs() {
   const div = document.getElementById('variantTabs');
-  const counts = {};
-  allCourseQuestions.forEach(q => { counts[q.variant_number] = (counts[q.variant_number] || 0) + 1; });
+  const counts = questionCountsByVariant();
+  const total = allCourseQuestions.length;
+  const filled = Array.from({ length: TEST_VARIANTS_COUNT }, (_, i) => counts[i + 1] || 0).filter(c => c >= QUESTIONS_PER_VARIANT).length;
+  const summary = document.getElementById('questionsModalSummary');
+  if (summary) summary.textContent = `Всего вопросов: ${total} · полностью заполнено билетов: ${filled} из ${TEST_VARIANTS_COUNT}`;
+
   div.innerHTML = Array.from({ length: TEST_VARIANTS_COUNT }, (_, i) => i + 1).map(v => {
     const count = counts[v] || 0;
-    const complete = count >= 10;
-    const active = v === currentTestVariant;
-    const colorClasses = active
-      ? 'bg-blue-600 text-white'
-      : (complete ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-slate-100 text-slate-600 hover:bg-slate-200');
-    return `<button type="button" onclick="selectTestVariant(${v})" class="px-3 py-1.5 rounded-lg text-xs font-semibold ${colorClasses}">Билет ${v} (${count}/10)</button>`;
+    const complete = count >= QUESTIONS_PER_VARIANT;
+    const active = v === currentTestVariant && !qSearchText;
+    const pct = Math.min(100, Math.round(count / QUESTIONS_PER_VARIANT * 100));
+    const box = active
+      ? 'bg-blue-600 text-white border-blue-600 shadow'
+      : (complete ? 'bg-white text-slate-800 border-emerald-300 hover:bg-emerald-50' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100');
+    const barBg = active ? 'rgba(255,255,255,.35)' : '#e2e8f0';
+    const barFg = active ? '#fff' : (complete ? '#10b981' : '#f59e0b');
+    return `<button type="button" onclick="selectTestVariant(${v})" class="shrink-0 md:w-full text-left rounded-lg border px-3 py-2 transition ${box}">
+      <div class="flex items-center justify-between gap-3">
+        <span class="text-sm font-bold whitespace-nowrap">Билет ${v}</span>
+        <span class="text-xs font-semibold whitespace-nowrap">${complete ? '✓ ' : ''}${count}/${QUESTIONS_PER_VARIANT}</span>
+      </div>
+      <div class="mt-1.5 h-1 rounded-full overflow-hidden" style="background:${barBg}"><div class="h-full rounded-full" style="width:${pct}%;background:${barFg}"></div></div>
+    </button>`;
   }).join('');
 }
 
 function selectTestVariant(v) {
   currentTestVariant = v;
-  resetQuestionForm();
+  qSearchText = '';
+  const searchEl = document.getElementById('qSearch');
+  if (searchEl) searchEl.value = '';
   renderVariantTabs();
   renderVariantQuestions();
 }
 
-function renderVariantQuestions() {
+function setQuestionViewLang(l) {
+  qViewLang = l;
+  renderVariantQuestions(true);
+}
+
+function onQuestionSearch() {
+  qSearchText = (document.getElementById('qSearch').value || '').trim().toLowerCase();
+  renderVariantTabs();
+  renderVariantQuestions();
+}
+
+function renderVariantQuestions(keepScroll = false) {
   const container = document.getElementById('questionsList');
   if (!container) return;
-  const list = allCourseQuestions.filter(q => (q.variant_number || 1) === currentTestVariant);
+  const prevScroll = container.scrollTop;
+
+  // Переключатель языка RU / KZ
+  const langBox = document.getElementById('qLangSwitch');
+  if (langBox) {
+    const btn = (code, label) => `<button type="button" onclick="setQuestionViewLang('${code}')" class="px-3 py-1.5 ${qViewLang === code ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}">${label}</button>`;
+    langBox.innerHTML = btn('ru', 'RU') + btn('kz', 'KZ');
+  }
+
+  const counts = questionCountsByVariant();
+  const inVariant = counts[currentTestVariant] || 0;
+  const searching = !!qSearchText;
+
+  // Порядковый номер вопроса внутри своего билета
+  const posInVariant = new Map();
+  const seen = {};
+  allCourseQuestions.forEach(q => {
+    const v = q.variant_number || 1;
+    seen[v] = (seen[v] || 0) + 1;
+    posInVariant.set(q.id, seen[v]);
+  });
+
+  let list;
+  if (searching) {
+    list = allCourseQuestions.filter(q => {
+      const hay = [q.question_ru, q.question_kz, ...parseQuestionOptions(q.options_ru), ...parseQuestionOptions(q.options_kz)].join(' ').toLowerCase();
+      return hay.includes(qSearchText);
+    });
+  } else {
+    list = allCourseQuestions.filter(q => (q.variant_number || 1) === currentTestVariant);
+  }
+
+  // Заголовок над списком + кнопка «Добавить»
+  const heading = document.getElementById('variantHeading');
+  const countText = document.getElementById('variantCountText');
+  const addBtn = document.getElementById('addQuestionBtn');
+  if (searching) {
+    heading.textContent = 'Результаты поиска';
+    countText.textContent = `Найдено вопросов: ${list.length} (по всем билетам)`;
+  } else {
+    heading.textContent = 'Билет ' + currentTestVariant;
+    countText.textContent = inVariant >= QUESTIONS_PER_VARIANT
+      ? `Заполнен: ${inVariant} из ${QUESTIONS_PER_VARIANT} вопросов`
+      : `Вопросов: ${inVariant} из ${QUESTIONS_PER_VARIANT} — можно добавить ещё ${QUESTIONS_PER_VARIANT - inVariant}`;
+  }
+  if (addBtn) {
+    const full = inVariant >= QUESTIONS_PER_VARIANT;
+    addBtn.disabled = full;
+    addBtn.title = full ? 'В билете уже 10 вопросов — удалите или измените существующие' : '';
+    addBtn.textContent = searching ? `+ Добавить в билет ${currentTestVariant}` : '+ Добавить вопрос';
+  }
 
   if (!list.length) {
-    container.innerHTML = '<div class="text-sm text-slate-400 py-4 text-center">В билете №' + currentTestVariant + ' пока нет вопросов. Добавьте первый ниже или загрузите тест из Excel.</div>';
+    container.innerHTML = searching
+      ? '<div class="text-sm text-slate-400 py-10 text-center">Ничего не найдено. Измените запрос.</div>'
+      : `<div class="text-sm text-slate-400 py-10 text-center">В билете №${currentTestVariant} пока нет вопросов. Нажмите «+ Добавить вопрос» или загрузите тест из Excel.</div>`;
     return;
   }
 
-  container.innerHTML = list.map((q, idx) => {
-    let opts = [];
-    if (Array.isArray(q.options_ru)) {
-      opts = q.options_ru;
-    } else {
-      try { opts = JSON.parse(q.options_ru || '[]'); } catch (e) { opts = []; }
-    }
-
+  const isKz = qViewLang === 'kz';
+  container.innerHTML = list.map(q => {
+    const optsRu = parseQuestionOptions(q.options_ru);
+    const optsKz = parseQuestionOptions(q.options_kz);
+    const qText = (isKz ? q.question_kz : q.question_ru) || q.question_ru || q.question_kz || '';
+    const actionBtns = `<button type="button" onclick="editQuestionById(${q.id})" class="px-3 py-1.5 rounded-lg border border-blue-200 text-blue-700 text-xs font-semibold hover:bg-blue-50">Изменить</button>
+      <button type="button" onclick="deleteQuestionRow(${q.id})" class="px-3 py-1.5 rounded-lg border border-red-200 text-red-600 text-xs font-semibold hover:bg-red-50">Удалить</button>`;
+    const opts = optsRu.map((o, i) => (isKz ? optsKz[i] : o) || o);
     return `
-    <div class="border rounded-lg p-3 bg-slate-50">
-      <div class="flex justify-between items-start">
-        <div class="text-sm font-semibold text-slate-900">${idx + 1}. ${esc(q.question_ru)}</div>
-        <div class="space-x-2 text-xs font-semibold whitespace-nowrap">
-          <button type="button" onclick="editQuestionById(${q.id})" class="text-blue-600 hover:underline">Изменить</button>
-          <button type="button" onclick="deleteQuestionRow(${q.id})" class="text-red-600 hover:underline">Удалить</button>
+    <article class="rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div class="flex gap-3 p-4">
+        <div class="w-8 h-8 shrink-0 rounded-full bg-blue-50 text-blue-700 font-bold text-sm flex items-center justify-center">${posInVariant.get(q.id) || ''}</div>
+        <div class="flex-1 min-w-0">
+          ${searching ? `<span class="inline-block mb-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">Билет ${q.variant_number || 1}</span>` : ''}
+          <p class="text-[15px] font-semibold text-slate-900 leading-snug break-words">${esc(qText)}</p>
+          <div class="mt-3 grid gap-2 sm:grid-cols-2">
+            ${opts.map((o, i) => {
+              const ok = i === q.correct_index;
+              return `<div class="flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${ok ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-semibold' : 'bg-slate-50 border-slate-200 text-slate-700'}">
+                <span class="font-bold shrink-0 ${ok ? 'text-emerald-700' : 'text-slate-400'}">${'ABCD'[i] || i + 1}</span>
+                <span class="flex-1 break-words">${esc(o)}</span>
+                ${ok ? '<span class="shrink-0 text-emerald-600">✓</span>' : ''}
+              </div>`;
+            }).join('')}
+          </div>
+          <div class="mt-3 flex gap-2 sm:hidden">${actionBtns}</div>
         </div>
+        <div class="hidden sm:flex flex-col gap-1.5 shrink-0">${actionBtns}</div>
       </div>
-      <ul class="text-xs text-slate-600 mt-1 list-disc list-inside">
-        ${opts.map((o, i) => `<li class="${i === q.correct_index ? 'text-emerald-700 font-semibold' : ''}">${esc(o)}${i === q.correct_index ? ' ✓' : ''}</li>`).join('')}
-      </ul>
-    </div>
-    `;
+    </article>`;
   }).join('');
+
+  container.scrollTop = keepScroll ? prevScroll : 0;
+}
+
+function setQuestionFormTitle(editing, variant) {
+  const el = document.getElementById('qFormTitle');
+  if (el) el.textContent = (editing ? 'Изменить вопрос' : 'Новый вопрос') + ' — билет ' + variant;
+  const nextBtn = document.getElementById('qSaveNextBtn');
+  if (nextBtn) nextBtn.classList.toggle('hidden', !!editing);
 }
 
 function resetQuestionForm() {
   document.getElementById('qId').value = '';
   document.getElementById('qVariant').value = currentTestVariant;
-  document.getElementById('qVariantLabel').textContent = currentTestVariant;
+  setQuestionFormTitle(false, currentTestVariant);
   document.getElementById('qTextRu').value = '';
   document.getElementById('qTextKz').value = '';
   for (let i = 0; i < 4; i++) {
@@ -2485,17 +2657,33 @@ function resetQuestionForm() {
   if (r0) r0.checked = true;
 }
 
+function openQuestionForm() {
+  const count = (questionCountsByVariant()[currentTestVariant] || 0);
+  if (count >= QUESTIONS_PER_VARIANT) {
+    alert('В одном билете не может быть больше 10 вопросов. Удалите или измените существующие.');
+    return;
+  }
+  resetQuestionForm();
+  document.getElementById('questionFormModal').classList.remove('hidden');
+  document.getElementById('qTextRu').focus();
+}
+
+function closeQuestionForm() {
+  const m = document.getElementById('questionFormModal');
+  if (m) m.classList.add('hidden');
+}
+
 function editQuestionById(id) {
   const q = (allCourseQuestions || []).find(item => Number(item.id) === Number(id));
   if (!q) return;
 
-  let optsRu = [], optsKz = [];
-  try { optsRu = Array.isArray(q.options_ru) ? q.options_ru : JSON.parse(q.options_ru || '[]'); } catch (e) {}
-  try { optsKz = Array.isArray(q.options_kz) ? q.options_kz : JSON.parse(q.options_kz || '[]'); } catch (e) {}
+  const optsRu = parseQuestionOptions(q.options_ru);
+  const optsKz = parseQuestionOptions(q.options_kz);
+  const variant = q.variant_number || currentTestVariant;
 
   document.getElementById('qId').value = q.id;
-  document.getElementById('qVariant').value = q.variant_number || currentTestVariant;
-  document.getElementById('qVariantLabel').textContent = q.variant_number || currentTestVariant;
+  document.getElementById('qVariant').value = variant;
+  setQuestionFormTitle(true, variant);
   document.getElementById('qTextRu').value = q.question_ru || '';
   document.getElementById('qTextKz').value = q.question_kz || '';
 
@@ -2507,8 +2695,8 @@ function editQuestionById(id) {
   const radio = document.getElementById('qCorrectR' + (q.correct_index ?? 0));
   if (radio) radio.checked = true;
 
-  // Плавный скролл к форме вопроса
-  document.getElementById('qTextRu')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  document.getElementById('questionFormModal').classList.remove('hidden');
+  document.getElementById('qTextRu').focus();
 }
 
 // Алиас для обратной совместимости
@@ -2516,11 +2704,12 @@ function editQuestionRow(q) {
   if (q && q.id) editQuestionById(q.id);
 }
 
-async function saveQuestionForm(e) {
-  e.preventDefault();
-   const qid = document.getElementById('qId').value;
-  const currentCount = (allCourseQuestions || []).filter(q => Number(q.variant_number) === Number(currentTestVariant)).length;
-  if (!qid && currentCount >= 10) {
+async function saveQuestionForm(e, addNext) {
+  if (e && e.preventDefault) e.preventDefault();
+  const qid = document.getElementById('qId').value;
+  const variantNo = parseInt(document.getElementById('qVariant').value, 10) || currentTestVariant;
+  const currentCount = (allCourseQuestions || []).filter(q => Number(q.variant_number) === Number(variantNo)).length;
+  if (!qid && currentCount >= QUESTIONS_PER_VARIANT) {
     alert('В одном билете не может быть больше 10 вопросов. Удалите или измените существующие.');
     return;
   }
@@ -2544,7 +2733,7 @@ async function saveQuestionForm(e) {
 
   const correctRadio = document.querySelector('input[name="qCorrectRadio"]:checked');
   if (!correctRadio) {
-    alert('Отметьте точку правильного ответа слева от одного из вариантов.');
+    alert('Отметьте кружком правильный ответ.');
     return;
   }
 
@@ -2554,7 +2743,7 @@ async function saveQuestionForm(e) {
     options_ru: optsRu,
     options_kz: optsKz,
     correct_index: parseInt(correctRadio.value, 10),
-    variant_number: parseInt(document.getElementById('qVariant').value, 10) || currentTestVariant
+    variant_number: variantNo
   };
 
   try {
@@ -2563,9 +2752,17 @@ async function saveQuestionForm(e) {
     } else {
       await api.addQuestion(currentQuestionsCourseId, data);
     }
-    resetQuestionForm();
     await loadQuestionsForCourse();
     loadCoursesList();
+    // «Сохранить и добавить ещё» — форма остаётся открытой для следующего вопроса, пока в билете есть место
+    const stillRoom = ((questionCountsByVariant()[variantNo]) || 0) < QUESTIONS_PER_VARIANT;
+    if (addNext && !qid && stillRoom) {
+      resetQuestionForm();
+      document.getElementById('qTextRu').focus();
+    } else {
+      resetQuestionForm();
+      closeQuestionForm();
+    }
   } catch (err) {
     alert('Ошибка сохранения вопроса: ' + (err.message || 'Ошибка сервера'));
   }
@@ -3393,82 +3590,217 @@ function showCalendarDay(day) {
 }
 
 // --- MY TESTS (EMPLOYEE) ---
+// --- «МОИ ТЕСТЫ» (кабинет сотрудника) ---
+// Две вкладки: «К прохождению» (то, что нужно сделать или пересдать — крупные карточки)
+// и «Пройденные» (сданные тесты — компактным списком, чтобы не отвлекали).
+let myTestsTab = 'todo';   // 'todo' | 'done'
+let myTestsData = [];
+
 async function loadMyTests() {
   const list = await api.getMyAssignments();
   const div = document.getElementById('myTestsList');
   if (!div) return;
+  myTestsData = list;
+  renderMyTests();
+}
+
+function setMyTestsTab(tab) {
+  myTestsTab = tab;
+  renderMyTests();
+}
+
+// Состояние назначения глазами сотрудника:
+// new — не начат; retake — пересдача открыта админом; started — начат, но не завершён;
+// failed — не сдан (пересдачу может открыть только админ); passed — сдан
+function myTestKind(a) {
+  if (a.status === 'passed') return 'passed';
+  if (a.status === 'in_progress') return 'started';
+  if (a.status === 'failed') return a.retake_allowed ? 'retake' : 'failed';
+  return (a.retake_allowed && a.attempts_used > 0) ? 'retake' : 'new';
+}
+
+function myTestHasScore(a) {
+  return a.score_percent !== null && a.score_percent !== undefined && a.score_percent !== '' && Number(a.attempts_used || 0) > 0;
+}
+
+function myTestMedia(a) {
+  const isKz = CURRENT_LANG === 'kz';
+  // Материалы/видео на языке интерфейса сотрудника; если для этого языка не загружено — берём другой язык, затем старые (legacy) поля
+  const materialPath = (isKz ? a.material_pdf_path_kz : a.material_pdf_path_ru) || a.material_pdf_path_ru || a.material_pdf_path_kz || a.material_pdf_path;
+  const videoPath = (isKz ? a.video_path_kz : a.video_path_ru) || a.video_path_ru || a.video_path_kz || a.video_path;
+  const videoUrl = (isKz ? a.video_url_kz : a.video_url_ru) || a.video_url_ru || a.video_url_kz || a.video_url;
+  return { materialPath, videoSrc: videoPath || videoUrl };
+}
+
+// Полоска «правильных ответов» с отметкой проходного балла
+function myScoreBarHtml(score, pass, color) {
+  const sc = Math.max(0, Math.min(100, Number(score) || 0));
+  const ps = Number(pass) > 0 ? Math.min(100, Number(pass)) : null;
+  return `<div class="relative h-2.5 rounded-full bg-slate-200 mt-2" role="img" aria-label="${sc}%">
+    <div class="absolute left-0 top-0 h-full rounded-full" style="width:${sc}%;background:${color}"></div>
+    ${ps !== null ? `<div class="absolute -top-1 w-0.5 bg-slate-700" style="left:${ps}%;height:1.125rem" title="${_L('Проходной балл', 'Өту балы')}: ${ps}%"></div>` : ''}
+  </div>`;
+}
+
+function myTestCardHtml(a, color) {
+  const isKz = CURRENT_LANG === 'kz';
+  const title = isKz ? (a.title_kz || a.title_ru) : (a.title_ru || a.title_kz);
+  const kind = myTestKind(a);
+  const { materialPath, videoSrc } = myTestMedia(a);
+  const pass = a.pass_score_percent;
+  const hasScore = myTestHasScore(a);
+
+  // Цвет и подпись статуса
+  const ST = {
+    new:     { fg: '#1d4ed8', bg: '#eff6ff', accent: '#2563eb', label: _L('Не начат', 'Басталмаған') },
+    retake:  { fg: '#b45309', bg: '#fffbeb', accent: '#d97706', label: _L('Пересдача открыта', 'Қайта тапсыру ашық') },
+    started: { fg: '#b45309', bg: '#fffbeb', accent: '#d97706', label: _L('Начат, не завершён', 'Басталды, аяқталмады') },
+    failed:  { fg: '#be123c', bg: '#fff1f2', accent: '#e11d48', label: _L('Не сдан', 'Тапсырылмады') }
+  }[kind];
+
+  // Блок результата (только если уже была попытка)
+  let resultHtml = '';
+  if (hasScore && (kind === 'failed' || kind === 'retake')) {
+    resultHtml = `
+      <div class="mt-4 p-3 rounded-xl" style="background:${ST.bg}">
+        <div class="flex flex-wrap items-baseline justify-between gap-x-3">
+          <span class="text-sm font-bold" style="color:${ST.fg}">${_L('Правильных ответов', 'Дұрыс жауаптар')}: ${a.score_percent}%</span>
+          ${pass ? `<span class="text-xs text-slate-600">${_L('нужно не менее', 'кемінде қажет')} ${pass}%</span>` : ''}
+        </div>
+        ${myScoreBarHtml(a.score_percent, pass, ST.accent)}
+      </div>`;
+  }
+
+  // Подсказка, что делать дальше
+  let hintHtml = '';
+  if (kind === 'failed') {
+    hintHtml = `<p class="mt-3 text-sm font-semibold" style="color:${ST.fg}">${_L('Тест не сдан. Для пересдачи обратитесь к администратору.', 'Тест тапсырылмады. Қайта тапсыру үшін әкімшіге жүгініңіз.')}</p>`;
+  } else if (kind === 'started') {
+    hintHtml = `<p class="mt-3 text-sm font-semibold" style="color:${ST.fg}">${_L('Тест был начат, но не завершён. Для новой попытки обратитесь к администратору.', 'Тест басталды, бірақ аяқталмады. Жаңа әрекет үшін әкімшіге жүгініңіз.')}</p>`;
+  }
+
+  const meta = [
+    a.time_limit_minutes ? `⏱ ${a.time_limit_minutes} мин` : '',
+    pass ? `${_L('Проходной балл', 'Өту балы')}: ${pass}%` : '',
+    a.protocol_number ? `${_L('Протокол', 'Хаттама')} № ${esc(a.protocol_number)}${a.protocol_date ? ' ' + _L('от', 'күні') + ' ' + fmtDate(a.protocol_date) : ''}` : ''
+  ].filter(Boolean).join(' · ');
+
+  const canStart = kind === 'new' || kind === 'retake';
+  const mediaBtnCls = 'inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-800 text-sm font-bold transition';
+
+  return `
+    <div class="rounded-2xl bg-white border border-slate-200 shadow-sm overflow-hidden fade-in" style="border-left:8px solid ${ST.accent}">
+      <div class="p-5 sm:p-6">
+        <div class="flex flex-wrap items-center gap-2 mb-2">
+          <span class="text-xs font-bold px-3 py-1 rounded-full" style="background:${ST.bg};color:${ST.fg}">${ST.label}${(kind === 'failed' && hasScore) ? ' · ' + a.score_percent + '%' : ''}</span>
+          ${catBadgeHtml(a)}
+        </div>
+        <h4 class="text-xl sm:text-2xl font-extrabold text-slate-900 leading-snug break-words">${esc(title)}</h4>
+        ${meta ? `<p class="text-xs text-slate-500 mt-1.5">${meta}</p>` : ''}
+        ${resultHtml}
+        ${hintHtml}
+        <div class="mt-5 flex flex-wrap items-center gap-3">
+          ${materialPath ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(materialPath)}', '${jsAttrEsc(title)}')" class="${mediaBtnCls}">📄 ${t('view_material')}</button>` : ''}
+          ${videoSrc ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(videoSrc)}', '${jsAttrEsc(title)}')" class="${mediaBtnCls}">🎬 ${_L('Видео', 'Бейне')}</button>` : ''}
+          ${canStart ? `
+            <button type="button" onclick="runTest(${a.id}, '${jsAttrEsc(title)}', ${a.time_limit_minutes || 20})" class="w-full sm:w-auto sm:ml-auto px-8 py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-xl text-base shadow-md transition">
+              ${kind === 'retake' ? '↻ ' + _L('Пересдать тест', 'Қайта тапсыру') : '▶ ' + _L('Начать тест', 'Тестті бастау')}
+            </button>` : ''}
+        </div>
+      </div>
+    </div>`;
+}
+
+// Сданный тест — компактная строка (без крупных кнопок)
+function myPassedRowHtml(a) {
+  const isKz = CURRENT_LANG === 'kz';
+  const title = isKz ? (a.title_kz || a.title_ru) : (a.title_ru || a.title_kz);
+  const { materialPath, videoSrc } = myTestMedia(a);
+  const fmt = d => new Date(d).toLocaleDateString('ru-RU');
+  const parts = [
+    a.test_date ? `${_L('Сдан', 'Тапсырылды')}: ${fmt(a.test_date)}` : '',
+    a.next_test_date ? `${_L('Действителен до', 'Жарамды')}: ${fmt(a.next_test_date)}` : (a.no_expiry ? _L('Бессрочно', 'Мерзімсіз') : ''),
+    a.protocol_number ? `${_L('Протокол', 'Хаттама')} № ${esc(a.protocol_number)}` : ''
+  ].filter(Boolean).join(' · ');
+  const scoreTxt = (a.score_percent !== null && a.score_percent !== undefined && a.score_percent !== '') ? ` · ${a.score_percent}%` : '';
+  return `
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 border border-slate-200 rounded-xl bg-white">
+      <div class="flex-1 min-w-[220px]">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-sm font-bold text-slate-900 break-words">${esc(title)}</span>
+          ${catBadgeHtml(a)}
+        </div>
+        ${parts ? `<div class="text-xs text-slate-500 mt-0.5">${parts}</div>` : ''}
+      </div>
+      <span class="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg whitespace-nowrap">✓ ${_L('Сдан', 'Тапсырылды')}${scoreTxt}</span>
+      <div class="flex items-center gap-3 text-xs font-semibold">
+        ${materialPath ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(materialPath)}', '${jsAttrEsc(title)}')" class="text-blue-600 hover:underline">📄 ${_L('Материалы', 'Материалдар')}</button>` : ''}
+        ${videoSrc ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(videoSrc)}', '${jsAttrEsc(title)}')" class="text-blue-600 hover:underline">🎬 ${_L('Видео', 'Бейне')}</button>` : ''}
+        <a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg">${t('download_cert')}</a>
+      </div>
+    </div>`;
+}
+
+function renderMyTests() {
+  const div = document.getElementById('myTestsList');
+  if (!div) return;
+  const list = myTestsData;
   if (!list.length) {
-    div.innerHTML = '<div class="p-6 text-center text-slate-500">У вас нет назначенных тестов.</div>';
+    div.innerHTML = `<div class="p-6 text-center text-slate-500">${_L('У вас нет назначенных тестов.', 'Сізге тағайындалған тесттер жоқ.')}</div>`;
     return;
   }
   const isKz = CURRENT_LANG === 'kz';
+  const todo = list.filter(a => myTestKind(a) !== 'passed');
+  const done = list.filter(a => myTestKind(a) === 'passed');
 
-  // Что сотруднику нужно сделать (0), что завершено неудачно без права пересдачи (1), что уже сдано (2)
-  const rankOf = a => a.status === 'passed' ? 2 : (a.status === 'failed' && !a.retake_allowed) ? 1 : 0;
-  const nTodo = list.filter(a => rankOf(a) === 0).length;
-  const nFailed = list.filter(a => rankOf(a) === 1).length;
-  const nPassed = list.filter(a => rankOf(a) === 2).length;
-
-  const pill = (n, label, fg, bg) => n ? `<span class="text-xs font-bold px-3 py-1.5 rounded-full" style="background:${bg};color:${fg}">${label}: ${n}</span>` : '';
-  const summary = `<div class="flex flex-wrap gap-2 mb-1">
-    ${pill(nTodo, t('my_todo'), '#b45309', '#fffbeb')}
-    ${pill(nPassed, t('my_passed'), '#047857', '#ecfdf5')}
-    ${pill(nFailed, t('my_failed'), '#be123c', '#fff1f2')}
+  // Вкладки со счётчиками
+  const tabBtn = (id, label, count, pillBg, pillFg) => {
+    const active = myTestsTab === id;
+    return `<button type="button" onclick="setMyTestsTab('${id}')" class="flex-1 sm:flex-none whitespace-nowrap px-2 sm:px-5 py-3 text-sm font-bold border-b-4 -mb-px transition ${active ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-800'}">
+      ${label}
+      <span class="ml-1.5 inline-block min-w-[1.5rem] text-center text-xs font-bold px-2 py-0.5 rounded-full" style="background:${count ? pillBg : '#f1f5f9'};color:${count ? pillFg : '#94a3b8'}">${count}</span>
+    </button>`;
+  };
+  const tabs = `<div class="flex gap-1 border-b border-slate-200 mb-5">
+    ${tabBtn('todo', _L('К прохождению', 'Тапсыруға'), todo.length, '#fef3c7', '#b45309')}
+    ${tabBtn('done', _L('Пройденные', 'Тапсырылғандар'), done.length, '#d1fae5', '#047857')}
   </div>`;
 
-  const cardHtml = (a, color) => {
-    const title = isKz ? a.title_kz : a.title_ru;
-    // Материалы/видео на языке интерфейса сотрудника; если для этого языка не загружено — берём другой язык, затем старые (legacy) поля
-    const materialPath = (isKz ? a.material_pdf_path_kz : a.material_pdf_path_ru) || a.material_pdf_path_ru || a.material_pdf_path_kz || a.material_pdf_path;
-    const videoPath = (isKz ? a.video_path_kz : a.video_path_ru) || a.video_path_ru || a.video_path_kz || a.video_path;
-    const videoUrl = (isKz ? a.video_url_kz : a.video_url_ru) || a.video_url_ru || a.video_url_kz || a.video_url;
-    const videoSrc = videoPath || videoUrl;
-    return `
-    <div class="p-5 border border-slate-200 rounded-xl bg-white flex flex-wrap justify-between items-center gap-4" style="border-left:4px solid ${color.fg}">
-      <div>
-        <h4 class="text-base font-bold text-slate-900">${esc(title)}</h4>
-        <p class="text-xs text-slate-500 mt-1">Протокол № ${esc(a.protocol_number)} от ${esc(a.protocol_date)}</p>
-        ${(materialPath || videoSrc) ? `
-          <div class="mt-2 space-x-3 text-xs font-semibold">
-            ${materialPath ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(materialPath)}', '${jsAttrEsc(title)}')" class="text-blue-600 hover:underline">📄 ${t('view_material')}</button>` : ''}
-            ${videoSrc ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(videoSrc)}', '${jsAttrEsc(title)}')" class="text-blue-600 hover:underline">🎬 Видео</button>` : ''}
-          </div>
-        ` : ''}
-      </div>
-      <div class="flex items-center space-x-3">
-        ${a.status === 'passed' ? `
-          <span class="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg">Сдано (${a.score_percent}%)</span>
-          <a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold">${t('download_cert')}</a>
-        ` : a.status === 'failed' && !a.retake_allowed ? `
-          <span class="text-xs font-bold text-red-700 bg-red-50 px-3 py-1.5 rounded-lg">Не сдано (${a.score_percent}%)</span>
-        ` : `
-          <button type="button" onclick="runTest(${a.id}, '${jsAttrEsc(title)}', ${a.time_limit_minutes || 20})" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-sm shadow">
-            ${a.retake_allowed ? 'Пересдать тест' : 'Начать тестирование'}
-          </button>
-        `}
-      </div>
+  let body = '';
+  if (myTestsTab === 'done') {
+    if (!done.length) {
+      body = `<div class="p-8 text-center text-slate-500">${_L('Пока нет пройденных тестов.', 'Тапсырылған тесттер әлі жоқ.')}</div>`;
+    } else {
+      const sorted = done.slice().sort((x, y) => new Date(y.test_date || 0) - new Date(x.test_date || 0));
+      body = `<div class="space-y-2">${sorted.map(myPassedRowHtml).join('')}</div>`;
+    }
+  } else if (!todo.length) {
+    body = `<div class="p-8 text-center rounded-2xl border-2 border-dashed border-emerald-200 bg-emerald-50">
+      <div class="text-4xl mb-2">🎉</div>
+      <div class="text-lg font-bold text-emerald-800">${_L('Все назначенные тесты сданы', 'Барлық тағайындалған тесттер тапсырылды')}</div>
+      <button type="button" onclick="setMyTestsTab('done')" class="mt-3 px-4 py-2 bg-white border border-emerald-300 text-emerald-700 text-sm font-semibold rounded-lg hover:bg-emerald-100">${_L('Открыть пройденные и сертификаты', 'Тапсырылғандар мен сертификаттарды ашу')}</button>
     </div>`;
-  };
+  } else {
+    // Сначала то, что можно пройти прямо сейчас (не начат / пересдача), затем то, что ждёт решения админа
+    const rankOf = a => ({ new: 0, retake: 0, started: 1, failed: 2 }[myTestKind(a)]);
+    const groups = groupCoursesByCategory(todo).sort((g1, g2) =>
+      (!g1.key - !g2.key) ||
+      Math.min(...g1.items.map(rankOf)) - Math.min(...g2.items.map(rankOf)) ||
+      g1.label.localeCompare(g2.label, isKz ? 'kk' : 'ru'));
+    const showHeaders = groups.some(g => g.key);
+    body = groups.map(g => {
+      const items = g.items.slice().sort((x, y) => rankOf(x) - rankOf(y));
+      const header = showHeaders ? `
+        <div class="flex items-center gap-3 mb-3 pb-2 border-b" style="border-color:${g.color.bd}">
+          <span class="inline-block w-1.5 h-6 rounded-full" style="background:${g.color.fg}"></span>
+          <h3 class="text-base font-bold text-slate-900">${esc(g.label)}</h3>
+          <span class="ml-auto text-xs font-bold px-2 py-0.5 rounded-full" style="background:${g.color.bg};color:${g.color.fg}">${items.length}</span>
+        </div>` : '';
+      return `<section class="mt-8 first:mt-0">${header}<div class="space-y-4">${items.map(a => myTestCardHtml(a, g.color)).join('')}</div></section>`;
+    }).join('');
+  }
 
-  // Разделы по категориям: сначала те, где есть что проходить; «Без категории» — в конце.
-  // Внутри раздела: сначала то, что нужно пройти, затем неудачные, затем сданные (порядок по дате назначения сохраняется).
-  const groups = groupCoursesByCategory(list).sort((g1, g2) =>
-    (!g1.key - !g2.key) ||
-    (g1.items.some(a => rankOf(a) === 0) ? 0 : 1) - (g2.items.some(a => rankOf(a) === 0) ? 0 : 1) ||
-    g1.label.localeCompare(g2.label, isKz ? 'kk' : 'ru'));
-  const showHeaders = groups.some(g => g.key);
-
-  div.innerHTML = summary + groups.map(g => {
-    const items = g.items.slice().sort((x, y) => rankOf(x) - rankOf(y));
-    const doneCount = items.filter(a => rankOf(a) === 2).length;
-    const header = showHeaders ? `
-      <div class="flex items-center gap-3 mb-3 pb-2 border-b" style="border-color:${g.color.bd}">
-        <span class="inline-block w-1.5 h-6 rounded-full" style="background:${g.color.fg}"></span>
-        <h3 class="text-base font-bold text-slate-900">${esc(g.label)}</h3>
-        <span class="ml-auto text-xs font-bold px-2 py-0.5 rounded-full" style="background:${g.color.bg};color:${g.color.fg}">${doneCount} / ${items.length}</span>
-      </div>` : '';
-    return `<section class="mt-5">${header}<div class="space-y-3">${items.map(a => cardHtml(a, g.color)).join('')}</div></section>`;
-  }).join('');
+  div.innerHTML = tabs + body;
 }
 
 function parseOpts(raw) {
