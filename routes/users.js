@@ -343,7 +343,7 @@ function validateRole(requesterRole, targetRole) {
 // Логин и пароль необязательны при создании — можно добавить сотрудника
 // только по ФИО и назначить ему доступ позже через редактирование карточки.
 router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { last_name, first_name, object, department, position, login, password, role } = req.body;
+  const { last_name, first_name, object, department, position, login, password, role, permanent_certificate_number } = req.body;
   const targetRole = role || 'employee';
   const loginVal = login && String(login).trim() ? String(login).trim() : null;
 
@@ -365,9 +365,10 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
 
     const hash = loginVal ? bcrypt.hashSync(String(password), 10) : null;
     const result = await query(
-      `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-      [last_name, first_name, object || '', department || '', position || '', loginVal, hash, targetRole]
+      `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role, permanent_certificate_number)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+      [last_name, first_name, object || '', department || '', position || '', loginVal, hash, targetRole,
+       String(permanent_certificate_number || '').trim() || null]
     );
     res.json({ id: result.rows[0].id });
   } catch (e) {

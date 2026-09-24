@@ -99,7 +99,7 @@ router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), a
         (SELECT COUNT(*)::int FROM assignments a WHERE a.course_id = c.id AND a.status IN ('pending','in_progress')) AS pending,
         (SELECT COUNT(*)::int FROM assignments a WHERE a.course_id = c.id AND a.status = 'failed') AS failed,
         (SELECT COUNT(*)::int FROM assignments a WHERE a.course_id = c.id AND a.status = 'passed'
-            AND a.next_test_date IS NOT NULL AND a.next_test_date < NOW()) AS overdue,
+            AND NULLIF(a.next_test_date, '') IS NOT NULL AND NULLIF(a.next_test_date, '')::timestamptz < NOW()) AS overdue,
         CASE WHEN c.is_mandatory THEN (
           SELECT COUNT(*)::int FROM users u
           WHERE u.role = 'employee' AND u.active = 1
