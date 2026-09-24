@@ -101,7 +101,7 @@ router.post('/logo', authRequired, requireRole('superadmin'), (req, res) => {
       );
       res.json(result.rows[0]);
     } catch (e) {
-      res.status(500).json({ error: 'upload_error', details: e.message });
+      res.status(500).json({ error: 'upload_error', message: e.message, details: e.message });
     }
   });
 });
@@ -118,7 +118,7 @@ router.post('/stamp', authRequired, requireRole('superadmin'), (req, res) => {
       );
       res.json(result.rows[0]);
     } catch (e) {
-      res.status(500).json({ error: 'upload_error', details: e.message });
+      res.status(500).json({ error: 'upload_error', message: e.message, details: e.message });
     }
   });
 });
@@ -139,7 +139,7 @@ router.post('/signature', authRequired, requireRole('superadmin'), (req, res) =>
       );
       res.json(result.rows[0]);
     } catch (e) {
-      res.status(500).json({ error: 'upload_error', details: e.message });
+      res.status(500).json({ error: 'upload_error', message: e.message, details: e.message });
     }
   });
 });

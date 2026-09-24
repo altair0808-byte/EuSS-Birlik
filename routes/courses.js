@@ -210,7 +210,7 @@ router.post('/:id/material/:lang', authRequired, requireRole('admin', 'superadmi
       await query(`UPDATE courses SET ${col} = $1 WHERE id = $2`, [url, req.params.id]);
       res.json({ [col]: url });
     } catch (e) {
-      res.status(500).json({ error: 'upload_error', details: e.message });
+      res.status(500).json({ error: 'upload_error', message: e.message, details: e.message });
     }
   });
 });
@@ -239,7 +239,7 @@ router.post('/:id/video/:lang', authRequired, requireRole('admin', 'superadmin')
       await query(`UPDATE courses SET ${col} = $1 WHERE id = $2`, [url, req.params.id]);
       res.json({ [col]: url });
     } catch (e) {
-      res.status(500).json({ error: 'upload_error', details: e.message });
+      res.status(500).json({ error: 'upload_error', message: e.message, details: e.message });
     }
   });
 });
