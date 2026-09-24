@@ -76,7 +76,7 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, re
     const result = await query(`
       SELECT ${PROTOCOL_COLS}, (
         SELECT COUNT(DISTINCT a.user_id)::int FROM assignments a JOIN users u ON u.id = a.user_id
-        WHERE ${MEMBER_JOIN}
+        WHERE u.role = 'employee' AND ${MEMBER_JOIN}
           AND ($1::text IS NULL OR u.object = $1) AND ($2::text IS NULL OR u.department = $2)
       ) AS assignments_count
       FROM protocols p
@@ -129,7 +129,7 @@ router.get('/:id/download', authRequired, requireRole('admin', 'superadmin'), as
              u.permanent_certificate_number, u.tco_badge
       FROM protocols p
       JOIN assignments a ON ${MEMBER_JOIN}
-      JOIN users u ON u.id = a.user_id
+      JOIN users u ON u.id = a.user_id AND u.role = 'employee'
       WHERE p.id = $1
       ORDER BY a.test_date NULLS LAST, u.last_name, u.first_name, a.id
     `, [p.id]);

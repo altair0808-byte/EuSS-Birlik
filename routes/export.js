@@ -555,7 +555,7 @@ router.get('/excel', authRequired, requireRole('admin', 'superadmin'), async (re
       FROM assignments a
       JOIN users u ON u.id = a.user_id
       JOIN courses c ON c.id = a.course_id
-      WHERE 1=1
+      WHERE u.role = 'employee'
     `;
     const params = [];
     if (object) { params.push(object); sql += ` AND u.object = $${params.length}`; }

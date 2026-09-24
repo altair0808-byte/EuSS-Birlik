@@ -105,13 +105,13 @@ router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), a
       SELECT c.id, c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.is_mandatory,
         (SELECT COUNT(*)::int FROM users u WHERE u.role = 'employee' AND u.active = 1 AND ${ORG_SQL}) AS total_employees,
         (SELECT COUNT(DISTINCT a.user_id)::int FROM assignments a JOIN users u ON u.id = a.user_id
-           WHERE a.course_id = c.id AND a.status = 'passed' AND ${ORG_SQL}) AS trained_employees,
+           WHERE u.role = 'employee' AND a.course_id = c.id AND a.status = 'passed' AND ${ORG_SQL}) AS trained_employees,
         (SELECT COUNT(*)::int FROM assignments a JOIN users u ON u.id = a.user_id
-           WHERE a.course_id = c.id AND a.status IN ('pending','in_progress') AND ${ORG_SQL}) AS pending,
+           WHERE u.role = 'employee' AND a.course_id = c.id AND a.status IN ('pending','in_progress') AND ${ORG_SQL}) AS pending,
         (SELECT COUNT(*)::int FROM assignments a JOIN users u ON u.id = a.user_id
-           WHERE a.course_id = c.id AND a.status = 'failed' AND ${ORG_SQL}) AS failed,
+           WHERE u.role = 'employee' AND a.course_id = c.id AND a.status = 'failed' AND ${ORG_SQL}) AS failed,
         (SELECT COUNT(*)::int FROM assignments a JOIN users u ON u.id = a.user_id
-           WHERE a.course_id = c.id AND a.status = 'passed' AND ${ORG_SQL}
+           WHERE u.role = 'employee' AND a.course_id = c.id AND a.status = 'passed' AND ${ORG_SQL}
             AND NULLIF(a.next_test_date, '') IS NOT NULL AND NULLIF(a.next_test_date, '')::timestamptz < NOW()
             -- только актуальная запись: если сотрудник уже пересдал курс, старая просроченная не считается
             AND NOT EXISTS (

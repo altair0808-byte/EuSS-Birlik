@@ -90,6 +90,11 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
   }
 
   try {
+    // Курсы назначаются только сотрудникам — администраторы в обучении и статистике не участвуют
+    const roleRes = await query('SELECT role FROM users WHERE id = $1', [user_id]);
+    if (!roleRes.rows[0] || roleRes.rows[0].role !== 'employee') {
+      return res.status(400).json({ error: 'not_employee', message: 'Курсы можно назначать только сотрудникам' });
+    }
     if (historical) {
       const h = await buildHistoricalFields(course_id, { test_date, next_test_date, certificate_number, score_percent });
       const result = await query(`
@@ -138,7 +143,7 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (re
 
     // Проверяем, что все переданные id существуют в базе (исключая суперадмина)
     const checkRes = await client.query(
-      `SELECT id FROM users WHERE id = ANY($1::bigint[]) AND role != 'superadmin'`,
+      `SELECT id FROM users WHERE id = ANY($1::bigint[]) AND role = 'employee'`,
       [uniqueUserIds]
     );
     // Приводим id из базы к Number, чтобы совпадало с типами в uniqueUserIds
@@ -207,7 +212,7 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, re
       FROM assignments a
       JOIN users u ON u.id = a.user_id
       JOIN courses c ON c.id = a.course_id
-      WHERE 1=1
+      WHERE u.role = 'employee'
     `;
     const params = [];
     if (status) { params.push(status); sql += ` AND a.status = $${params.length}`; }
@@ -246,7 +251,8 @@ router.get('/expiring', authRequired, requireRole('admin', 'superadmin'), async 
       FROM assignments a
       JOIN users u ON u.id = a.user_id
       JOIN courses c ON c.id = a.course_id
-      WHERE a.status = 'passed'
+      WHERE u.role = 'employee'
+        AND a.status = 'passed'
         AND a.next_test_date IS NOT NULL
         AND c.no_expiry = FALSE
         AND a.next_test_date::timestamptz <= NOW() + ($1 || ' days')::interval

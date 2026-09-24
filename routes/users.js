@@ -16,13 +16,18 @@ const upload = makeUploader('imports');
 // List users (суперадмин скрыт из списка)
 router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
-    const { object, department, role, q } = req.query;
+    const { object, department, q } = req.query;
+    // Администраторы не входят в список сотрудников и статистику: по умолчанию отдаём только
+    // сотрудников. Список администраторов (?role=admin) — вкладка «Администраторы», только суперадмин.
+    const role = req.query.role === 'admin' ? 'admin' : 'employee';
+    if (role === 'admin' && req.user.role !== 'superadmin') {
+      return res.status(403).json({ error: 'forbidden_role', message: 'Список администраторов доступен только суперадмину' });
+    }
     let sql = `SELECT id, last_name, first_name, object, department, position, login, role, active, created_at, permanent_certificate_number, tco_badge
-               FROM users WHERE role != 'superadmin'`;
-    const params = [];
+               FROM users WHERE role = $1`;
+    const params = [role];
     if (object) { params.push(object); sql += ` AND object = $${params.length}`; }
     if (department) { params.push(department); sql += ` AND department = $${params.length}`; }
-    if (role && role !== 'superadmin') { params.push(role); sql += ` AND role = $${params.length}`; }
     if (q) {
       params.push(`%${q}%`);
       sql += ` AND (last_name ILIKE $${params.length} OR first_name ILIKE $${params.length} OR login ILIKE $${params.length})`;
@@ -307,11 +312,11 @@ router.get('/import-template.xlsx', authRequired, requireRole('admin', 'superadm
 // Meta
 router.get('/meta/objects', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
-    const objRes = await query(`SELECT DISTINCT object FROM users WHERE object != '' AND role != 'superadmin' ORDER BY object`);
-    const depRes = await query(`SELECT DISTINCT department FROM users WHERE department != '' AND role != 'superadmin' ORDER BY department`);
+    const objRes = await query(`SELECT DISTINCT object FROM users WHERE object != '' AND role = 'employee' ORDER BY object`);
+    const depRes = await query(`SELECT DISTINCT department FROM users WHERE department != '' AND role = 'employee' ORDER BY department`);
     // pairs — реальные сочетания «объект → отдел», чтобы в фильтре список отделов
     // сужался после выбора объекта (единый фильтр по объекту/отделу на всех вкладках).
-    const pairRes = await query(`SELECT DISTINCT object, department FROM users WHERE role != 'superadmin' AND (object != '' OR department != '')`);
+    const pairRes = await query(`SELECT DISTINCT object, department FROM users WHERE role = 'employee' AND (object != '' OR department != '')`);
     res.json({
       objects: objRes.rows.map(r => r.object),
       departments: depRes.rows.map(r => r.department),
