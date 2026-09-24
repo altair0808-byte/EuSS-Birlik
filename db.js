@@ -173,6 +173,7 @@ async function initDb() {
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS video_path TEXT;
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS category_ru TEXT DEFAULT '';
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS category_kz TEXT DEFAULT '';
+    ALTER TABLE courses ADD COLUMN IF NOT EXISTS no_expiry BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE assignments ADD COLUMN IF NOT EXISTS assigned_variant INT;
     CREATE INDEX IF NOT EXISTS idx_questions_course_variant ON questions(course_id, variant_number);
 

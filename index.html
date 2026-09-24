@@ -798,7 +798,8 @@ async function loadTabContent() {
       const pending = a.filter(x => x.status === 'pending' || x.status === 'in_progress').length;
       const completed = a.filter(x => x.status === 'passed' || x.status === 'failed').length;
       const overdue = a.filter(x => x.status === 'passed' && x.next_test_date && new Date(x.next_test_date) < now).length;
-      const valid = a.filter(x => x.status === 'passed' && x.next_test_date && new Date(x.next_test_date) >= now).length;
+      // Бессрочные курсы (даты следующего прохождения нет) всегда «в норме»
+      const valid = a.filter(x => x.status === 'passed' && (!x.next_test_date || new Date(x.next_test_date) >= now)).length;
       document.getElementById('dashPending').textContent = pending;
       document.getElementById('dashCompleted').textContent = completed;
       document.getElementById('dashOverdue').textContent = overdue;
@@ -927,8 +928,12 @@ async function loadTabContent() {
             <div class="grid grid-cols-3 gap-3">
               <div><label class="text-xs font-semibold text-slate-600">Время (мин)</label><input type="number" id="cTime" value="20" class="w-full border p-2 rounded text-sm"></div>
               <div><label class="text-xs font-semibold text-slate-600">Проходной (%)</label><input type="number" id="cPass" value="80" class="w-full border p-2 rounded text-sm"></div>
-              <div><label class="text-xs font-semibold text-slate-600">Срок (мес)</label><input type="number" id="cValid" value="12" class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Срок (мес)</label><input type="number" id="cValid" value="12" min="1" class="w-full border p-2 rounded text-sm disabled:bg-slate-100 disabled:text-slate-400"></div>
             </div>
+            <label class="flex items-start gap-2 text-xs text-slate-700 cursor-pointer -mt-1">
+              <input type="checkbox" id="cNoExpiry" onchange="onCourseNoExpiryToggle()" class="mt-0.5 rounded text-blue-600">
+              <span><b>Бессрочный курс</b> — сертификат не истекает, повторно проходить не нужно. Такой курс не попадает в список «Скоро истекает срок», а на сертификате пишется «бессрочно».</span>
+            </label>
             <div class="border-t pt-3">
               <label class="text-xs font-semibold text-slate-600">Материалы курса (презентация PPT/PPTX или PDF) — отдельно на русском и казахском</label>
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-1">
@@ -1099,7 +1104,7 @@ async function loadTabContent() {
                 <div><label class="text-xs font-semibold text-slate-600">Дата прохождения</label><input type="date" id="asTestDate" class="w-full border p-2 rounded text-sm"></div>
                 <div><label class="text-xs font-semibold text-slate-600">Дата след. прохождения</label><input type="date" id="asNextTestDate" class="w-full border p-2 rounded text-sm"></div>
                 <div><label class="text-xs font-semibold text-slate-600">Результат, % (по умолчанию 100)</label><input type="number" min="0" max="100" id="asScorePercent" class="w-full border p-2 rounded text-sm"></div>
-                <div class="text-[11px] text-slate-500 self-end pb-2">Номер сертификата будет присвоен автоматически. Если дату след. прохождения не указать, она рассчитается по сроку действия курса.</div>
+                <div class="text-[11px] text-slate-500 self-end pb-2">Номер сертификата будет присвоен автоматически. Если дату след. прохождения не указать, она рассчитается по сроку действия курса (у бессрочных курсов даты нет).</div>
               </div>
             </div>
             <div class="border-t pt-3">
@@ -1369,13 +1374,17 @@ async function loadExpiringWidget() {
       const daysLeft = Math.ceil((nextDate - now) / (1000 * 60 * 60 * 24));
       const overdue = daysLeft < 0;
       const today = daysLeft === 0;
+      const col = catColorOf(catKeyOf(a));   // цвет курса = цвет его категории (как на вкладке «Курсы»)
       const badgeClass = overdue ? 'bg-red-100 text-red-800' : daysLeft <= 7 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700';
       const badgeText = overdue ? `${Math.abs(daysLeft)} ${CURRENT_LANG === 'kz' ? 'күн' : 'дн.'} ${t('overdue')}` : today ? t('expires_today') : `${daysLeft} ${t('days_left')}`;
       return `
         <div class="flex flex-wrap items-center justify-between gap-2 p-3 rounded-lg border ${overdue ? 'border-red-200 bg-red-50/40' : 'border-slate-100'}">
           <div class="min-w-0">
-            <button onclick="openUserProfile(${a.user_id})" class="font-semibold text-slate-900 text-sm hover:text-blue-600 hover:underline text-left">${esc(a.last_name)} ${esc(a.first_name)}</button>
-            <div class="text-xs text-slate-500">${esc(a.object || '—')} / ${esc(a.department || '—')} · ${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</div>
+            <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <button onclick="openUserProfile(${a.user_id})" class="font-semibold text-slate-900 text-sm hover:text-blue-600 hover:underline text-left">${esc(a.last_name)} ${esc(a.first_name)}</button>
+              <span class="text-xs font-semibold px-2 py-0.5 rounded-md" style="border:1.5px solid ${col.fg};background:${col.bg};color:${col.fg}" title="${esc(catLabelOf(a))}">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</span>
+            </div>
+            <div class="text-xs text-slate-500 mt-0.5">${esc(a.object || '—')} / ${esc(a.department || '—')}</div>
           </div>
           <div class="flex items-center gap-2">
             <span class="text-xs font-bold px-2.5 py-1 rounded-lg ${badgeClass}">${badgeText}</span>
@@ -1603,7 +1612,7 @@ function courseCardHtml(c, color) {
       <div>
         <div class="flex justify-between items-start gap-2">
           <h4 class="font-bold text-slate-900 text-base">${esc(courseTitleOf(c))}</h4>
-          <span class="text-xs font-semibold px-2 py-0.5 rounded whitespace-nowrap" style="background:${color.bg};color:${color.fg}">${c.time_limit_minutes} мин | ${c.pass_score_percent}% | ${c.validity_months} мес</span>
+          <span class="text-xs font-semibold px-2 py-0.5 rounded whitespace-nowrap" style="background:${color.bg};color:${color.fg}">${c.time_limit_minutes} мин | ${c.pass_score_percent}% | ${c.no_expiry ? '∞ бессрочно' : c.validity_months + ' мес'}</span>
         </div>
         <p class="text-xs mt-2 ${hasQ ? 'text-slate-500' : 'text-amber-600 font-semibold'}">${hasQ ? 'Вопросов в базе: ' + c.questions_count : 'Вопросы не добавлены — тест пока пройти нельзя'}</p>
         <div class="flex flex-wrap gap-1.5 mt-2">
@@ -1676,6 +1685,13 @@ function renderCoursesList() {
   }).join('');
 }
 
+// Бессрочный курс: поле «Срок (мес)» не нужно
+function onCourseNoExpiryToggle() {
+  const on = document.getElementById('cNoExpiry').checked;
+  const v = document.getElementById('cValid');
+  v.disabled = on;
+}
+
 // Списки подсказок для полей «Категория» в карточке курса
 function fillCourseCategoryLists() {
   const seen = new Map();
@@ -1720,6 +1736,8 @@ async function openCourseModal(id) {
     document.getElementById('cTime').value = course.time_limit_minutes;
     document.getElementById('cPass').value = course.pass_score_percent;
     document.getElementById('cValid').value = course.validity_months;
+    document.getElementById('cNoExpiry').checked = !!course.no_expiry;
+    onCourseNoExpiryToggle();
     // video_url_ru/kz — новые поля; video_url — старое поле для курсов, созданных до этого обновления
     document.getElementById('cVideoRu').value = course.video_url_ru || course.video_url || '';
     document.getElementById('cVideoKz').value = course.video_url_kz || '';
@@ -1742,6 +1760,8 @@ async function openCourseModal(id) {
     document.getElementById('cTime').value = 20;
     document.getElementById('cPass').value = 80;
     document.getElementById('cValid').value = 12;
+    document.getElementById('cNoExpiry').checked = false;
+    onCourseNoExpiryToggle();
     document.getElementById('cVideoRu').value = '';
     document.getElementById('cVideoKz').value = '';
     renderMaterialStatus('ru', null);
@@ -1782,6 +1802,7 @@ async function saveCourseForm(e) {
     time_limit_minutes: parseInt(document.getElementById('cTime').value) || 20,
     pass_score_percent: parseInt(document.getElementById('cPass').value) || 80,
     validity_months: parseInt(document.getElementById('cValid').value) || 12,
+    no_expiry: document.getElementById('cNoExpiry').checked,
     video_url_ru: document.getElementById('cVideoRu').value.trim(),
     video_url_kz: document.getElementById('cVideoKz').value.trim()
   };
@@ -2510,7 +2531,7 @@ async function loadUserProfile(userId) {
                     </span>
                   </td>
                   <td class="px-4 py-3 font-bold">${a.score_percent !== null ? a.score_percent + '%' : '—'}</td>
-                  <td class="px-4 py-3 text-xs text-slate-600">${a.next_test_date ? new Date(a.next_test_date).toLocaleDateString('ru-RU') : '—'}</td>
+                  <td class="px-4 py-3 text-xs text-slate-600">${a.next_test_date ? new Date(a.next_test_date).toLocaleDateString('ru-RU') : (a.no_expiry && a.status === 'passed' ? (CURRENT_LANG === 'kz' ? 'Мерзімсіз' : 'Бессрочно') : '—')}</td>
                   <td class="px-4 py-3 text-right whitespace-nowrap space-x-2">
                     ${a.user_answers ? `<button onclick="openAnswersModal(${a.id})" class="text-slate-600 hover:underline text-xs font-semibold">Подробнее</button>` : ''}
                     ${a.status === 'passed' && a.certificate_number ? `<a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="text-blue-600 hover:underline text-xs font-semibold">${t('download_cert')}</a>` : ''}
