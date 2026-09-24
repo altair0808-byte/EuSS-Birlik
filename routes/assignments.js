@@ -206,7 +206,7 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (re
 router.get('/mine', authRequired, async (req, res) => {
   try {
     const result = await query(`
-      SELECT a.*, c.title_ru, c.title_kz, c.time_limit_minutes, c.pass_score_percent,
+      SELECT a.*, c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.time_limit_minutes, c.pass_score_percent,
              c.material_pdf_path, c.video_url, c.video_path, c.description_ru, c.description_kz,
              c.material_pdf_path_ru, c.material_pdf_path_kz,
              c.video_path_ru, c.video_path_kz, c.video_url_ru, c.video_url_kz
@@ -227,7 +227,7 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, re
     const { status, user_id, course_id, object, department, q, date_from, date_to } = req.query;
     let sql = `
       SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position,
-             c.title_ru, c.title_kz, c.pass_score_percent
+             c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.pass_score_percent
       FROM assignments a
       JOIN users u ON u.id = a.user_id
       JOIN courses c ON c.id = a.course_id
@@ -261,7 +261,7 @@ router.get('/expiring', authRequired, requireRole('admin', 'superadmin'), async 
     const days = Number(req.query.days) || 30;
     const result = await query(`
       SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position,
-             c.title_ru, c.title_kz
+             c.title_ru, c.title_kz, c.category_ru, c.category_kz
       FROM assignments a
       JOIN users u ON u.id = a.user_id
       JOIN courses c ON c.id = a.course_id

@@ -58,6 +58,95 @@ async function resolveImageBuffer(imgVal) {
   return null;
 }
 
+// ===================== Реальные размеры печати и подписи =====================
+// Страница PDF = A4 альбомная = 842 x 595 pt = 297 x 210 мм, то есть 1 мм = 72/25.4 pt.
+// Если печатать сертификат в масштабе 100% («Реальный размер», а не «По размеру страницы»),
+// размеры ниже получаются на бумаге ровно в миллиметрах.
+const MM = 72 / 25.4;
+const STAMP_D = 42 * MM;      // круглая печать организации: обычно 40–45 мм, берём 42 мм (≈119 pt)
+const SIG_MAX_W = 55 * MM;    // рукописная подпись: до 55 мм в ширину (≈156 pt)
+const SIG_MAX_H = 22 * MM;    // ...и до 22 мм в высоту (≈62 pt)
+
+// sharp нужен только для «подчистки» загруженных изображений печати/подписи. Если пакет
+// вдруг не установлен — сертификат всё равно формируется, просто без автообрезки полей.
+let sharp = null;
+try { sharp = require('sharp'); } catch (e) {
+  console.warn('[certificate] пакет sharp не найден — печать и подпись вставляются как есть (без автообрезки полей)');
+}
+
+const cleanedImageCache = new Map();
+
+// Загруженные сканы/фото печати и подписи почти всегда имеют широкие белые поля вокруг рисунка —
+// из-за этого на сертификате сам оттиск выглядит в 1,5–2 раза мельче, чем размер файла.
+// Здесь: (1) белый фон бумаги делаем прозрачным (чтобы печать не «закрашивала» подпись под собой),
+// (2) обрезаем пустые поля по границам оттиска. Любая ошибка -> возвращаем исходный файл.
+async function trimStampLikeImage(buf, cacheKey) {
+  if (!sharp || !buf) return buf;
+  if (cacheKey && cleanedImageCache.has(cacheKey)) return cleanedImageCache.get(cacheKey);
+  try {
+    const { data, info } = await sharp(buf, { limitInputPixels: 50e6 })
+      .rotate()                                                   // учесть EXIF-поворот фото
+      .resize({ width: 1400, height: 1400, fit: 'inside', withoutEnlargement: true })
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const { width, height } = info;
+
+    const isPaper = (i) => data[i + 3] > 200 && Math.min(data[i], data[i + 1], data[i + 2]) >= 225;
+    const at = (x, y) => (y * width + x) * 4;
+    const paperCorners = [at(0, 0), at(width - 1, 0), at(0, height - 1), at(width - 1, height - 1)]
+      .filter(isPaper).length;
+    if (paperCorners >= 3) {
+      // Непрозрачный светлый фон (скан/фото) -> плавно превращаем «белое» в прозрачное.
+      for (let i = 0; i < data.length; i += 4) {
+        const m = Math.min(data[i], data[i + 1], data[i + 2]);
+        if (m >= 235) data[i + 3] = 0;
+        else if (m > 190) data[i + 3] = Math.round(data[i + 3] * (235 - m) / 45);
+      }
+    }
+
+    let minX = width, minY = height, maxX = -1, maxY = -1;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (data[(y * width + x) * 4 + 3] > 40) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < 0) return buf; // изображение целиком прозрачное/белое — не трогаем
+
+    const pad = 2;
+    const left = Math.max(0, minX - pad);
+    const top = Math.max(0, minY - pad);
+    const cw = Math.min(width, maxX + pad + 1) - left;
+    const ch = Math.min(height, maxY + pad + 1) - top;
+
+    const out = await sharp(data, { raw: { width, height, channels: 4 } })
+      .extract({ left, top, width: cw, height: ch })
+      .png()
+      .toBuffer();
+    if (cacheKey) {
+      if (cleanedImageCache.size > 12) cleanedImageCache.clear();
+      cleanedImageCache.set(cacheKey, out);
+    }
+    return out;
+  } catch (e) {
+    console.error('Не удалось подготовить изображение печати/подписи, используется исходное:', e.message);
+    return buf;
+  }
+}
+
+// Печать/подпись: загрузить + убрать белые поля (логотип это не касается)
+async function resolveCleanImage(imgVal) {
+  const buf = await resolveImageBuffer(imgVal);
+  if (!buf) return null;
+  const key = /^https?:\/\//i.test(imgVal || '') ? imgVal : null;
+  return trimStampLikeImage(buf, key);
+}
+
 router.get('/:id', authRequired, async (req, res) => {
   const assignmentId = req.params.id;
   try {
@@ -90,9 +179,9 @@ router.get('/:id', authRequired, async (req, res) => {
     // быть удалёнными ссылками на Supabase Storage, а не локальными файлами).
     const [logoBuf, stampBuf, sig1Buf, sig2Buf] = await Promise.all([
       resolveImageBuffer(s.logo_data || s.logo_path),
-      resolveImageBuffer(s.stamp_data || s.stamp_path),
-      resolveImageBuffer(s.chairman1_signature),
-      resolveImageBuffer(s.chairman2_signature)
+      resolveCleanImage(s.stamp_data || s.stamp_path),
+      resolveCleanImage(s.chairman1_signature),
+      resolveCleanImage(s.chairman2_signature)
     ]);
 
     const doc = new PDFDocument({
@@ -170,14 +259,14 @@ router.get('/:id', authRequired, async (req, res) => {
     fBold(13.5);
     doc.fillColor('#0f3b6c');
     const courseTitle = a.title_ru || a.title_kz || 'Курс';
-    doc.text(`«${courseTitle}»`, 60, 277, { align: 'center', width: PAGE_W - 120 });
+    doc.text(`«${courseTitle}»`, 60, 277, { align: 'center', width: PAGE_W - 120, height: 36, ellipsis: true });
 
     fRegular(9.5);
     doc.fillColor('#333333');
     const issueDateStr = fmtDate(a.test_date || a.protocol_date);
     const validUntilStr = fmtDate(a.next_test_date);
     const protStr = a.protocol_number ? `Протокол № ${a.protocol_number}` : '';
-    doc.text(`Дата выдачи: ${issueDateStr}     Действителен до: ${validUntilStr}     ${protStr}`, 0, 320, { align: 'center' });
+    doc.text(`Дата выдачи: ${issueDateStr}     Действителен до: ${validUntilStr}     ${protStr}`, 0, 322, { align: 'center' });
 
     // ===================== Блок подписи: используется ТОЛЬКО выбранный председатель =====================
     // На сертификате всегда показывается один председатель — тот, кто отмечен
@@ -190,75 +279,75 @@ router.get('/:id', authRequired, async (req, res) => {
       : { role: s.chairman1_position || 'Председатель комиссии', name: s.chairman1_name || s.chairman_name || '—', sig: sig1Buf };
     const finalCommittee = [activeChair];
 
-    // Одна широкая колонка по центру — печать ляжет на подпись выбранного
-    // председателя, слегка смещённая в сторону, не закрывая его ФИО.
-    const twoUp = false;
+    // Одна колонка по центру листа. Печать и подпись рисуются в реальных размерах
+    // (см. константы STAMP_D / SIG_MAX_W / SIG_MAX_H выше): печать ≈ 42 мм, подпись до 55 x 22 мм.
     const colW = 320;
-    const gap = 90;
-    const totalW = colW;
-    const startX = (PAGE_W - totalW) / 2;
+    const colX = (PAGE_W - colW) / 2;
+    const centerX = colX + colW / 2;
 
-    const roleY = 400;      // должность
-    const sigTopY = 420;    // верх зоны для картинки подписи
-    const sigH = 55;        // высота зоны подписи — крупная и разборчивая
-    const lineY = 490;      // линия под подписью
-    const nameY = 505;      // ФИО под линией
+    const roleY = 380;                          // должность
+    const sigBoxTop = 402;                      // верх зоны подписи
+    const sigBoxBottom = sigBoxTop + SIG_MAX_H; // низ зоны подписи (≈464)
+    const lineY = sigBoxBottom + 4;             // линия под подписью
+    const nameY = lineY + 6;                    // ФИО под линией
 
-    finalCommittee.forEach((m, i) => {
-      const colX = startX + i * (colW + gap);
-      const centerX = colX + colW / 2;
+    const m = finalCommittee[0];
 
-      fBold(9.5);
-      doc.fillColor('#000000');
-      doc.text(m.role, colX, roleY, { width: colW, align: 'center' });
+    fBold(9.5);
+    doc.fillColor('#000000');
+    const roleHalfW = Math.min(doc.widthOfString(m.role) / 2, colW / 2);
+    const roleH = Math.min(doc.heightOfString(m.role, { width: colW }), 24);
+    doc.text(m.role, colX, roleY, { width: colW, align: 'center', height: 24, ellipsis: true });
 
-      if (m.sig) {
-        try {
-          const sigW = 150;
-          doc.image(m.sig, centerX - sigW / 2, sigTopY, { width: sigW, height: sigH, fit: [sigW, sigH], align: 'center', valign: 'bottom' });
-        } catch (e) {
-          console.error('Ошибка вставки подписи:', e);
-        }
+    // Подпись — по центру зоны, «сидит» на линии
+    if (m.sig) {
+      try {
+        doc.image(m.sig, centerX - SIG_MAX_W / 2, sigBoxTop, {
+          fit: [SIG_MAX_W, SIG_MAX_H], align: 'center', valign: 'bottom'
+        });
+      } catch (e) {
+        console.error('Ошибка вставки подписи:', e);
       }
+    }
 
-      doc.moveTo(colX + colW * 0.12, lineY).lineTo(colX + colW * 0.88, lineY).strokeColor('#888888').lineWidth(0.8).stroke();
+    doc.moveTo(centerX - 95, lineY).lineTo(centerX + 95, lineY).strokeColor('#888888').lineWidth(0.8).stroke();
 
-      fRegular(9.5);
-      doc.fillColor('#000000');
-      doc.text(m.name, colX, nameY, { width: colW, align: 'center' });
-    });
+    fRegular(9.5);
+    doc.fillColor('#000000');
+    const nameHalfW = Math.min(doc.widthOfString(m.name) / 2, colW / 2);
+    doc.text(m.name, colX, nameY, { width: colW, align: 'center', lineBreak: false });
 
-    // Печать — ставится на подпись КАЖДОГО председателя (не только первого),
-    // и не по центру подписи, а немного сбоку от неё — так печать всё равно
-    // охватывает (перекрывает) саму картинку подписи, но не закрывает её
-    // полностью и не наезжает ни на строку с ФИО, ни на соседнюю колонку.
-    // Смещение всегда "наружу" (к краю листа), чтобы печати двух председателей
-    // не сближались друг с другом в зазоре между колонками.
-    if (stampBuf && finalCommittee.length) {
-      const stampSize = 95;
-      const stampCenterY = (sigTopY + lineY) / 2; // центр между подписью и линией
-      const sideOffset = 26; // насколько печать смещена в сторону от центра подписи
-
-      finalCommittee.forEach((m, i) => {
-        const colX = startX + i * (colW + gap);
-        const colCenterX = colX + colW / 2;
-        // Первая (левая) колонка — печать смещается влево, последняя (правая) —
-        // вправо, к внешнему краю листа, а не друг к другу.
-        const isLastCol = i === finalCommittee.length - 1;
-        const stampCenterX = isLastCol ? colCenterX + sideOffset : colCenterX - sideOffset;
-        try {
-          doc.save();
-          doc.opacity(0.85);
-          doc.image(stampBuf, stampCenterX - stampSize / 2, stampCenterY - stampSize / 2, {
-            width: stampSize,
-            height: stampSize,
-            fit: [stampSize, stampSize]
-          });
-          doc.restore();
-        } catch (e) {
-          console.error('Ошибка вставки печати:', e);
-        }
-      });
+    // Печать — как на бумажных документах: накладывается на правую часть подписи и смещена в
+    // сторону, так что подпись читается, а сама печать не заходит ни на должность, ни на ФИО.
+    // Смещение считается от реальной ширины этих строк (край круга проверяется на высоте строк).
+    if (stampBuf) {
+      try {
+        const r = STAMP_D / 2;
+        const stampCenterY = (sigBoxTop + lineY) / 2 + 2;   // ≈ середина подписи
+        const chordHalf = (lineOrY, lineHeight) => {
+          // Половина ширины круга на высоте ближайшего к центру края строки текста
+          const nearest = lineOrY < stampCenterY
+            ? Math.min(stampCenterY, lineOrY + lineHeight)
+            : Math.max(stampCenterY, lineOrY);
+          const dy = Math.abs(nearest - stampCenterY);
+          return dy >= r ? 0 : Math.sqrt(r * r - dy * dy);
+        };
+        const gap = 6;
+        const offset = Math.max(
+          roleHalfW + gap + chordHalf(roleY, roleH),
+          nameHalfW + gap + chordHalf(nameY, 11),
+          r * 0.6
+        );
+        const stampCenterX = centerX + offset;
+        doc.save();
+        doc.opacity(0.9);
+        doc.image(stampBuf, stampCenterX - r, stampCenterY - r, {
+          fit: [STAMP_D, STAMP_D], align: 'center', valign: 'center'
+        });
+        doc.restore();
+      } catch (e) {
+        console.error('Ошибка вставки печати:', e);
+      }
     }
 
     doc.end();

@@ -44,6 +44,12 @@ async function uploadToStorage(folder, file) {
   return url;
 }
 
+// Категория курса (раздел обучения: «Охрана труда», «Пожарная безопасность» и т.п.) —
+// обычная строка; лишние пробелы убираем, чтобы «Охрана труда » и «Охрана труда» не считались разными.
+function cleanCategory(v) {
+  return String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, 80);
+}
+
 const MAX_VARIANTS = 10;
 const QUESTIONS_PER_VARIANT = 10;
 
@@ -145,17 +151,18 @@ router.get('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
 
 // Create course
 router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months } = req.body;
+  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz } = req.body;
   if (!title_ru || !title_kz) return res.status(400).json({ error: 'missing_title' });
 
   try {
     const result = await query(`
-      INSERT INTO courses (title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, created_by)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id
+      INSERT INTO courses (title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, created_by, category_ru, category_kz)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id
     `, [
       title_ru, title_kz, description_ru || '', description_kz || '', video_url || '',
       video_url_ru || '', video_url_kz || '',
-      time_limit_minutes || 20, pass_score_percent || 80, validity_months || 12, req.user.id
+      time_limit_minutes || 20, pass_score_percent || 80, validity_months || 12, req.user.id,
+      cleanCategory(category_ru), cleanCategory(category_kz)
     ]);
     res.json({ id: result.rows[0].id });
   } catch (e) {
@@ -165,16 +172,20 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
 
 // Update course
 router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months } = req.body;
+  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz } = req.body;
   try {
+    // category_* не пришли (старый клиент) -> null -> COALESCE оставляет прежнее значение
     await query(`
       UPDATE courses
       SET title_ru=$1, title_kz=$2, description_ru=$3, description_kz=$4, video_url=$5,
-          video_url_ru=$6, video_url_kz=$7, time_limit_minutes=$8, pass_score_percent=$9, validity_months=$10
+          video_url_ru=$6, video_url_kz=$7, time_limit_minutes=$8, pass_score_percent=$9, validity_months=$10,
+          category_ru=COALESCE($12, category_ru), category_kz=COALESCE($13, category_kz)
       WHERE id=$11
     `, [
       title_ru, title_kz, description_ru, description_kz, video_url,
-      video_url_ru || '', video_url_kz || '', time_limit_minutes, pass_score_percent, validity_months, req.params.id
+      video_url_ru || '', video_url_kz || '', time_limit_minutes, pass_score_percent, validity_months, req.params.id,
+      category_ru === undefined ? null : cleanCategory(category_ru),
+      category_kz === undefined ? null : cleanCategory(category_kz)
     ]);
     res.json({ ok: true });
   } catch (e) {
