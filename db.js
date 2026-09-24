@@ -1,4 +1,10 @@
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
+
+// BIGSERIAL (int8) драйвер pg по умолчанию отдаёт СТРОКОЙ ("12"), а фронтенд сравнивает
+// id строго (===) с числом из onclick="editUser(12)". Из-за этого «Изменить», вкладки
+// статистики по курсам и т.п. молча ничего не делали. Приводим int8 к числу (id и счётчики
+// гарантированно помещаются в Number).
+types.setTypeParser(20, v => (v === null ? null : parseInt(v, 10)));
 const bcrypt = require('bcryptjs');
 
 const connectionString = process.env.DATABASE_URL;
