@@ -240,26 +240,37 @@ router.get('/:id', authRequired, async (req, res) => {
       doc.text(m.name, colX, nameY, { width: colW, align: 'center' });
     });
 
-    // Печать — накладывается на подпись ПЕРВОГО председателя (обычная практика
-    // заверения подписи печатью), крупная и хорошо читаемая. Её вертикальный
-    // диапазон подобран так, чтобы она перекрывала саму картинку подписи, но не
-    // заезжала на строку с ФИО под линией и не касалась второй колонки.
+    // Печать — ставится на подпись КАЖДОГО председателя (не только первого),
+    // и не по центру подписи, а немного сбоку от неё — так печать всё равно
+    // охватывает (перекрывает) саму картинку подписи, но не закрывает её
+    // полностью и не наезжает ни на строку с ФИО, ни на соседнюю колонку.
+    // Смещение всегда "наружу" (к краю листа), чтобы печати двух председателей
+    // не сближались друг с другом в зазоре между колонками.
     if (stampBuf && finalCommittee.length) {
-      try {
-        const firstColCenterX = startX + colW / 2;
-        const stampSize = 95;
-        const stampCenterY = (sigTopY + lineY) / 2; // центр между подписью и линией
-        doc.save();
-        doc.opacity(0.85);
-        doc.image(stampBuf, firstColCenterX - stampSize / 2, stampCenterY - stampSize / 2, {
-          width: stampSize,
-          height: stampSize,
-          fit: [stampSize, stampSize]
-        });
-        doc.restore();
-      } catch (e) {
-        console.error('Ошибка вставки печати:', e);
-      }
+      const stampSize = 95;
+      const stampCenterY = (sigTopY + lineY) / 2; // центр между подписью и линией
+      const sideOffset = 26; // насколько печать смещена в сторону от центра подписи
+
+      finalCommittee.forEach((m, i) => {
+        const colX = startX + i * (colW + gap);
+        const colCenterX = colX + colW / 2;
+        // Первая (левая) колонка — печать смещается влево, последняя (правая) —
+        // вправо, к внешнему краю листа, а не друг к другу.
+        const isLastCol = i === finalCommittee.length - 1;
+        const stampCenterX = isLastCol ? colCenterX + sideOffset : colCenterX - sideOffset;
+        try {
+          doc.save();
+          doc.opacity(0.85);
+          doc.image(stampBuf, stampCenterX - stampSize / 2, stampCenterY - stampSize / 2, {
+            width: stampSize,
+            height: stampSize,
+            fit: [stampSize, stampSize]
+          });
+          doc.restore();
+        } catch (e) {
+          console.error('Ошибка вставки печати:', e);
+        }
+      });
     }
 
     doc.end();
