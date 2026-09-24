@@ -77,12 +77,13 @@ router.get('/last-numbers', authRequired, requireRole('admin', 'superadmin'), as
 // сертификата), когда админ вносит уже пройденное ранее (до внедрения системы)
 // обучение сотрудника, а не создаёт новое назначение теста.
 async function buildHistoricalFields(course_id, hist) {
-  const cRes = await query('SELECT validity_months FROM courses WHERE id = $1', [course_id]);
+  const cRes = await query('SELECT validity_months, no_expiry FROM courses WHERE id = $1', [course_id]);
   const validityMonths = cRes.rows[0]?.validity_months || 12;
+  const noExpiry = !!cRes.rows[0]?.no_expiry;
 
   const testDate = hist.test_date;
-  let nextTestDate = hist.next_test_date;
-  if (!nextTestDate && testDate) {
+  let nextTestDate = noExpiry ? null : hist.next_test_date;   // бессрочный курс: даты следующего прохождения нет
+  if (!noExpiry && !nextTestDate && testDate) {
     const d = new Date(testDate);
     d.setMonth(d.getMonth() + validityMonths);
     nextTestDate = d.toISOString();
@@ -206,7 +207,7 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (re
 router.get('/mine', authRequired, async (req, res) => {
   try {
     const result = await query(`
-      SELECT a.*, c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.time_limit_minutes, c.pass_score_percent,
+      SELECT a.*, c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.no_expiry, c.time_limit_minutes, c.pass_score_percent,
              c.material_pdf_path, c.video_url, c.video_path, c.description_ru, c.description_kz,
              c.material_pdf_path_ru, c.material_pdf_path_kz,
              c.video_path_ru, c.video_path_kz, c.video_url_ru, c.video_url_kz
@@ -227,7 +228,7 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, re
     const { status, user_id, course_id, object, department, q, date_from, date_to } = req.query;
     let sql = `
       SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position,
-             c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.pass_score_percent
+             c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.no_expiry, c.pass_score_percent
       FROM assignments a
       JOIN users u ON u.id = a.user_id
       JOIN courses c ON c.id = a.course_id
@@ -267,6 +268,7 @@ router.get('/expiring', authRequired, requireRole('admin', 'superadmin'), async 
       JOIN courses c ON c.id = a.course_id
       WHERE a.status = 'passed'
         AND a.next_test_date IS NOT NULL
+        AND c.no_expiry = FALSE
         AND a.next_test_date::timestamptz <= NOW() + ($1 || ' days')::interval
       ORDER BY a.next_test_date::timestamptz ASC
     `, [String(days)]);
@@ -352,7 +354,8 @@ router.post('/:id/submit', authRequired, async (req, res) => {
 
     const now = new Date();
     const testDate = now.toISOString();
-    const nextDate = new Date(now.setMonth(now.getMonth() + (course.validity_months || 12))).toISOString();
+    // Бессрочный курс: сертификат не истекает, даты следующего прохождения нет (NULL)
+    const nextDate = course.no_expiry ? null : new Date(now.setMonth(now.getMonth() + (course.validity_months || 12))).toISOString();
 
     // Автоматическое присвоение номера протокола (п.1 запроса): если сегодня
     // действует открытый администратором протокол (дата попадает в диапазон

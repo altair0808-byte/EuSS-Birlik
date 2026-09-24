@@ -151,18 +151,18 @@ router.get('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
 
 // Create course
 router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz } = req.body;
+  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry } = req.body;
   if (!title_ru || !title_kz) return res.status(400).json({ error: 'missing_title' });
 
   try {
     const result = await query(`
-      INSERT INTO courses (title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, created_by, category_ru, category_kz)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id
+      INSERT INTO courses (title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, created_by, category_ru, category_kz, no_expiry)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id
     `, [
       title_ru, title_kz, description_ru || '', description_kz || '', video_url || '',
       video_url_ru || '', video_url_kz || '',
       time_limit_minutes || 20, pass_score_percent || 80, validity_months || 12, req.user.id,
-      cleanCategory(category_ru), cleanCategory(category_kz)
+      cleanCategory(category_ru), cleanCategory(category_kz), no_expiry === true || no_expiry === 'true'
     ]);
     res.json({ id: result.rows[0].id });
   } catch (e) {
@@ -172,21 +172,41 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
 
 // Update course
 router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz } = req.body;
+  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry } = req.body;
   try {
+    const prev = (await query('SELECT no_expiry FROM courses WHERE id = $1', [req.params.id])).rows[0];
+    // no_expiry не пришёл (старый клиент) -> null -> COALESCE оставляет прежнее значение
+    const noExpiry = (no_expiry === undefined || no_expiry === null) ? null : (no_expiry === true || no_expiry === 'true');
     // category_* не пришли (старый клиент) -> null -> COALESCE оставляет прежнее значение
     await query(`
       UPDATE courses
       SET title_ru=$1, title_kz=$2, description_ru=$3, description_kz=$4, video_url=$5,
           video_url_ru=$6, video_url_kz=$7, time_limit_minutes=$8, pass_score_percent=$9, validity_months=$10,
-          category_ru=COALESCE($12, category_ru), category_kz=COALESCE($13, category_kz)
+          category_ru=COALESCE($12, category_ru), category_kz=COALESCE($13, category_kz),
+          no_expiry=COALESCE($14, no_expiry)
       WHERE id=$11
     `, [
       title_ru, title_kz, description_ru, description_kz, video_url,
       video_url_ru || '', video_url_kz || '', time_limit_minutes, pass_score_percent, validity_months, req.params.id,
       category_ru === undefined ? null : cleanCategory(category_ru),
-      category_kz === undefined ? null : cleanCategory(category_kz)
+      category_kz === undefined ? null : cleanCategory(category_kz),
+      noExpiry
     ]);
+
+    // Переключили «бессрочный»: приводим уже сданные тесты этого курса в соответствие.
+    //  - стал бессрочным  -> у сданных убираем дату «следующее прохождение» (нечего продлевать);
+    //  - перестал быть бессрочным -> считаем её заново: дата сдачи + срок действия курса (мес.).
+    if (prev && noExpiry === true && !prev.no_expiry) {
+      await query(`UPDATE assignments SET next_test_date = NULL WHERE course_id = $1 AND status = 'passed'`, [req.params.id]);
+    } else if (prev && noExpiry === false && prev.no_expiry) {
+      const months = parseInt(validity_months, 10) || 12;
+      await query(`
+        UPDATE assignments
+        SET next_test_date = to_char((test_date::timestamptz + make_interval(months => $2)) AT TIME ZONE 'UTC',
+                                     'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+        WHERE course_id = $1 AND status = 'passed' AND test_date IS NOT NULL AND next_test_date IS NULL
+      `, [req.params.id, months]);
+    }
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });

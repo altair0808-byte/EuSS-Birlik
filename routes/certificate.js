@@ -153,7 +153,7 @@ router.get('/:id', authRequired, async (req, res) => {
     const aRes = await query(
       `SELECT a.*,
               u.last_name, u.first_name, u.position as user_position, u.department, u.object,
-              c.title_ru, c.title_kz, c.validity_months
+              c.title_ru, c.title_kz, c.validity_months, c.no_expiry
        FROM assignments a
        JOIN users u ON a.user_id = u.id
        JOIN courses c ON a.course_id = c.id
@@ -264,7 +264,7 @@ router.get('/:id', authRequired, async (req, res) => {
     fRegular(9.5);
     doc.fillColor('#333333');
     const issueDateStr = fmtDate(a.test_date || a.protocol_date);
-    const validUntilStr = fmtDate(a.next_test_date);
+    const validUntilStr = a.no_expiry ? 'бессрочно / мерзімсіз' : fmtDate(a.next_test_date);
     const protStr = a.protocol_number ? `Протокол № ${a.protocol_number}` : '';
     doc.text(`Дата выдачи: ${issueDateStr}     Действителен до: ${validUntilStr}     ${protStr}`, 0, 322, { align: 'center' });
 
