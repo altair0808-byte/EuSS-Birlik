@@ -514,8 +514,9 @@ router.post('/:id/allow-retake', authRequired, requireRole('admin', 'superadmin'
   }
 });
 
-// Delete assignment
-router.delete('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+// Delete assignment (удаление записи назначения/истории прохождения — только суперадмин;
+// обычным админам это действие недоступно намеренно, п. запроса)
+router.delete('/:id', authRequired, requireRole('superadmin'), async (req, res) => {
   try {
     await query('DELETE FROM assignments WHERE id = $1', [req.params.id]);
     res.json({ ok: true });
