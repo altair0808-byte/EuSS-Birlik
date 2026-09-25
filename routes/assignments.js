@@ -289,7 +289,7 @@ router.get('/expiring', authRequired, requireRole('admin', 'superadmin'), async 
     if (object) { params.push(object); orgSql += ` AND u.object = $${params.length}`; }
     if (department) { params.push(department); orgSql += ` AND u.department = $${params.length}`; }
     const result = await query(`
-      SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position,
+      SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position, u.login,
              c.title_ru, c.title_kz, c.category_ru, c.category_kz
       FROM assignments a
       JOIN users u ON u.id = a.user_id

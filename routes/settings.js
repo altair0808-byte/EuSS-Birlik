@@ -89,6 +89,47 @@ router.put('/', authRequired, requireRole('superadmin'), async (req, res) => {
   }
 });
 
+// Справочники «Отдел» / «Должность» (п.1 запроса) — единые списки для выпадающих
+// списков в карточке сотрудника, чтобы избежать разнобоя в написании (не «Инженер»,
+// «инженер», «Инженер ТБ» и т.п. вперемешку).
+router.get('/dictionaries', authRequired, async (req, res) => {
+  try {
+    const result = await query('SELECT departments_list, positions_list FROM settings WHERE id = 1');
+    const row = result.rows[0] || {};
+    res.json({
+      departments: Array.isArray(row.departments_list) ? row.departments_list : [],
+      positions: Array.isArray(row.positions_list) ? row.positions_list : []
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
+// Сохраняет справочники целиком (весь список сразу — добавление/удаление значений
+// происходит на фронтенде, сюда отправляется итоговый список). Значения очищаются
+// от пустых строк и дублей и сортируются по алфавиту.
+router.put('/dictionaries', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+  const clean = arr => Array.isArray(arr)
+    ? [...new Set(arr.map(v => String(v || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru'))
+    : undefined;
+  const departments = clean(req.body.departments);
+  const positions = clean(req.body.positions);
+  try {
+    const result = await query(
+      `UPDATE settings SET
+        departments_list = COALESCE($1::jsonb, departments_list),
+        positions_list = COALESCE($2::jsonb, positions_list)
+      WHERE id = 1
+      RETURNING departments_list, positions_list`,
+      [departments ? JSON.stringify(departments) : null, positions ? JSON.stringify(positions) : null]
+    );
+    const row = result.rows[0] || {};
+    res.json({ departments: row.departments_list || [], positions: row.positions_list || [] });
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
 router.post('/logo', authRequired, requireRole('superadmin'), (req, res) => {
   imageUpload.single('file')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: 'bad_file', message: err.message || 'Не удалось загрузить файл' });

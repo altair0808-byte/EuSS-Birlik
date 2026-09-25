@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const ExcelJS = require('exceljs');
+const bcrypt = require('bcryptjs');
 const { query } = require('../db');
 const { authRequired, requireRole } = require('./auth');
 
@@ -634,6 +635,157 @@ router.get('/excel', authRequired, requireRole('admin', 'superadmin'), async (re
   } catch (e) {
     console.error('Excel export failed:', e);
     if (!res.headersSent) res.status(500).json({ error: 'export_failed', message: 'Не удалось сформировать Excel: ' + e.message, details: e.message });
+    else res.end();
+  }
+});
+
+// ---------- Уведомление о необходимости обучения (п.4 запроса UI) ----------
+// Формирует Excel-файл для рассылки руководителю подразделения: обращение с ссылкой
+// на портал, таблица «Сотрудник / Логин / Пароль» и напоминание сдать удостоверение.
+//
+// Пароли сотрудников хранятся только в виде bcrypt-хэша (посмотреть существующий
+// пароль невозможно), поэтому: сотрудникам без логина логин и пароль присваиваются
+// здесь же; у сотрудников, где логин уже есть, пароль по умолчанию перевыпускается
+// (reset_passwords=false в теле запроса — не трогать пароль тем, у кого он уже есть,
+// тогда в файле у них будет отметка «не изменялся»).
+function genCredentialLogin() {
+  return String(Math.floor(100000 + Math.random() * 900000)); // 6-значный табельный номер
+}
+function genCredentialPassword() {
+  return Math.random().toString(36).slice(-8);
+}
+
+router.post('/credentials-notice', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.user_ids)
+      ? [...new Set(req.body.user_ids.map(Number).filter(n => Number.isFinite(n) && n > 0))]
+      : [];
+    if (!ids.length) return res.status(400).json({ error: 'no_users', message: 'Не выбрано ни одного сотрудника' });
+    const resetPasswords = req.body.reset_passwords !== false;
+    const portalUrl = String(req.body.portal_url || `${req.protocol}://${req.get('host')}`).trim();
+
+    const usersRes = await query(
+      `SELECT id, last_name, first_name, department, position, login, password_hash
+       FROM users WHERE id = ANY($1::bigint[]) AND role = 'employee'
+       ORDER BY last_name, first_name`,
+      [ids]
+    );
+    if (!usersRes.rows.length) return res.status(404).json({ error: 'not_found', message: 'Сотрудники не найдены' });
+
+    const rows = [];
+    for (const u of usersRes.rows) {
+      let login = u.login;
+      let plainPassword = null;
+      let needsUpdate = false;
+
+      if (!login) {
+        // подбираем свободный логин (табельный номер)
+        do {
+          login = genCredentialLogin();
+          // eslint-disable-next-line no-await-in-loop
+        } while ((await query('SELECT 1 FROM users WHERE login = $1', [login])).rows.length);
+        needsUpdate = true;
+      }
+      if (!u.password_hash || resetPasswords) {
+        plainPassword = genCredentialPassword();
+        needsUpdate = true;
+      }
+      if (needsUpdate) {
+        const hash = plainPassword ? bcrypt.hashSync(plainPassword, 10) : u.password_hash;
+        // eslint-disable-next-line no-await-in-loop
+        await query('UPDATE users SET login = $1, password_hash = $2 WHERE id = $3', [login, hash, u.id]);
+      }
+      rows.push({
+        fio: `${u.last_name} ${u.first_name}`,
+        department: u.department || '',
+        position: u.position || '',
+        login,
+        password: plainPassword || '— (не изменялся)'
+      });
+    }
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'TB Training Platform';
+    wb.created = new Date();
+    const ws = wb.addWorksheet('Уведомление', {
+      properties: { tabColor: { argb: C.navy } },
+      views: [{ showGridLines: false }]
+    });
+    ws.getColumn(1).width = 6;
+    ws.getColumn(2).width = 34;
+    ws.getColumn(3).width = 22;
+    ws.getColumn(4).width = 22;
+
+    let r = 1;
+    ws.mergeCells(`A${r}:D${r}`);
+    const title = ws.getCell(`A${r}`);
+    title.value = 'Уведомление о прохождении обучения по БиОТ';
+    title.font = { name: 'Calibri', size: 15, bold: true, color: { argb: C.white } };
+    title.fill = solid(C.navy);
+    title.alignment = { vertical: 'middle', horizontal: 'left', indent: 1, wrapText: true };
+    ws.getRow(r).height = 30;
+    r += 2;
+
+    ws.mergeCells(`A${r}:D${r}`);
+    const intro = ws.getCell(`A${r}`);
+    intro.value = 'Просим Вас довести до сведения сотрудников подразделения необходимость прохождения '
+      + 'обучения и тестирования по БиОТ на портале:';
+    intro.font = { name: 'Calibri', size: 11, color: { argb: C.text } };
+    intro.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true, indent: 1 };
+    ws.getRow(r).height = 40;
+    r++;
+
+    ws.mergeCells(`A${r}:D${r}`);
+    const link = ws.getCell(`A${r}`);
+    link.value = { text: 'ТБ / БиОТ — Обучение и тестирование', hyperlink: portalUrl };
+    link.font = { name: 'Calibri', size: 12, bold: true, underline: true, color: { argb: 'FF1155CC' } };
+    link.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+    ws.getRow(r).height = 22;
+    r += 2;
+
+    ['№', 'Сотрудник', 'Логин', 'Пароль'].forEach((h, i) => {
+      const c = ws.getCell(r, i + 1);
+      c.value = h;
+      c.font = { name: 'Calibri', size: 10, bold: true, color: { argb: C.white } };
+      c.fill = solid(C.blueMid);
+      c.alignment = { vertical: 'middle', horizontal: 'center' };
+      c.border = { top: thin(C.white), left: thin(C.white), bottom: thin(C.white), right: thin(C.white) };
+    });
+    ws.getRow(r).height = 22;
+    r++;
+
+    rows.forEach((row, idx) => {
+      const rr = ws.getRow(r);
+      rr.height = 20;
+      [idx + 1, row.fio, row.login, row.password].forEach((v, i) => {
+        const c = rr.getCell(i + 1);
+        c.value = v;
+        c.font = { name: 'Calibri', size: 10, color: { argb: C.text }, bold: i === 1 };
+        c.alignment = { vertical: 'middle', horizontal: i === 0 ? 'center' : i === 1 ? 'left' : 'center', indent: i === 1 ? 1 : 0 };
+        c.border = gridBorder;
+        if (idx % 2 === 1) c.fill = solid(C.zebra);
+      });
+      r++;
+    });
+    r++;
+
+    ws.mergeCells(`A${r}:D${r}`);
+    const outro = ws.getCell(`A${r}`);
+    outro.value = 'После успешной сдачи тестирования сотруднику необходимо направить удостоверение по БиОТ '
+      + 'в отдел ТБ административного здания для подписания.';
+    outro.font = { name: 'Calibri', size: 10, italic: true, color: { argb: C.muted } };
+    outro.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true, indent: 1 };
+    ws.getRow(r).height = 40;
+
+    const stamp = fmtDay(toDay(new Date())).split('.').reverse().join('-');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition',
+      `attachment; filename="credentials_${stamp}.xlsx"; filename*=UTF-8''${encodeURIComponent('Уведомление_о_обучении_' + stamp + '.xlsx')}`);
+    await wb.xlsx.write(res);
+    res.end();
+  } catch (e) {
+    console.error('Credentials notice export failed:', e);
+    if (!res.headersSent) res.status(500).json({ error: 'export_failed', message: 'Не удалось сформировать файл: ' + e.message, details: e.message });
     else res.end();
   }
 });
