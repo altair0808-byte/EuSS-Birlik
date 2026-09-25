@@ -472,6 +472,9 @@ const api = {
   getSettings() { return this.req('/api/settings'); },
   saveSettings(data) { return this.req('/api/settings', { method: 'PUT', body: data }); },
   getPublicSettings() { return this.req('/api/settings/public'); },
+  getDictionaries() { return this.req('/api/settings/dictionaries'); },
+  saveDictionaries(data) { return this.req('/api/settings/dictionaries', { method: 'PUT', body: data }); },
+  exportCredentialsNotice(data) { return this.req('/api/export/credentials-notice', { method: 'POST', body: data }); },
   getAssignmentAnswers(id) { return this.req('/api/assignments/' + id + '/answers'); },
   // Протоколы (открытие/закрытие, п.1 и п.4)
   getProtocols(filter = {}) { return this.req('/api/protocols' + qs(filter)); },

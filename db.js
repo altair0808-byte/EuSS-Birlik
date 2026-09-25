@@ -90,6 +90,13 @@ async function initDb() {
     -- статистике на главной странице (см. routes/courses.js: GET /:id/untrained
     -- и GET /stats/summary).
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_mandatory BOOLEAN NOT NULL DEFAULT FALSE;
+
+    -- Справочники «Отдел» / «Должность» (п.1 запроса): фиксированные списки значений,
+    -- которые администратор ведёт во вкладке «Настройки», чтобы при добавлении/редактировании
+    -- сотрудника отдел и должность выбирались из выпадающего списка, а не вписывались вручную
+    -- в произвольном виде (иначе одна и та же должность оказывается записана по-разному).
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS departments_list JSONB NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS positions_list JSONB NOT NULL DEFAULT '[]'::jsonb;
   `);
 
   // Сотрудника можно создать/импортировать только по ФИО, без логина и пароля,
