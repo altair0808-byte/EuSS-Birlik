@@ -962,29 +962,29 @@ async function loadTabContent() {
   if (state.tab === 'dashboard') {
     container.innerHTML = `
       <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
-        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-          <div class="text-xs font-bold text-slate-500 uppercase">Сотрудников всего</div>
-          <div class="text-2xl font-black text-slate-900 mt-1" id="dashUsers">...</div>
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col">
+          <div class="text-xs font-bold text-slate-500 uppercase leading-tight min-h-[2em] flex items-start">Сотрудников всего</div>
+          <div class="text-2xl font-black text-slate-900 mt-1 tabular-nums" id="dashUsers">...</div>
         </div>
-        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-          <div class="text-xs font-bold text-slate-500 uppercase">Прошли обучение</div>
-          <div class="text-2xl font-black text-emerald-600 mt-1" id="dashPassed">...</div>
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col">
+          <div class="text-xs font-bold text-slate-500 uppercase leading-tight min-h-[2em] flex items-start">Прошли обучение</div>
+          <div class="text-2xl font-black text-emerald-600 mt-1 tabular-nums" id="dashPassed">...</div>
         </div>
-        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-          <div class="text-xs font-bold text-slate-500 uppercase">Ожидают прохождения</div>
-          <div class="text-2xl font-black text-amber-600 mt-1" id="dashPending">...</div>
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col">
+          <div class="text-xs font-bold text-slate-500 uppercase leading-tight min-h-[2em] flex items-start">Ожидают прохождения</div>
+          <div class="text-2xl font-black text-amber-600 mt-1 tabular-nums" id="dashPending">...</div>
         </div>
-        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-          <div class="text-xs font-bold text-slate-500 uppercase">Не сдали</div>
-          <div class="text-2xl font-black text-orange-600 mt-1" id="dashFailed">...</div>
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col">
+          <div class="text-xs font-bold text-slate-500 uppercase leading-tight min-h-[2em] flex items-start">Не сдали</div>
+          <div class="text-2xl font-black text-orange-600 mt-1 tabular-nums" id="dashFailed">...</div>
         </div>
-        <div class="bg-white p-4 rounded-xl border border-red-200 bg-red-50/40 shadow-sm">
-          <div class="text-xs font-bold text-red-700 uppercase">Просрочено</div>
-          <div class="text-2xl font-black text-red-600 mt-1" id="dashOverdue">...</div>
+        <div class="bg-white p-4 rounded-xl border border-red-200 bg-red-50/40 shadow-sm flex flex-col">
+          <div class="text-xs font-bold text-red-700 uppercase leading-tight min-h-[2em] flex items-start">Просрочено</div>
+          <div class="text-2xl font-black text-red-600 mt-1 tabular-nums" id="dashOverdue">...</div>
         </div>
-        <div id="dashMandatoryCard" class="hidden bg-white p-4 rounded-xl border border-red-200 bg-red-50/40 shadow-sm">
-          <div class="text-xs font-bold text-red-700 uppercase">Не прошли обязательное обучение</div>
-          <div class="text-2xl font-black text-red-600 mt-1" id="dashMandatoryMissing">...</div>
+        <div id="dashMandatoryCard" class="hidden bg-white p-4 rounded-xl border border-red-200 bg-red-50/40 shadow-sm flex flex-col">
+          <div class="text-xs font-bold text-red-700 uppercase leading-tight min-h-[2em] flex items-start">Не прошли обязательное обучение</div>
+          <div class="text-2xl font-black text-red-600 mt-1 tabular-nums" id="dashMandatoryMissing">...</div>
         </div>
       </div>
       ${orgNoteHtml(_L('Показатели выше — только по:', 'Жоғарыдағы көрсеткіштер тек мыналар бойынша:'))}
@@ -1984,9 +1984,9 @@ function renderDashCoursePanel() {
   panelDiv.innerHTML = `
     <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
       ${cards.map(x => `
-        <div class="border border-slate-200 rounded-lg p-3">
-          <div class="text-[11px] font-bold text-slate-500 uppercase">${esc(x.label)}</div>
-          <div class="text-xl font-black mt-1 ${x.cls}">${x.value}</div>
+        <div class="border border-slate-200 rounded-lg p-3 flex flex-col">
+          <div class="text-[11px] font-bold text-slate-500 uppercase leading-tight min-h-[2.4em] flex items-start">${esc(x.label)}</div>
+          <div class="text-xl font-black mt-1 tabular-nums ${x.cls}">${x.value}</div>
         </div>
       `).join('')}
     </div>
@@ -2062,6 +2062,7 @@ function renderExpiringFilters() {
         <input type="checkbox" id="expSelectAll" onchange="toggleExpSelectAll(this.checked)">
         ${_L('Выбрать всех видимых', 'Барлығын таңдау')}
       </label>
+      <button type="button" onclick="assignExpiringSelected()" class="text-blue-600 hover:underline font-semibold">📚 ${_L('Назначить обучение выбранным', 'Таңдалғандарға оқу тағайындау')} (<span id="expSelectedCount">${expSelected.size}</span>)</button>
       <button type="button" onclick="downloadCredentialsNoticeFromExpiring()" class="text-indigo-700 hover:underline font-semibold">⬇ ${_L('Уведомление (логин/пароль)', 'Хабарлама (логин/құпиясөз)')}</button>
     </div>`;
 }
@@ -2162,6 +2163,7 @@ function renderExpiringList() {
 function toggleExpRow(userId, checked) {
   const id = Number(userId);
   if (checked) expSelected.add(id); else expSelected.delete(id);
+  updateExpSelectedCount();
 }
 
 function toggleExpSelectAll(checked) {
@@ -2169,6 +2171,23 @@ function toggleExpSelectAll(checked) {
   if (checked) list.forEach(a => expSelected.add(Number(a.user_id)));
   else list.forEach(a => expSelected.delete(Number(a.user_id)));
   renderExpiringList();
+  updateExpSelectedCount();
+}
+
+function updateExpSelectedCount() {
+  const el = document.getElementById('expSelectedCount');
+  if (el) el.textContent = expSelected.size;
+}
+
+// Назначить обучение разом всем сотрудникам, отмеченным в списке «приближается срок»
+// (п.4 запроса): открывает то же модальное окно назначения, что и обычное «+ Назначить
+// тест», но с уже отмеченными сотрудниками — остаётся выбрать курс и номер протокола.
+function assignExpiringSelected() {
+  if (!expSelected.size) {
+    alert(_L('Сначала отметьте сотрудников галочками в списке.', 'Алдымен тізімде қызметкерлерді белгілеңіз.'));
+    return;
+  }
+  openAssignModal(null, [...expSelected]);
 }
 
 // Скачивает файл-уведомление (Сотрудник/Логин/Пароль + текст обращения) для выбранных
