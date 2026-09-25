@@ -8,22 +8,61 @@ const { findActiveProtocol, nextProtocolNumber } = require('./protocols');
 
 const uploadImport = makeUploader('imports');
 
-// Независимая нумерация сертификатов: следующий номер и формат (префикс +
-// количество цифр) хранятся в settings и настраиваются администратором —
-// это позволяет продолжить нумерацию с номера из существующего Excel-реестра,
-// а не зависеть от того, что уже есть в таблице assignments.
-// dbClient — необязательный клиент транзакции (для использования внутри bulk/import).
-async function getNextCertNumber(dbClient) {
-  const runner = dbClient || { query };
-  const q = dbClient ? (text, params) => dbClient.query(text, params) : query;
-  const result = await q(
-    `UPDATE settings SET certificate_next_number = certificate_next_number + 1
-     WHERE id = 1 RETURNING certificate_next_number - 1 AS used_number, certificate_prefix, certificate_digits`
-  );
-  const row = result.rows[0];
-  if (!row) return `CERT-0001`;
-  const digits = row.certificate_digits || 4;
-  return `${row.certificate_prefix || ''}${String(row.used_number).padStart(digits, '0')}`;
+// Экранирует спецсимволы регулярных выражений и LIKE-паттернов в префиксе
+// сертификата, чтобы его можно было безопасно подставить в SQL-запрос.
+function escapeForRegex(str) {
+  return String(str || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function escapeForLike(str) {
+  return String(str || '').replace(/[%_\\]/g, '\\$&');
+}
+
+// Независимая нумерация сертификатов (п.7 запроса): без сброса (в т.ч. по
+// году) и без повторного использования номеров, даже если сотрудник удалён
+// или перемещён. Формат (префикс + количество цифр) настраивается в
+// settings, а следующий номер — не просто счётчик в settings, а
+// GREATEST(счётчик в settings, реальный максимум уже выданных номеров + 1).
+// Это защищает от коллизий, когда номер сертификата был внесён вручную —
+// при импорте, в исторической записи или в карточке сотрудника
+// (permanent_certificate_number) — и не совпадает со значением счётчика.
+// Выполняется в транзакции с блокировкой строки settings (FOR UPDATE),
+// чтобы параллельные запросы не получили один и тот же номер.
+async function getNextCertNumber() {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const sRes = await client.query(
+      `SELECT certificate_prefix, certificate_digits, certificate_next_number
+       FROM settings WHERE id = 1 FOR UPDATE`
+    );
+    const s = sRes.rows[0] || {};
+    const prefix = s.certificate_prefix || '';
+    const digits = s.certificate_digits || 4;
+    const likePattern = escapeForLike(prefix) + '%';
+    const regexPattern = '^' + escapeForRegex(prefix) + '(\\d+)$';
+
+    const maxRes = await client.query(
+      `SELECT COALESCE(MAX(num), 0) AS max_num FROM (
+         SELECT NULLIF(regexp_replace(certificate_number, $2, '\\1'), certificate_number)::bigint AS num
+         FROM assignments WHERE certificate_number LIKE $1 ESCAPE '\\'
+         UNION ALL
+         SELECT NULLIF(regexp_replace(permanent_certificate_number, $2, '\\1'), permanent_certificate_number)::bigint AS num
+         FROM users WHERE permanent_certificate_number LIKE $1 ESCAPE '\\'
+       ) t WHERE num IS NOT NULL`,
+      [likePattern, regexPattern]
+    );
+    const maxUsed = Number(maxRes.rows[0]?.max_num || 0);
+    const nextVal = Math.max(Number(s.certificate_next_number || 1), maxUsed + 1);
+
+    await client.query('UPDATE settings SET certificate_next_number = $1 WHERE id = 1', [nextVal + 1]);
+    await client.query('COMMIT');
+    return `${prefix}${String(nextVal).padStart(digits, '0')}`;
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 // Номер протокола больше не хранится в настройках: подсказка берётся из вкладки «Протоколы» —
@@ -205,7 +244,7 @@ router.get('/mine', authRequired, async (req, res) => {
 // List all assignments
 router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
-    const { status, user_id, course_id, object, department, q, date_from, date_to } = req.query;
+    const { status, user_id, course_id, object, department, q, date_from, date_to, active_only } = req.query;
     let sql = `
       SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position,
              c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.no_expiry, c.pass_score_percent
@@ -215,6 +254,10 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, re
       WHERE u.role = 'employee'
     `;
     const params = [];
+    // active_only=1 — используется сводкой на главной странице (карточки/статистика), чтобы
+    // уволенные и сотрудники в декрете туда не попадали. Сама вкладка «Назначения» (журнал)
+    // не фильтруется по умолчанию — это архивный журнал, в нём записи должны оставаться видимыми.
+    if (active_only) sql += ` AND u.active = 1`;
     if (status) { params.push(status); sql += ` AND a.status = $${params.length}`; }
     if (user_id) { params.push(user_id); sql += ` AND a.user_id = $${params.length}`; }
     if (course_id) { params.push(course_id); sql += ` AND a.course_id = $${params.length}`; }
@@ -252,6 +295,7 @@ router.get('/expiring', authRequired, requireRole('admin', 'superadmin'), async 
       JOIN users u ON u.id = a.user_id
       JOIN courses c ON c.id = a.course_id
       WHERE u.role = 'employee'
+        AND u.active = 1
         AND a.status = 'passed'
         AND a.next_test_date IS NOT NULL
         AND c.no_expiry = FALSE
@@ -265,6 +309,38 @@ router.get('/expiring', authRequired, requireRole('admin', 'superadmin'), async 
         ${orgSql}
       ORDER BY a.next_test_date::timestamptz ASC
     `, params);
+    res.json(result.rows);
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
+// Список всех выданных сертификатов (вкладка «Сертификаты» рядом с «Протоколами», п.7 запроса).
+// Показывает номер, сотрудника, курс, дату выдачи/срок действия и протокол — по всем
+// сотрудникам сразу, с фильтром по объекту/отделу (единый фильтр, как на других вкладках)
+// и текстовым поиском по номеру сертификата или ФИО.
+router.get('/certificates', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+  try {
+    const { object, department, q } = req.query;
+    let sql = `
+      SELECT a.id, a.certificate_number, a.test_date, a.next_test_date, a.protocol_number, a.status,
+             u.id AS user_id, u.last_name, u.first_name, u.object, u.department, u.position,
+             c.title_ru, c.title_kz, c.no_expiry
+      FROM assignments a
+      JOIN users u ON u.id = a.user_id
+      JOIN courses c ON c.id = a.course_id
+      WHERE a.certificate_number IS NOT NULL AND u.role = 'employee'
+    `;
+    const params = [];
+    if (object) { params.push(object); sql += ` AND u.object = $${params.length}`; }
+    if (department) { params.push(department); sql += ` AND u.department = $${params.length}`; }
+    if (q) {
+      params.push(`%${q}%`);
+      sql += ` AND (a.certificate_number ILIKE $${params.length} OR u.last_name ILIKE $${params.length}
+                     OR u.first_name ILIKE $${params.length} OR u.full_name_translit ILIKE $${params.length})`;
+    }
+    sql += ' ORDER BY a.certificate_number DESC NULLS LAST, a.test_date DESC';
+    const result = await query(sql, params);
     res.json(result.rows);
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
