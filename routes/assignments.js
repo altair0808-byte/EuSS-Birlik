@@ -18,16 +18,16 @@ function escapeForLike(str) {
   return String(str || '').replace(/[%_\\]/g, '\\$&');
 }
 
-// Номер сертификата сотрудника (п.1 запроса): по умолчанию равен его логину (табельному
-// номеру) — сотрудник видит на сертификате тот же номер, под которым он входит в систему.
-// Если у сотрудника вручную задан «№ сертификата» в карточке (permanent_certificate_number) —
-// он имеет приоритет (осознанный ручной override, как было раньше). Если логина нет —
-// присваивается следующий свободный номер по общей нумерации (как раньше, getNextCertNumber).
+// Номер сертификата сотрудника: всегда равен его логину (табельному номеру) — сотрудник
+// видит на сертификате тот же номер, под которым он входит в систему, и никакой другой.
+// «№ сертификата» из карточки (permanent_certificate_number) используется только как
+// запасной вариант, если у сотрудника вообще нет логина. Если нет ни того ни другого —
+// присваивается следующий свободный номер по общей нумерации (getNextCertNumber).
 async function getCertNumberForUser(userId) {
   const uRes = await query('SELECT login, permanent_certificate_number FROM users WHERE id = $1', [userId]);
   const u = uRes.rows[0];
-  if (u && u.permanent_certificate_number) return u.permanent_certificate_number;
   if (u && u.login) return u.login;
+  if (u && u.permanent_certificate_number) return u.permanent_certificate_number;
   return getNextCertNumber();
 }
 

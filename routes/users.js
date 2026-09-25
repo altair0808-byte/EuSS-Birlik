@@ -600,17 +600,18 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
     params.push(id);
     await query(`UPDATE users SET ${fields.join(', ')} WHERE id = $${params.length}`, params);
 
-    // Синхронизация номера сертификата с логином (п.3 запроса): если в этом запросе
-    // поменяли логин и/или ручной «№ сертификата» — пересчитываем номер сертификата
-    // на всех уже выданных сертификатах сотрудника (assignments.certificate_number),
-    // а не только на новых. Приоритет как и раньше: ручной permanent_certificate_number,
-    // если он задан, иначе логин. Если оба пусты — старые номера не трогаем (не обнуляем
-    // уже распечатанные сертификаты).
+    // Синхронизация номера сертификата с логином: если в этом запросе поменяли логин
+    // и/или ручной «№ сертификата» — пересчитываем номер сертификата на всех уже
+    // выданных сертификатах сотрудника (assignments.certificate_number), а не только
+    // на новых. Приоритет: логин, если он задан, — на сертификате всегда должен быть
+    // виден именно он и никакой другой номер. Ручной permanent_certificate_number
+    // используется только когда логина нет. Если оба пусты — старые номера не трогаем
+    // (не обнуляем уже распечатанные сертификаты).
     if (login !== undefined || permanent_certificate_number !== undefined) {
       const finalPermanent = permanent_certificate_number !== undefined
         ? (String(permanent_certificate_number).trim() || null)
         : target.permanent_certificate_number;
-      const effectiveCertNumber = finalPermanent || finalLogin || null;
+      const effectiveCertNumber = finalLogin || finalPermanent || null;
       if (effectiveCertNumber) {
         await query(
           `UPDATE assignments SET certificate_number = $1
