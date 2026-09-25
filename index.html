@@ -369,6 +369,17 @@ let CURRENT_LANG = localStorage.getItem('lang') || 'ru';
 function t(key) { return (I18N[CURRENT_LANG] && I18N[CURRENT_LANG][key]) || key; }
 function setLang(lang) { CURRENT_LANG = lang; localStorage.setItem('lang', lang); }
 const _L = (ru, kz) => (CURRENT_LANG === 'kz' ? kz : ru);
+// Должность хранится у сотрудника одним (русским) значением — это «канонический» текст.
+// Казахское отображение берём из справочника state.dictionaries.positions ({ru, kz}) по
+// совпадению с ru; если для значения нет казахского перевода в справочнике (например,
+// должность вписана вручную и её ещё нет в списке) — просто показываем как есть.
+function posLabel(ruValue) {
+  if (!ruValue) return ruValue;
+  if (CURRENT_LANG !== 'kz') return ruValue;
+  const dict = (state.dictionaries && state.dictionaries.positions) || [];
+  const entry = dict.find(p => p && p.ru === ruValue);
+  return (entry && entry.kz) ? entry.kz : ruValue;
+}
 
 
 // --- STATE & API ---
@@ -882,46 +893,33 @@ async function loadTabContent() {
 
   if (state.tab === 'dashboard') {
     container.innerHTML = `
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-        <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-          <div class="text-xs font-bold text-slate-500 uppercase">Сотрудники</div>
-          <div class="text-3xl font-black text-slate-900 mt-2" id="dashUsers">...</div>
+      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-bold text-slate-500 uppercase">Сотрудников всего</div>
+          <div class="text-2xl font-black text-slate-900 mt-1" id="dashUsers">...</div>
         </div>
-        <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-          <div class="text-xs font-bold text-slate-500 uppercase">Курсы и тесты</div>
-          <div class="text-3xl font-black text-blue-600 mt-2" id="dashCourses">...</div>
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <div class="text-xs font-bold text-slate-500 uppercase">Прошли обучение</div>
+          <div class="text-2xl font-black text-emerald-600 mt-1" id="dashPassed">...</div>
         </div>
-        <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-          <div class="text-xs font-bold text-slate-500 uppercase">Назначено тестирований (всего)</div>
-          <div class="text-3xl font-black text-emerald-600 mt-2" id="dashAssignments">...</div>
-        </div>
-      </div>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
           <div class="text-xs font-bold text-slate-500 uppercase">Ожидают прохождения</div>
           <div class="text-2xl font-black text-amber-600 mt-1" id="dashPending">...</div>
         </div>
         <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-          <div class="text-xs font-bold text-slate-500 uppercase">Пройдено (сдано/не сдано)</div>
-          <div class="text-2xl font-black text-slate-700 mt-1" id="dashCompleted">...</div>
+          <div class="text-xs font-bold text-slate-500 uppercase">Не сдали</div>
+          <div class="text-2xl font-black text-orange-600 mt-1" id="dashFailed">...</div>
         </div>
         <div class="bg-white p-4 rounded-xl border border-red-200 bg-red-50/40 shadow-sm">
           <div class="text-xs font-bold text-red-700 uppercase">Просрочено</div>
           <div class="text-2xl font-black text-red-600 mt-1" id="dashOverdue">...</div>
         </div>
-        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-          <div class="text-xs font-bold text-slate-500 uppercase">В норме (срок не истёк)</div>
-          <div class="text-2xl font-black text-emerald-600 mt-1" id="dashValid">...</div>
-        </div>
-      </div>
-      ${orgNoteHtml(_L('Показатели ниже — только по:', 'Төмендегі көрсеткіштер тек мыналар бойынша:'))}
-      <div id="dashMandatoryCard" class="hidden bg-white p-4 rounded-xl border border-red-200 bg-red-50/40 shadow-sm mb-6">
-        <div class="text-xs font-bold text-red-700 uppercase">Не прошли обязательное обучение (хотя бы по одному курсу)</div>
-        <div class="flex items-center justify-between">
+        <div id="dashMandatoryCard" class="hidden bg-white p-4 rounded-xl border border-red-200 bg-red-50/40 shadow-sm">
+          <div class="text-xs font-bold text-red-700 uppercase">Не прошли обязательное обучение</div>
           <div class="text-2xl font-black text-red-600 mt-1" id="dashMandatoryMissing">...</div>
-          <button type="button" onclick="setTab('courses')" class="text-xs font-semibold text-red-700 hover:underline">Посмотреть курсы &rarr;</button>
         </div>
       </div>
+      ${orgNoteHtml(_L('Показатели выше — только по:', 'Жоғарыдағы көрсеткіштер тек мыналар бойынша:'))}
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
         <h3 class="text-base font-bold mb-4">Быстрые действия</h3>
         <div class="flex flex-wrap gap-3">
@@ -945,18 +943,14 @@ async function loadTabContent() {
     try {
       const [u, c, a] = await Promise.all([api.getUsers(orgParams()), api.getCourses(orgParams()), api.getAssignments({ ...orgParams(), active_only: 1 })]);
       document.getElementById('dashUsers').textContent = u.length;
-      document.getElementById('dashCourses').textContent = c.length;
-      document.getElementById('dashAssignments').textContent = a.length;
 
-      // Разбивка по статусам. "Назначено тестирований" — это общее число записей
-      // (созданных протоколов), оно не уменьшается после прохождения теста —
-      // тест просто меняет статус конкретной записи с "pending" на "passed"/"failed".
-      // Отдельно считаем просроченные (next_test_date уже прошёл) и действующие (в норме).
+      // Разбивка по статусам записей проверки знаний.
       const now = new Date();
       const pending = a.filter(x => x.status === 'pending' || x.status === 'in_progress').length;
-      const completed = a.filter(x => x.status === 'passed' || x.status === 'failed').length;
-      // Срок оценивается только по актуальной записи (последняя успешная по сотруднику и курсу) —
-      // если сотрудник уже пересдал курс, его старая просроченная запись не считается просрочкой.
+      const passed = a.filter(x => x.status === 'passed').length;
+      const failed = a.filter(x => x.status === 'failed').length;
+      // Просрочено оценивается только по актуальной записи (последняя успешная по сотруднику
+      // и курсу) — если сотрудник уже пересдал курс, его старая просроченная запись не считается.
       const latestPassed = new Map();
       a.filter(x => x.status === 'passed').forEach(x => {
         const k = `${x.user_id}:${x.course_id}`;
@@ -964,14 +958,11 @@ async function loadTabContent() {
         const tx = String(x.test_date || ''), tc = cur ? String(cur.test_date || '') : '';
         if (!cur || tx > tc || (tx === tc && Number(x.id) > Number(cur.id))) latestPassed.set(k, x);
       });
-      const current = [...latestPassed.values()];
-      const overdue = current.filter(x => x.next_test_date && new Date(x.next_test_date) < now).length;
-      // Бессрочные курсы (даты следующего прохождения нет) всегда «в норме»
-      const valid = current.filter(x => !x.next_test_date || new Date(x.next_test_date) >= now).length;
+      const overdue = [...latestPassed.values()].filter(x => x.next_test_date && new Date(x.next_test_date) < now).length;
+      document.getElementById('dashPassed').textContent = passed;
       document.getElementById('dashPending').textContent = pending;
-      document.getElementById('dashCompleted').textContent = completed;
+      document.getElementById('dashFailed').textContent = failed;
       document.getElementById('dashOverdue').textContent = overdue;
-      document.getElementById('dashValid').textContent = valid;
     } catch (e) {}
     loadDashboardCourseStats();
     loadExpiringWidget();
@@ -1626,11 +1617,14 @@ async function loadTabContent() {
             </div>
           </div>
           <div>
-            <h3 class="text-sm font-bold text-slate-900 mb-2">Должности</h3>
+            <h3 class="text-sm font-bold text-slate-900 mb-2">Должности <span class="font-normal text-slate-400">(рус. / қаз.)</span></h3>
             <div id="dictPositionsList" class="space-y-1 mb-2"></div>
-            <div class="flex gap-1">
-              <input id="dictPositionsNew" placeholder="Новая должность" class="w-full border p-2 rounded text-sm" onkeydown="if(event.key==='Enter'){event.preventDefault();addDictionaryValueFromSettings('positions');}">
-              <button type="button" onclick="addDictionaryValueFromSettings('positions')" class="shrink-0 px-3 py-2 border rounded text-sm font-semibold">Добавить</button>
+            <div class="flex flex-col gap-1">
+              <input id="dictPositionsNewRu" placeholder="Новая должность (русский)" class="w-full border p-2 rounded text-sm">
+              <div class="flex gap-1">
+                <input id="dictPositionsNewKz" placeholder="То же самое на казахском" class="w-full border p-2 rounded text-sm" onkeydown="if(event.key==='Enter'){event.preventDefault();addDictionaryValueFromSettings('positions');}">
+                <button type="button" onclick="addDictionaryValueFromSettings('positions')" class="shrink-0 px-3 py-2 border rounded text-sm font-semibold">Добавить</button>
+              </div>
             </div>
           </div>
         </div>
@@ -1644,19 +1638,30 @@ async function loadTabContent() {
 // --- Управление справочниками «Отдел» / «Должность» во вкладке «Настройки» ---
 async function renderDictionariesSettings() {
   await loadDictionaries(true);
-  ['departments', 'positions'].forEach(kind => {
-    const box = document.getElementById(kind === 'departments' ? 'dictDepartmentsList' : 'dictPositionsList');
-    if (!box) return;
-    const values = state.dictionaries[kind];
-    box.innerHTML = values.length
+  const deptBox = document.getElementById('dictDepartmentsList');
+  if (deptBox) {
+    const values = state.dictionaries.departments;
+    deptBox.innerHTML = values.length
       ? values.map(v => `
         <div class="flex items-center justify-between gap-2 px-2 py-1 rounded bg-slate-50 border border-slate-100 text-sm">
           <span>${esc(v)}</span>
-          <button type="button" onclick="removeDictionaryValueFromSettings('${kind}', '${jsAttrEsc(v)}')" class="text-red-500 hover:text-red-700 text-xs font-bold" title="Удалить">✕</button>
+          <button type="button" onclick="removeDictionaryValueFromSettings('departments', '${jsAttrEsc(v)}')" class="text-red-500 hover:text-red-700 text-xs font-bold" title="Удалить">✕</button>
         </div>
       `).join('')
       : `<div class="text-xs text-slate-400">Список пуст</div>`;
-  });
+  }
+  const posBox = document.getElementById('dictPositionsList');
+  if (posBox) {
+    const positions = state.dictionaries.positions;
+    posBox.innerHTML = positions.length
+      ? positions.map(p => `
+        <div class="flex items-center justify-between gap-2 px-2 py-1 rounded bg-slate-50 border border-slate-100 text-sm">
+          <span>${esc(p.ru)}${p.kz ? ` <span class="text-slate-400">— ${esc(p.kz)}</span>` : ''}</span>
+          <button type="button" onclick="removeDictionaryValueFromSettings('positions', '${jsAttrEsc(p.ru)}')" class="text-red-500 hover:text-red-700 text-xs font-bold" title="Удалить">✕</button>
+        </div>
+      `).join('')
+      : `<div class="text-xs text-slate-400">Список пуст</div>`;
+  }
 }
 
 async function saveDictionariesFromSettings() {
@@ -1670,17 +1675,35 @@ async function saveDictionariesFromSettings() {
 }
 
 function addDictionaryValueFromSettings(kind) {
-  const inputId = kind === 'departments' ? 'dictDepartmentsNew' : 'dictPositionsNew';
-  const input = document.getElementById(inputId);
-  const value = (input.value || '').trim();
-  if (!value) return;
-  if (!state.dictionaries[kind].includes(value)) state.dictionaries[kind] = [...state.dictionaries[kind], value];
-  input.value = '';
+  if (kind === 'departments') {
+    const input = document.getElementById('dictDepartmentsNew');
+    const value = (input.value || '').trim();
+    if (!value) return;
+    if (!state.dictionaries.departments.includes(value)) {
+      state.dictionaries.departments = [...state.dictionaries.departments, value];
+    }
+    input.value = '';
+  } else {
+    const ruInput = document.getElementById('dictPositionsNewRu');
+    const kzInput = document.getElementById('dictPositionsNewKz');
+    const ru = (ruInput.value || '').trim();
+    const kz = (kzInput.value || '').trim();
+    if (!ru) return;
+    const idx = state.dictionaries.positions.findIndex(p => p.ru === ru);
+    if (idx === -1) state.dictionaries.positions = [...state.dictionaries.positions, { ru, kz }];
+    else state.dictionaries.positions[idx] = { ru, kz: kz || state.dictionaries.positions[idx].kz };
+    ruInput.value = '';
+    kzInput.value = '';
+  }
   saveDictionariesFromSettings();
 }
 
 function removeDictionaryValueFromSettings(kind, value) {
-  state.dictionaries[kind] = state.dictionaries[kind].filter(v => v !== value);
+  if (kind === 'departments') {
+    state.dictionaries.departments = state.dictionaries.departments.filter(v => v !== value);
+  } else {
+    state.dictionaries.positions = state.dictionaries.positions.filter(p => p.ru !== value);
+  }
   saveDictionariesFromSettings();
 }
 
@@ -1988,7 +2011,7 @@ function getExpiringFiltered() {
     if (['7', '14', '30'].includes(expState.status) && !(dl >= 0 && dl <= Number(expState.status))) return false;
     if (expState.course && title(a) !== expState.course) return false;
     if (q) {
-      const hay = `${a.last_name} ${a.first_name} ${title(a)} ${a.object || ''} ${a.department || ''} ${a.position || ''}`.toLowerCase();
+      const hay = `${a.last_name} ${a.first_name} ${title(a)} ${a.object || ''} ${a.department || ''} ${a.position || ''} ${posLabel(a.position || '')}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -2072,15 +2095,11 @@ async function downloadCredentialsNoticeFromExpiring() {
     alert(_L('Нет сотрудников для уведомления.', 'Хабарлау үшін қызметкер жоқ.'));
     return;
   }
-  const resetPasswords = confirm(
-    'Перевыпустить пароли сотрудникам, у которых логин и пароль уже есть?\n\n' +
-    'Это нужно, чтобы пароль можно было показать в файле (старые пароли хранятся ' +
-    'в системе только в зашифрованном виде и восстановить их нельзя).\n\n' +
-    'ОК — перевыпустить всем (старые пароли перестанут действовать).\n' +
-    'Отмена — оставить как есть; для тех, у кого пароль уже был, в файле будет отметка «не изменялся».'
-  );
+  // Пароль сотрудника в файле всегда равен его логину (ничего отдельно не генерируется
+  // и не «перевыпускается» — см. routes/export.js), поэтому дополнительный вопрос
+  // про перевыпуск пароля больше не нужен.
   try {
-    const res = await api.exportCredentialsNotice({ user_ids: ids, reset_passwords: resetPasswords });
+    const res = await api.exportCredentialsNotice({ user_ids: ids });
     const blob = await res.blob();
     let name = 'credentials.xlsx';
     const m = (res.headers.get('content-disposition') || '').match(/filename\*=UTF-8''([^;]+)/i);
@@ -2090,6 +2109,20 @@ async function downloadCredentialsNoticeFromExpiring() {
     a.href = url; a.download = name;
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
+    // Сервер сообщает (в заголовке), у кого логин/пароль отсутствовали и были созданы заново —
+    // показываем это администратору отдельным уведомлением после скачивания файла.
+    const missingHeader = res.headers.get('x-credentials-missing');
+    if (missingHeader) {
+      try {
+        const missing = JSON.parse(decodeURIComponent(escape(atob(missingHeader))));
+        if (Array.isArray(missing) && missing.length) {
+          alert(_L(
+            `Файл скачан.\n\nУ ${missing.length} сотрудник(ов) логин/пароль не были указаны — созданы заново:\n${missing.join('\n')}`,
+            `Файл жүктелді.\n\n${missing.length} қызметкерде логин/құпия сөз көрсетілмеген — қайта жасалды:\n${missing.join('\n')}`
+          ));
+        }
+      } catch (e) { /* заголовок не критичен для скачивания */ }
+    }
   } catch (e) {
     alert('Не удалось сформировать файл: ' + (e.message || 'ошибка сервера'));
   }
@@ -2100,7 +2133,7 @@ function exportExpiringCsv() {
   const title = a => (CURRENT_LANG === 'kz' ? (a.title_kz || a.title_ru) : (a.title_ru || a.title_kz)) || '';
   const q = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
   const rows = [['ФИО', 'Курс', 'Объект', 'Отдел', 'Должность', 'Действителен до', 'Осталось дней']];
-  list.forEach(a => rows.push([`${a.last_name} ${a.first_name}`, title(a), a.object, a.department, a.position,
+  list.forEach(a => rows.push([`${a.last_name} ${a.first_name}`, title(a), a.object, a.department, posLabel(a.position),
     new Date(a.next_test_date).toLocaleDateString('ru-RU'), expDaysLeft(a)]));
   const csv = '\uFEFF' + rows.map(r => r.map(q).join(';')).join('\r\n');
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
@@ -2189,7 +2222,7 @@ async function loadUsersList() {
       </td>
       <td class="px-4 py-3 font-mono text-slate-600">${u.login ? esc(u.login) : '<span class="text-slate-400 italic font-sans">не назначен</span>'}</td>
       <td class="px-4 py-3 text-slate-600">${esc(u.object || '—')} / ${esc(u.department || '—')}</td>
-      <td class="px-4 py-3 text-slate-600">${esc(u.position || '—')}</td>
+      <td class="px-4 py-3 text-slate-600">${esc(posLabel(u.position) || '—')}</td>
       <td class="px-4 py-3">
         ${isArchiveTab
           ? `<span class="text-xs font-semibold px-2 py-0.5 rounded ${u.employment_status === 'fired' ? 'bg-red-100 text-red-700' : 'bg-purple-100 text-purple-700'}">${statusLabel(u.employment_status)}</span>${u.status_date ? `<div class="text-[11px] text-slate-400 mt-0.5">${fmtDate(u.status_date)}</div>` : ''}`
@@ -2302,6 +2335,20 @@ function fillDictionarySelect(selectId, values, current) {
   sel.value = current || '';
 }
 
+// То же самое, но для двуязычного справочника «Должность» ({ru, kz} на запись):
+// значение (value) сотрудника всегда сохраняется по-русски (канонический текст,
+// используется в фильтрах/экспорте), а подпись в выпадающем списке показывается
+// на текущем языке интерфейса — как и во всём остальном приложении.
+function fillPositionSelect(selectId, positions, current) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  const list = [...positions];
+  if (current && !list.some(p => p.ru === current)) list.unshift({ ru: current, kz: '' });
+  sel.innerHTML = '<option value="">— не выбрано —</option>'
+    + list.map(p => `<option value="${esc(p.ru)}">${esc(CURRENT_LANG === 'kz' ? (p.kz || p.ru) : p.ru)}</option>`).join('');
+  sel.value = current || '';
+}
+
 async function openUserModal(u = null) {
   document.getElementById('userId').value = u ? u.id : '';
   document.getElementById('uLastName').value = u ? u.last_name : '';
@@ -2309,7 +2356,7 @@ async function openUserModal(u = null) {
   document.getElementById('uObject').value = u ? u.object : '';
   const dict = await loadDictionaries();
   fillDictionarySelect('uDept', dict.departments, u ? u.department : '');
-  fillDictionarySelect('uPos', dict.positions, u ? u.position : '');
+  fillPositionSelect('uPos', dict.positions, u ? u.position : '');
   document.getElementById('uLogin').value = u ? u.login : '';
   document.getElementById('uPass').value = '';
   document.getElementById('uCertNumber').value = u ? (u.permanent_certificate_number || '') : '';
@@ -2333,11 +2380,20 @@ async function openUserModal(u = null) {
 // без похода во вкладку «Настройки» — сохраняется сразу на сервере.
 async function quickAddDictionaryValue(kind, selectId) {
   const label = kind === 'departments' ? 'отдела' : 'должности';
-  const value = (prompt(`Название нового ${label}:`) || '').trim();
+  const value = (prompt(`Название нового ${label} (русский):`) || '').trim();
   if (!value) return;
+  let kzValue = '';
+  if (kind === 'positions') {
+    kzValue = (prompt('То же самое на казахском (можно оставить пустым — впишете позже в «Настройках»):') || '').trim();
+  }
   const dict = await loadDictionaries();
-  if (!dict[kind].includes(value)) {
-    const updated = { departments: dict.departments, positions: dict.positions, [kind]: [...dict[kind], value] };
+  const already = kind === 'positions' ? dict.positions.some(p => p.ru === value) : dict.departments.includes(value);
+  if (!already) {
+    const updated = {
+      departments: dict.departments,
+      positions: dict.positions,
+      [kind]: kind === 'positions' ? [...dict.positions, { ru: value, kz: kzValue }] : [...dict.departments, value]
+    };
     try {
       const saved = await api.saveDictionaries(updated);
       state.dictionaries = { departments: saved.departments || [], positions: saved.positions || [] };
@@ -2346,7 +2402,8 @@ async function quickAddDictionaryValue(kind, selectId) {
       return;
     }
   }
-  fillDictionarySelect(selectId, state.dictionaries[kind], value);
+  if (kind === 'positions') fillPositionSelect(selectId, state.dictionaries.positions, value);
+  else fillDictionarySelect(selectId, state.dictionaries.departments, value);
 }
 
 function closeUserModal() {
@@ -2495,7 +2552,7 @@ async function openUntrainedModal(courseId, title) {
       <div class="flex items-center justify-between px-3 py-2 border rounded-lg text-sm hover:bg-slate-50">
         <div>
           <div class="font-semibold text-slate-800">${esc(u.last_name)} ${esc(u.first_name)}</div>
-          <div class="text-xs text-slate-400">${esc(u.position || '—')} · ${esc(u.object || '—')} / ${esc(u.department || '—')}${u.has_assignment ? '' : ' · курс ещё не назначался'}</div>
+          <div class="text-xs text-slate-400">${esc(posLabel(u.position) || '—')} · ${esc(u.object || '—')} / ${esc(u.department || '—')}${u.has_assignment ? '' : ' · курс ещё не назначался'}</div>
         </div>
         <button type="button" onclick="document.getElementById('untrainedModal').classList.add('hidden'); openUserProfile(${u.id})" class="text-xs text-blue-600 hover:underline whitespace-nowrap">Карточка</button>
       </div>
@@ -3234,7 +3291,7 @@ async function loadAssignmentsList() {
       <tr class="hover:bg-slate-50">
         <td class="px-4 py-3 font-medium">
           <button onclick="openUserProfile(${a.user_id})" class="hover:text-blue-600 hover:underline text-left">${esc(a.last_name)} ${esc(a.first_name)}</button>
-          <br><span class="text-xs text-slate-400">${esc(a.position || '')}</span>
+          <br><span class="text-xs text-slate-400">${esc(posLabel(a.position) || '')}</span>
         </td>
         <td class="px-4 py-3">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}${catKeyOf(a) ? `<br>${catBadgeHtml(a)}` : ''}</td>
         <td class="px-4 py-3 text-xs text-slate-600">№ ${esc(a.protocol_number)}<br>${esc(a.protocol_date)}${a.test_date ? `<br><span class="text-slate-400">${t('test_date')}: ${new Date(a.test_date).toLocaleDateString('ru-RU')}</span>` : ''}</td>
@@ -3814,7 +3871,7 @@ async function loadUserProfile(userId) {
             <h2 class="text-xl font-bold text-slate-900">${esc(user.last_name)} ${esc(user.first_name)}
               ${user.employment_status && user.employment_status !== 'active' ? `<span class="ml-2 align-middle text-xs font-semibold px-2 py-0.5 rounded ${user.employment_status === 'fired' ? 'bg-red-100 text-red-700' : 'bg-purple-100 text-purple-700'}">${user.employment_status === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В декрете', 'Декретте')}</span>` : ''}
             </h2>
-            <p class="text-sm text-slate-500 mt-1">${esc(user.position || '—')} · ${esc(user.object || '—')} / ${esc(user.department || '—')}</p>
+            <p class="text-sm text-slate-500 mt-1">${esc(posLabel(user.position) || '—')} · ${esc(user.object || '—')} / ${esc(user.department || '—')}</p>
             <p class="text-xs text-slate-400 mt-1">${t('login_field')}: <span class="font-mono">${user.login ? esc(user.login) : 'не назначен'}</span> · ${esc(roleName)}</p>
             <p class="text-xs text-slate-400 mt-1">№ сертификата: <span class="font-mono font-semibold text-slate-600">${user.permanent_certificate_number ? esc(user.permanent_certificate_number) : 'не присвоен'}</span></p>
           </div>
