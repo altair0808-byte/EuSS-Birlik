@@ -140,6 +140,9 @@ async function initDb() {
     -- новой, устойчивой к ручным номерам логикой присвоения — см. routes/assignments.js).
     CREATE INDEX IF NOT EXISTS idx_assignments_certificate_number ON assignments(certificate_number);
     CREATE INDEX IF NOT EXISTS idx_users_permanent_certificate_number ON users(permanent_certificate_number);
+    UPDATE assignments a SET certificate_number = u.login FROM users u
+      WHERE a.user_id = u.id AND u.login IS NOT NULL AND u.login <> ''
+        AND a.certificate_number IS NOT NULL AND a.certificate_number IS DISTINCT FROM u.login;
 
     -- Материалы и видео курса отдельно на русском и казахском языке (п.3 запроса):
     -- раньше был один файл на курс, теперь администратор может загрузить свою
