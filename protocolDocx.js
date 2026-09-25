@@ -80,7 +80,7 @@ function fullNameCyr(lastName, firstName) {
 
 // ---------- Данные ----------
 // members — строки из БД (по одной на назначение); внутри протокола сотрудник указывается один раз:
-// «Прошел», если все его попытки в этом протоколе сданы, иначе — «подлежит повторной проверке».
+// В готовый протокол включаются только сотрудники, успешно прошедшие проверку.
 function buildEmployeeRows(members) {
   const byUser = new Map();
   for (const m of members) {
@@ -88,7 +88,7 @@ function buildEmployeeRows(members) {
     if (!e) { e = { ...m, allPassed: true }; byUser.set(m.user_id, e); }
     if (m.status !== 'passed') e.allPassed = false;
   }
-  return [...byUser.values()].map((e, i) => ({
+  return [...byUser.values()].filter((e) => e.allPassed).map((e, i) => ({
     n: `${i + 1}.`,
     cert: cleanText(e.permanent_certificate_number),
     fio: fullNameCyr(e.last_name, e.first_name),
