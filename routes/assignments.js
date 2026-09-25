@@ -5,6 +5,7 @@ const { query, pool } = require('../db');
 const { authRequired, requireRole } = require('./auth');
 const { makeUploader } = require('../upload');
 const { findActiveProtocol, nextProtocolNumber } = require('./protocols');
+const { splitMulti } = require('../lib/multiFilter');
 
 const uploadImport = makeUploader('imports');
 
@@ -274,8 +275,10 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, re
     if (status) { params.push(status); sql += ` AND a.status = $${params.length}`; }
     if (user_id) { params.push(user_id); sql += ` AND a.user_id = $${params.length}`; }
     if (course_id) { params.push(course_id); sql += ` AND a.course_id = $${params.length}`; }
-    if (object) { params.push(object); sql += ` AND u.object = $${params.length}`; }
-    if (department) { params.push(department); sql += ` AND u.department = $${params.length}`; }
+    const objects = splitMulti(object);
+    const departments = splitMulti(department);
+    if (objects.length) { params.push(objects); sql += ` AND u.object = ANY($${params.length}::text[])`; }
+    if (departments.length) { params.push(departments); sql += ` AND u.department = ANY($${params.length}::text[])`; }
     if (q) {
       params.push(`%${q}%`);
       sql += ` AND (u.last_name ILIKE $${params.length} OR u.first_name ILIKE $${params.length} OR u.login ILIKE $${params.length})`;
@@ -299,8 +302,10 @@ router.get('/expiring', authRequired, requireRole('admin', 'superadmin'), async 
     const { object, department } = req.query;
     const params = [String(days)];
     let orgSql = '';
-    if (object) { params.push(object); orgSql += ` AND u.object = $${params.length}`; }
-    if (department) { params.push(department); orgSql += ` AND u.department = $${params.length}`; }
+    const objects = splitMulti(object);
+    const departments = splitMulti(department);
+    if (objects.length) { params.push(objects); orgSql += ` AND u.object = ANY($${params.length}::text[])`; }
+    if (departments.length) { params.push(departments); orgSql += ` AND u.department = ANY($${params.length}::text[])`; }
     const result = await query(`
       SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position, u.login,
              c.title_ru, c.title_kz, c.category_ru, c.category_kz
@@ -345,8 +350,10 @@ router.get('/certificates', authRequired, requireRole('admin', 'superadmin'), as
       WHERE a.certificate_number IS NOT NULL AND u.role = 'employee'
     `;
     const params = [];
-    if (object) { params.push(object); sql += ` AND u.object = $${params.length}`; }
-    if (department) { params.push(department); sql += ` AND u.department = $${params.length}`; }
+    const objects = splitMulti(object);
+    const departments = splitMulti(department);
+    if (objects.length) { params.push(objects); sql += ` AND u.object = ANY($${params.length}::text[])`; }
+    if (departments.length) { params.push(departments); sql += ` AND u.department = ANY($${params.length}::text[])`; }
     if (q) {
       params.push(`%${q}%`);
       sql += ` AND (a.certificate_number ILIKE $${params.length} OR u.last_name ILIKE $${params.length}

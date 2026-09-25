@@ -5,6 +5,7 @@ const { query, pool } = require('../db');
 const { authRequired, requireRole } = require('./auth');
 const { makeMemoryUploader } = require('../upload');
 const supabaseStorage = require('../supabaseStorage');
+const { splitMulti } = require('../lib/multiFilter');
 
 // Материалы курса — презентация или PDF-методичка. Загружаются в память и сразу
 // отправляются в Supabase Storage (п.2 запроса) — файл не хранится на локальном
@@ -63,13 +64,13 @@ function clampVariant(n) {
 // ===================== Список / карточка курса =====================
 
 // List courses
-// Фильтр по объекту/отделу (единый фильтр на всех вкладках): считаем только сотрудников
-// выбранного объекта и/или отдела. Параметры $1 (объект) и $2 (отдел) — NULL, если фильтр не задан.
-const ORG_SQL = `($1::text IS NULL OR u.object = $1) AND ($2::text IS NULL OR u.department = $2)`;
+// Фильтр по объекту/отделу (единый фильтр на всех вкладках, поддерживает мульти-выбор —
+// несколько значений через запятую, см. lib/multiFilter.js): считаем только сотрудников
+// выбранных объектов и/или отделов. Параметры $1 (объекты) и $2 (отделы) — пустой массив,
+// если фильтр не задан (тогда условие не сужает выборку).
+const ORG_SQL = `(cardinality($1::text[]) = 0 OR u.object = ANY($1::text[])) AND (cardinality($2::text[]) = 0 OR u.department = ANY($2::text[]))`;
 function orgParams(req) {
-  const o = String(req.query.object || '').trim();
-  const d = String(req.query.department || '').trim();
-  return [o || null, d || null];
+  return [splitMulti(req.query.object), splitMulti(req.query.department)];
 }
 
 router.get('/', authRequired, async (req, res) => {

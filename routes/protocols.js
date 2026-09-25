@@ -3,6 +3,7 @@ const router = express.Router();
 const { query } = require('../db');
 const { authRequired, requireRole } = require('./auth');
 const { buildProtocolDocx } = require('../protocolDocx');
+const { splitMulti } = require('../lib/multiFilter');
 
 // Протоколы комиссии по проверке знаний.
 // Администратор «открывает» протокол — указывает его номер и диапазон дат
@@ -69,20 +70,22 @@ async function numberTaken(number, openDate, excludeId) {
 // List all protocols (newest first)
 router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
-    // Единый фильтр по объекту/отделу: считаем только сотрудников выбранного объекта/отдела
-    // и показываем только те протоколы, по которым такие сотрудники есть.
-    const object = String(req.query.object || '').trim() || null;
-    const department = String(req.query.department || '').trim() || null;
+    // Единый фильтр по объекту/отделу (мульти-выбор — несколько значений через запятую):
+    // считаем только сотрудников выбранных объектов/отделов и показываем только те
+    // протоколы, по которым такие сотрудники есть.
+    const objects = splitMulti(req.query.object);
+    const departments = splitMulti(req.query.department);
     const result = await query(`
       SELECT ${PROTOCOL_COLS}, (
         SELECT COUNT(DISTINCT a.user_id)::int FROM assignments a JOIN users u ON u.id = a.user_id
         WHERE u.role = 'employee' AND ${MEMBER_JOIN}
-          AND ($1::text IS NULL OR u.object = $1) AND ($2::text IS NULL OR u.department = $2)
+          AND (cardinality($1::text[]) = 0 OR u.object = ANY($1::text[]))
+          AND (cardinality($2::text[]) = 0 OR u.department = ANY($2::text[]))
       ) AS assignments_count
       FROM protocols p
       ORDER BY p.open_date DESC, p.id DESC
-    `, [object, department]);
-    res.json((object || department) ? result.rows.filter(r => r.assignments_count > 0) : result.rows);
+    `, [objects, departments]);
+    res.json((objects.length || departments.length) ? result.rows.filter(r => r.assignments_count > 0) : result.rows);
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }

@@ -599,6 +599,27 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
     if (fields.length === 0) return res.json({ ok: true });
     params.push(id);
     await query(`UPDATE users SET ${fields.join(', ')} WHERE id = $${params.length}`, params);
+
+    // Синхронизация номера сертификата с логином (п.3 запроса): если в этом запросе
+    // поменяли логин и/или ручной «№ сертификата» — пересчитываем номер сертификата
+    // на всех уже выданных сертификатах сотрудника (assignments.certificate_number),
+    // а не только на новых. Приоритет как и раньше: ручной permanent_certificate_number,
+    // если он задан, иначе логин. Если оба пусты — старые номера не трогаем (не обнуляем
+    // уже распечатанные сертификаты).
+    if (login !== undefined || permanent_certificate_number !== undefined) {
+      const finalPermanent = permanent_certificate_number !== undefined
+        ? (String(permanent_certificate_number).trim() || null)
+        : target.permanent_certificate_number;
+      const effectiveCertNumber = finalPermanent || finalLogin || null;
+      if (effectiveCertNumber) {
+        await query(
+          `UPDATE assignments SET certificate_number = $1
+           WHERE user_id = $2 AND certificate_number IS NOT NULL AND certificate_number IS DISTINCT FROM $1`,
+          [effectiveCertNumber, id]
+        );
+      }
+    }
+
     res.json({ ok: true });
   } catch (e) {
     console.error('Error updating user:', e);
