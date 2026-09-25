@@ -382,6 +382,17 @@ function posLabel(ruValue) {
 }
 
 
+// Единый фильтр «Объект/Отдел» поддерживает мульти-выбор (массивы значений).
+// Разбирает сохранённое в sessionStorage значение и приводит его к массивам —
+// в т.ч. старый формат (одна строка), сохранённый до перехода на мульти-выбор,
+// чтобы у пользователей, уже открывших вкладку, фильтр не сломался при обновлении.
+function normalizeOrgFilter(raw) {
+  let parsed;
+  try { parsed = JSON.parse(raw || '{}'); } catch (e) { parsed = {}; }
+  const toArr = v => Array.isArray(v) ? v.filter(Boolean) : (v ? [v] : []);
+  return { object: toArr(parsed.object), department: toArr(parsed.department) };
+}
+
 // --- STATE & API ---
 const state = {
   token: localStorage.getItem('token') || null,
@@ -394,13 +405,13 @@ const state = {
   activeTest: null,
   testTimer: null,
   timeLeft: 0,
-  usersFilter: { q: '', object: '', department: '', role: '' },
+  usersFilter: { q: '', object: '', department: '', role: '', positions: [], statuses: [] },
   assignFilter: { status: '', object: '', department: '', q: '', date_from: '', date_to: '' },
   meta: { objects: [], departments: [], pairs: [] },
   metaLoaded: false,
   dictionaries: { departments: [], positions: [] },
   dictionariesLoaded: false,
-  org: JSON.parse(sessionStorage.getItem('orgFilter') || '{"object":"","department":""}'),   // единый фильтр «объект / отдел» для всех вкладок
+  org: normalizeOrgFilter(sessionStorage.getItem('orgFilter')),   // единый фильтр «объект / отдел» для всех вкладок (мульти-выбор — массивы)
   profileUserId: null,
   calendarDate: new Date(),
   protocols: [],
@@ -643,7 +654,7 @@ function logout() {
   localStorage.removeItem('token');
   localStorage.removeItem('user');
   sessionStorage.removeItem('orgFilter');
-  state.org = { object: '', department: '' };
+  state.org = { object: [], department: [] };
   myTestsTab = 'todo';
   render();
 }
@@ -656,17 +667,20 @@ function switchLang(l) {
 // --- ЕДИНЫЙ ФИЛЬТР «ОБЪЕКТ / ОТДЕЛ» (виден на всех рабочих вкладках администратора) ---
 const ORG_TABS = ['dashboard', 'users', 'archive', 'courses', 'assignments', 'protocols', 'certificates', 'calendar'];
 
+// orgParams() отдаёт значения через запятую (?object=A,B) — так их понимает
+// splitMulti() на backend (routes/*.js), при этом одиночное значение (или пусто)
+// работает как раньше, так что обратная совместимость сохраняется.
 function orgParams() {
   const o = {};
-  if (state.org.object) o.object = state.org.object;
-  if (state.org.department) o.department = state.org.department;
+  if (state.org.object.length) o.object = state.org.object.join(',');
+  if (state.org.department.length) o.department = state.org.department.join(',');
   return o;
 }
-function orgActive() { return !!(state.org.object || state.org.department); }
+function orgActive() { return !!(state.org.object.length || state.org.department.length); }
 function orgLabel() {
   const parts = [];
-  if (state.org.object) parts.push(`${_L('Объект', 'Объект')}: ${state.org.object}`);
-  if (state.org.department) parts.push(`${_L('Отдел', 'Бөлім')}: ${state.org.department}`);
+  if (state.org.object.length) parts.push(`${_L('Объект', 'Объект')}: ${state.org.object.join(', ')}`);
+  if (state.org.department.length) parts.push(`${_L('Отдел', 'Бөлім')}: ${state.org.department.join(', ')}`);
   return parts.join(' · ');
 }
 function orgNoteHtml(text) {
@@ -675,32 +689,91 @@ function orgNoteHtml(text) {
 }
 function saveOrg() { try { sessionStorage.setItem('orgFilter', JSON.stringify(state.org)); } catch (e) {} }
 
-// список отделов: после выбора объекта — только отделы этого объекта
-function orgDeptOptions(objectName = state.org.object) {
+// список отделов: после выбора объекта(-ов) — только отделы этих объектов.
+// objectNames может быть массивом (мульти-выбор) или одной строкой (вызов из модалки экспорта).
+function orgDeptOptions(objectNames = state.org.object) {
   const meta = state.meta || {};
-  if (objectName && (meta.pairs || []).length) {
-    return [...new Set(meta.pairs.filter(p => p.object === objectName && p.department).map(p => p.department))]
+  const names = Array.isArray(objectNames) ? objectNames.filter(Boolean) : (objectNames ? [objectNames] : []);
+  if (names.length && (meta.pairs || []).length) {
+    return [...new Set(meta.pairs.filter(p => names.includes(p.object) && p.department).map(p => p.department))]
       .sort((a, b) => a.localeCompare(b, 'ru'));
   }
   return meta.departments || [];
 }
 
+// Какой чекбокс-дропдаун фильтра сейчас открыт («object» / «department» / null) —
+// общий на весь единый фильтр «Объект/Отдел» вверху страницы.
+let orgDropdownOpen = null;
+function toggleOrgDropdown(field) {
+  orgDropdownOpen = orgDropdownOpen === field ? null : field;
+  renderOrgBar();
+}
+function closeOrgDropdown() {
+  if (orgDropdownOpen) { orgDropdownOpen = null; renderOrgBar(); }
+}
+document.addEventListener('click', (e) => {
+  const bar = document.getElementById('orgBar');
+  if (orgDropdownOpen && bar && !bar.contains(e.target)) closeOrgDropdown();
+});
+
+function onOrgCheckChange(field, value, checked) {
+  const set = new Set(state.org[field]);
+  if (checked) set.add(value); else set.delete(value);
+  state.org[field] = [...set];
+  if (field === 'object') {
+    // если после смены выбора объектов какой-то из выбранных отделов больше не
+    // относится ни к одному из них — убираем его, чтобы фильтр не «завис»
+    const validDeps = orgDeptOptions(state.org.object);
+    state.org.department = state.org.department.filter(d => validDeps.includes(d));
+  }
+  saveOrg();
+  renderOrgBar();
+  loadTabContent();
+}
+function clearOrgField(field) {
+  state.org[field] = [];
+  saveOrg();
+  renderOrgBar();
+  loadTabContent();
+}
+
+// Чекбокс-дропдаун с мульти-выбором для одного поля («object» или «department»)
+function orgCheckDropdownHtml(field, allLabel, options) {
+  const selected = state.org[field];
+  const btnText = !selected.length ? allLabel
+    : selected.length === 1 ? selected[0]
+    : `${allLabel}: ${selected.length}`;
+  const cls = 'border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white max-w-[16rem] truncate flex items-center gap-1';
+  const rows = options.length
+    ? options.map(v => `
+        <label class="flex items-center gap-2 px-2 py-1.5 text-sm hover:bg-slate-50 rounded cursor-pointer">
+          <input type="checkbox" class="rounded text-blue-600" value="${esc(v)}" ${selected.includes(v) ? 'checked' : ''} onchange="onOrgCheckChange('${field}', this.value, this.checked)">
+          <span class="truncate">${esc(v)}</span>
+        </label>`).join('')
+    : `<div class="px-2 py-2 text-xs text-slate-400">${_L('нет данных', 'деректер жоқ')}</div>`;
+  return `
+    <div class="relative">
+      <button type="button" onclick="event.stopPropagation(); toggleOrgDropdown('${field}')" class="${cls} ${selected.length ? 'border-blue-300 text-blue-700 bg-blue-50' : ''}">
+        <span class="truncate">${esc(btnText)}</span><span class="text-slate-400">▾</span>
+      </button>
+      ${orgDropdownOpen === field ? `
+        <div class="absolute z-30 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg min-w-[14rem] max-h-64 overflow-y-auto p-1" onclick="event.stopPropagation()">
+          ${selected.length ? `<button type="button" onclick="clearOrgField('${field}')" class="w-full text-left px-2 py-1.5 text-xs font-semibold text-blue-700 hover:underline">✕ ${_L('Очистить', 'Тазарту')}</button>` : ''}
+          ${rows}
+        </div>` : ''}
+    </div>`;
+}
+
 function orgBarInner() {
   const objs = (state.meta && state.meta.objects) || [];
   let deps = orgDeptOptions();
-  if (state.org.department && !deps.includes(state.org.department)) deps = [state.org.department, ...deps];
-  const cls = 'border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white max-w-[16rem]';
-  const opts = (list, cur) => list.map(v => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(v)}</option>`).join('');
+  deps = [...new Set([...deps, ...state.org.department])];
   return `
     <span class="text-xs font-bold uppercase tracking-wide ${orgActive() ? 'text-blue-700' : 'text-slate-500'}">🏢 ${_L('Фильтр', 'Сүзгі')}</span>
-    <select id="orgObject" onchange="onOrgChange()" class="${cls}">
-      <option value="">${t('all_objects')}</option>${opts(objs, state.org.object)}
-    </select>
-    <select id="orgDept" onchange="onOrgChange()" class="${cls}">
-      <option value="">${t('all_departments')}</option>${opts(deps, state.org.department)}
-    </select>
+    ${orgCheckDropdownHtml('object', t('all_objects'), objs)}
+    ${orgCheckDropdownHtml('department', t('all_departments'), deps)}
     ${orgActive() ? `<button type="button" onclick="resetOrg()" class="text-xs font-semibold text-blue-700 hover:underline">✕ ${_L('Сбросить', 'Тазарту')}</button>` : ''}
-    <span class="text-[11px] text-slate-400 hidden md:inline">${_L('действует на всех вкладках', 'барлық беттерде жұмыс істейді')}</span>`;
+    <span class="text-[11px] text-slate-400 hidden md:inline">${_L('действует на всех вкладках · можно выбрать несколько', 'барлық беттерде жұмыс істейді · бірнешеуін таңдауға болады')}</span>`;
 }
 function orgBarHtml() {
   return `<div id="orgBar" class="flex flex-wrap items-center gap-2 mb-4 px-4 py-2.5 rounded-xl border shadow-sm ${orgActive() ? 'bg-blue-50 border-blue-200' : 'bg-white border-slate-200'}">${orgBarInner()}</div>`;
@@ -717,10 +790,12 @@ async function refreshOrgMeta() {
     const meta = await api.getUsersMeta();
     state.meta = { objects: meta.objects || [], departments: meta.departments || [], pairs: meta.pairs || [] };
     state.metaLoaded = true;
-    // сохранённый выбор мог исчезнуть (сотрудников объекта/отдела удалили) — тогда сбрасываем его
+    // выбранные ранее объекты/отделы могли исчезнуть (сотрудников удалили) — убираем их из фильтра
     let reset = false;
-    if (state.org.object && !state.meta.objects.includes(state.org.object)) { state.org.object = ''; reset = true; }
-    if (state.org.department && !state.meta.departments.includes(state.org.department)) { state.org.department = ''; reset = true; }
+    const validObjects = state.org.object.filter(o => state.meta.objects.includes(o));
+    if (validObjects.length !== state.org.object.length) { state.org.object = validObjects; reset = true; }
+    const validDeps = state.org.department.filter(d => state.meta.departments.includes(d));
+    if (validDeps.length !== state.org.department.length) { state.org.department = validDeps; reset = true; }
     if (reset) saveOrg();
     renderOrgBar();
     if (reset) loadTabContent();
@@ -739,19 +814,9 @@ async function loadDictionaries(force = false) {
   return state.dictionaries;
 }
 
-function onOrgChange() {
-  const o = document.getElementById('orgObject').value;
-  let d = document.getElementById('orgDept').value;
-  const objectChanged = o !== state.org.object;
-  state.org.object = o;
-  if (objectChanged && d && !orgDeptOptions(o).includes(d)) d = '';
-  state.org.department = d;
-  saveOrg();
-  renderOrgBar();
-  loadTabContent();          // перерисовываем только содержимое вкладки — строка фильтра остаётся
-}
 function resetOrg() {
-  state.org = { object: '', department: '' };
+  state.org = { object: [], department: [] };
+  orgDropdownOpen = null;
   saveOrg();
   renderOrgBar();
   loadTabContent();
@@ -885,6 +950,8 @@ function renderMain(app) {
 
 function setTab(tname) {
   state.tab = tname;
+  bulkSelectedUserIds.clear();
+  usersFilterDropdownOpen = null;
   render();
 }
 
@@ -988,14 +1055,17 @@ async function loadTabContent() {
         </div>
         ${isAdminsTab ? `<p class="text-xs text-slate-500 mb-4">${_L('Администраторы управляют системой. Они не входят в список сотрудников, статистику, назначения, протоколы и экспорт.', 'Әкімшілер жүйені басқарады. Олар қызметкерлер тізіміне, статистикаға, тағайындауларға, хаттамаларға және экспортқа кірмейді.')}</p>` : ''}
         ${isArchiveTab ? `<p class="text-xs text-slate-500 mb-4">${_L('Уволенные и сотрудники в декретном отпуске. Они не входят в общий список сотрудников и статистику (в т.ч. на главной странице), но их история обучения, протоколы и сертификаты сохраняются. Кнопка «Восстановить» возвращает сотрудника в штат.', 'Жұмыстан босатылған және декреттегі қызметкерлер. Олар жалпы тізімге және статистикаға кірмейді, бірақ оқу тарихы, хаттамалары мен сертификаттары сақталады.')}</p>` : ''}
-        <div class="flex flex-wrap gap-2 mb-4">
+        <div class="flex flex-wrap items-center gap-2 mb-4">
           <input id="uFilterQ" type="text" placeholder="${t('search_placeholder')}" value="${esc(state.usersFilter.q)}" oninput="onUsersFilterChange()" class="flex-1 min-w-[200px] border border-slate-300 rounded-lg px-3 py-2 text-sm">
-          
+          ${!isAdminsTab ? usersFilterDropdownHtml('positions', _L('Все должности', 'Барлық лауазымдар'), (state.dictionaries.positions || []).map(p => p.ru), posLabel) : ''}
+          ${isArchiveTab ? usersFilterDropdownHtml('statuses', _L('Все статусы', 'Барлық мәртебелер'), ['fired', 'maternity'], v => v === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В декрете', 'Декретте')) : ''}
+          ${!isAdminsTab && !isArchiveTab ? `<button type="button" id="bulkAssignBtn" onclick="openAssignModal(null, [...bulkSelectedUserIds])" class="hidden px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg whitespace-nowrap">${_L('Назначить выбранным', 'Таңдалғандарға тағайындау')} (<span id="bulkAssignCount">0</span>)</button>` : ''}
         </div>
         <div class="overflow-x-auto">
           <table class="min-w-full divide-y divide-slate-200 text-sm">
             <thead class="bg-slate-50">
               <tr>
+                ${!isAdminsTab && !isArchiveTab ? `<th class="px-4 py-3 text-left w-8"><input type="checkbox" id="uSelectAll" onchange="toggleBulkSelectAll(this.checked)" class="rounded text-blue-600"></th>` : ''}
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">ФИО</th>
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">Логин</th>
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">Объект / Отдел</th>
@@ -1004,7 +1074,7 @@ async function loadTabContent() {
                 <th class="px-4 py-3 text-right font-semibold text-slate-600">${t('actions')}</th>
               </tr>
             </thead>
-            <tbody id="usersTable" class="divide-y divide-slate-100"><tr><td colspan="6" class="p-4 text-center text-slate-400">Загрузка...</td></tr></tbody>
+            <tbody id="usersTable" class="divide-y divide-slate-100"><tr><td colspan="${!isAdminsTab && !isArchiveTab ? 7 : 6}" class="p-4 text-center text-slate-400">Загрузка...</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -1083,6 +1153,9 @@ async function loadTabContent() {
         </div>
       </div>
     `;
+    if (!state.dictionariesLoaded) {
+      loadDictionaries().then(() => { if (state.tab === 'users' || state.tab === 'admins' || state.tab === 'archive') loadTabContent(); });
+    }
     loadUsersList();
   }
 
@@ -1733,7 +1806,9 @@ async function openExportModal() {
   const cls = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white';
   const lbl = 'block text-xs font-semibold text-slate-600 mb-1';
   const opts = (list, cur) => list.map(v => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(v)}</option>`).join('');
-  let deps = orgDeptOptions(state.org.object);
+  const exOrgObjectDefault = state.org.object.length === 1 ? state.org.object[0] : '';
+  const exOrgDeptDefault = state.org.department.length === 1 ? state.org.department[0] : '';
+  let deps = orgDeptOptions(exOrgObjectDefault);
   m.innerHTML = `
     <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
       <div class="flex justify-between items-start mb-1">
@@ -1745,9 +1820,9 @@ async function openExportModal() {
       <div class="text-[11px] font-bold text-slate-400 uppercase mb-2">${_L('Что выгрузить', 'Не жүктеу')}</div>
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
         <div><label class="${lbl}">${_L('Объект', 'Объект')}</label>
-          <select id="exObject" onchange="onExportObjectChange()" class="${cls}"><option value="">${t('all_objects')}</option>${opts(state.meta.objects || [], state.org.object)}</select></div>
+          <select id="exObject" onchange="onExportObjectChange()" class="${cls}"><option value="">${t('all_objects')}</option>${opts(state.meta.objects || [], exOrgObjectDefault)}</select></div>
         <div><label class="${lbl}">${_L('Отдел', 'Бөлім')}</label>
-          <select id="exDept" class="${cls}"><option value="">${t('all_departments')}</option>${opts(deps, state.org.department)}</select></div>
+          <select id="exDept" class="${cls}"><option value="">${t('all_departments')}</option>${opts(deps, exOrgDeptDefault)}</select></div>
         <div><label class="${lbl}">${_L('Курс', 'Курс')}</label>
           <select id="exCourse" class="${cls}"><option value="">${_L('Все курсы', 'Барлық курстар')}</option>
             ${(state.courses || []).map(c => `<option value="${c.id}">${esc(courseTitleOf(c))}</option>`).join('')}</select></div>
@@ -2197,6 +2272,85 @@ function onUsersFilterChange() {
   usersFilterTimeout = setTimeout(loadUsersList, 250);
 }
 
+// --- Чекбокс-дропдауны фильтра «Должность» / «Статус» на вкладке «Сотрудники» / «Архив» ---
+let usersFilterDropdownOpen = null; // 'positions' | 'statuses' | null
+function toggleUsersFilterDropdown(field) {
+  usersFilterDropdownOpen = usersFilterDropdownOpen === field ? null : field;
+  loadTabContent();
+}
+document.addEventListener('click', (e) => {
+  if (usersFilterDropdownOpen && !e.target.closest(`#uFilterDropdown_${usersFilterDropdownOpen}`)) {
+    usersFilterDropdownOpen = null;
+    if (state.tab === 'users' || state.tab === 'admins' || state.tab === 'archive') loadTabContent();
+  }
+});
+function onUsersFilterCheckChange(field, value, checked) {
+  const set = new Set(state.usersFilter[field]);
+  if (checked) set.add(value); else set.delete(value);
+  state.usersFilter[field] = [...set];
+  loadUsersList();
+}
+function clearUsersFilterField(field) {
+  state.usersFilter[field] = [];
+  loadUsersList();
+}
+// options — либо список строк, либо список значений с функцией labelFn для отображаемого текста
+function usersFilterDropdownHtml(field, allLabel, options, labelFn) {
+  const selected = state.usersFilter[field] || [];
+  const label = v => (labelFn ? labelFn(v) : v);
+  const btnText = !selected.length ? allLabel
+    : selected.length === 1 ? label(selected[0])
+    : `${allLabel}: ${selected.length}`;
+  const rows = options.length
+    ? options.map(v => `
+        <label class="flex items-center gap-2 px-2 py-1.5 text-sm hover:bg-slate-50 rounded cursor-pointer">
+          <input type="checkbox" class="rounded text-blue-600" value="${esc(v)}" ${selected.includes(v) ? 'checked' : ''} onchange="onUsersFilterCheckChange('${field}', this.value, this.checked)">
+          <span class="truncate">${esc(label(v))}</span>
+        </label>`).join('')
+    : `<div class="px-2 py-2 text-xs text-slate-400">${_L('нет данных', 'деректер жоқ')}</div>`;
+  return `
+    <div class="relative" id="uFilterDropdown_${field}">
+      <button type="button" onclick="event.stopPropagation(); toggleUsersFilterDropdown('${field}')" class="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white max-w-[14rem] truncate flex items-center gap-1 ${selected.length ? 'border-blue-300 text-blue-700 bg-blue-50' : ''}">
+        <span class="truncate">${esc(btnText)}</span><span class="text-slate-400">▾</span>
+      </button>
+      ${usersFilterDropdownOpen === field ? `
+        <div class="absolute z-30 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg min-w-[13rem] max-h-64 overflow-y-auto p-1" onclick="event.stopPropagation()">
+          ${selected.length ? `<button type="button" onclick="clearUsersFilterField('${field}')" class="w-full text-left px-2 py-1.5 text-xs font-semibold text-blue-700 hover:underline">✕ ${_L('Очистить', 'Тазарту')}</button>` : ''}
+          ${rows}
+        </div>` : ''}
+    </div>`;
+}
+
+// --- Массовое назначение курса: выбор сотрудников чекбоксами прямо в таблице «Сотрудники» ---
+const bulkSelectedUserIds = new Set();
+function updateBulkAssignButton() {
+  const btn = document.getElementById('bulkAssignBtn');
+  if (!btn) return;
+  const count = bulkSelectedUserIds.size;
+  const countEl = document.getElementById('bulkAssignCount');
+  if (countEl) countEl.textContent = String(count);
+  btn.classList.toggle('hidden', count === 0);
+  const selectAll = document.getElementById('uSelectAll');
+  if (selectAll) {
+    const visibleIds = (state.users || []).map(u => u.id);
+    selectAll.checked = visibleIds.length > 0 && visibleIds.every(id => bulkSelectedUserIds.has(id));
+  }
+}
+function toggleBulkSelect(id, checked) {
+  if (checked) bulkSelectedUserIds.add(id); else bulkSelectedUserIds.delete(id);
+  updateBulkAssignButton();
+}
+function toggleBulkSelectAll(checked) {
+  (state.users || []).forEach(u => {
+    if (checked) bulkSelectedUserIds.add(u.id); else bulkSelectedUserIds.delete(u.id);
+  });
+  // перерисовываем чекбоксы строк, не перезагружая список с сервера
+  document.querySelectorAll('#usersTable input[type="checkbox"][data-uid]').forEach(cb => {
+    cb.checked = bulkSelectedUserIds.has(Number(cb.dataset.uid));
+  });
+  updateBulkAssignButton();
+}
+
 // Список объектов/отделов в общей строке фильтра обновляем при каждой загрузке списка сотрудников
 // (после добавления/импорта/удаления могли появиться новые объекты и отделы).
 function populateUsersMetaFilters() { refreshOrgMeta(); }
@@ -2210,23 +2364,29 @@ async function loadUsersList() {
     users = await api.getUsers({
       q: state.usersFilter.q,
       ...(isAdminsTab ? { role: 'admin' } : orgParams()),
-      status: isArchiveTab ? 'archive' : 'active'
+      status: isArchiveTab ? 'archive' : 'active',
+      ...(state.usersFilter.positions.length ? { position: state.usersFilter.positions.join(',') } : {}),
+      ...(isArchiveTab && state.usersFilter.statuses.length ? { statuses: state.usersFilter.statuses.join(',') } : {})
     });
   } catch (e) {
-    if (tbody) tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-red-600">${t('error_generic')}${e && e.message ? ': ' + esc(e.message) : ''}</td></tr>`;
+    if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="p-4 text-center text-red-600">${t('error_generic')}${e && e.message ? ': ' + esc(e.message) : ''}</td></tr>`;
     return;
   }
   state.users = users.filter(u => u.role !== "superadmin");
   if (!tbody) return;
-  if (!state.users.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-slate-400">${t('no_data')}</td></tr>`;
-    return;
-  }
   const isArchiveTab = state.tab === 'archive';
   const isAdminsTab = state.tab === 'admins';
+  const showCheckbox = !isAdminsTab && !isArchiveTab;
+  const colspan = showCheckbox ? 7 : 6;
+  if (!state.users.length) {
+    tbody.innerHTML = `<tr><td colspan="${colspan}" class="p-4 text-center text-slate-400">${t('no_data')}</td></tr>`;
+    updateBulkAssignButton();
+    return;
+  }
   const statusLabel = s => s === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В декрете', 'Декретте');
   tbody.innerHTML = state.users.map(u => `
     <tr class="hover:bg-slate-50">
+      ${showCheckbox ? `<td class="px-4 py-3"><input type="checkbox" data-uid="${u.id}" ${bulkSelectedUserIds.has(u.id) ? 'checked' : ''} onchange="toggleBulkSelect(${u.id}, this.checked)" class="rounded text-blue-600"></td>` : ''}
       <td class="px-4 py-3 font-medium text-slate-900">
         ${u.role === 'admin' ? `${esc(u.last_name)} ${esc(u.first_name)}` : `<button onclick="openUserProfile(${u.id})" class="hover:text-blue-600 hover:underline text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>`}
       </td>
@@ -2254,6 +2414,11 @@ async function loadUsersList() {
     </tr>
   `).join('');
   populateUsersMetaFilters();
+  if (showCheckbox) {
+    // выбор мог включать сотрудников, которых больше нет в текущей отфильтрованной выборке —
+    // это нормально (их выбор просто не виден, пока фильтр не сброшен), поэтому Set не чистим
+    updateBulkAssignButton();
+  }
 }
 
 // --- Кадровый статус: уволен / в декрете / вернуть в штат (вкладки "Сотрудники" ⇄ "Архив") ---
