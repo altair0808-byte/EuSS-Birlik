@@ -643,16 +643,20 @@ router.get('/excel', authRequired, requireRole('admin', 'superadmin'), async (re
 // Формирует Excel-файл для рассылки руководителю подразделения: обращение с ссылкой
 // на портал, таблица «Сотрудник / Логин / Пароль» и напоминание сдать удостоверение.
 //
-// Пароли сотрудников хранятся только в виде bcrypt-хэша (посмотреть существующий
-// пароль невозможно), поэтому: сотрудникам без логина логин и пароль присваиваются
-// здесь же; у сотрудников, где логин уже есть, пароль по умолчанию перевыпускается
-// (reset_passwords=false в теле запроса — не трогать пароль тем, у кого он уже есть,
-// тогда в файле у них будет отметка «не изменялся»).
+// Правило (с 25.09.2026): пароль сотрудника ВСЕГДА равен его логину — ничего отдельно
+// не придумывается и не генерируется. Это не «слабый пароль», а сознательное решение:
+// пароли всё равно хранятся только в виде bcrypt-хэша и однажды выданный случайный
+// пароль нельзя ни посмотреть повторно, ни распечатать в следующем уведомлении —
+// а логин пароль=логин можно пересобрать в любой момент, ничего не «сбрасывая».
+// При каждом формировании уведомления хэш пароля сотрудника (пере)записывается как
+// bcrypt(логин), так что в файле пароль и логин гарантированно совпадают.
+//
+// Если у сотрудника вообще нет логина — ему присваивается новый (свободный табельный
+// номер), и такой сотрудник дополнительно попадает в список missing (в заголовке
+// ответа X-Credentials-Missing), чтобы админ был уведомлён, у кого логин/пароль
+// не были указаны и были созданы заново.
 function genCredentialLogin() {
   return String(Math.floor(100000 + Math.random() * 900000)); // 6-значный табельный номер
-}
-function genCredentialPassword() {
-  return Math.random().toString(36).slice(-8);
 }
 
 router.post('/credentials-notice', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
@@ -661,11 +665,10 @@ router.post('/credentials-notice', authRequired, requireRole('admin', 'superadmi
       ? [...new Set(req.body.user_ids.map(Number).filter(n => Number.isFinite(n) && n > 0))]
       : [];
     if (!ids.length) return res.status(400).json({ error: 'no_users', message: 'Не выбрано ни одного сотрудника' });
-    const resetPasswords = req.body.reset_passwords !== false;
     const portalUrl = String(req.body.portal_url || `${req.protocol}://${req.get('host')}`).trim();
 
     const usersRes = await query(
-      `SELECT id, last_name, first_name, department, position, login, password_hash
+      `SELECT id, last_name, first_name, department, position, login
        FROM users WHERE id = ANY($1::bigint[]) AND role = 'employee'
        ORDER BY last_name, first_name`,
       [ids]
@@ -673,34 +676,27 @@ router.post('/credentials-notice', authRequired, requireRole('admin', 'superadmi
     if (!usersRes.rows.length) return res.status(404).json({ error: 'not_found', message: 'Сотрудники не найдены' });
 
     const rows = [];
+    const missing = []; // ФИО тех, у кого логина не было — для уведомления админа
     for (const u of usersRes.rows) {
       let login = u.login;
-      let plainPassword = null;
-      let needsUpdate = false;
-
       if (!login) {
         // подбираем свободный логин (табельный номер)
         do {
           login = genCredentialLogin();
           // eslint-disable-next-line no-await-in-loop
         } while ((await query('SELECT 1 FROM users WHERE login = $1', [login])).rows.length);
-        needsUpdate = true;
+        missing.push(`${u.last_name} ${u.first_name}`);
       }
-      if (!u.password_hash || resetPasswords) {
-        plainPassword = genCredentialPassword();
-        needsUpdate = true;
-      }
-      if (needsUpdate) {
-        const hash = plainPassword ? bcrypt.hashSync(plainPassword, 10) : u.password_hash;
-        // eslint-disable-next-line no-await-in-loop
-        await query('UPDATE users SET login = $1, password_hash = $2 WHERE id = $3', [login, hash, u.id]);
-      }
+      // Пароль всегда = логину — перезаписываем хэш при каждом формировании уведомления.
+      const hash = bcrypt.hashSync(String(login), 10);
+      // eslint-disable-next-line no-await-in-loop
+      await query('UPDATE users SET login = $1, password_hash = $2 WHERE id = $3', [login, hash, u.id]);
       rows.push({
         fio: `${u.last_name} ${u.first_name}`,
         department: u.department || '',
         position: u.position || '',
         login,
-        password: plainPassword || '— (не изменялся)'
+        password: login
       });
     }
 
@@ -709,41 +705,67 @@ router.post('/credentials-notice', authRequired, requireRole('admin', 'superadmi
     wb.created = new Date();
     const ws = wb.addWorksheet('Уведомление', {
       properties: { tabColor: { argb: C.navy } },
-      views: [{ showGridLines: false }]
+      views: [{ showGridLines: false, state: 'frozen', ySplit: 7 }],
+      pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
     });
-    ws.getColumn(1).width = 6;
-    ws.getColumn(2).width = 34;
+    ws.getColumn(1).width = 5;
+    ws.getColumn(2).width = 30;
     ws.getColumn(3).width = 22;
-    ws.getColumn(4).width = 22;
+    ws.getColumn(4).width = 20;
+    ws.getColumn(5).width = 18;
+    ws.getColumn(6).width = 18;
 
     let r = 1;
-    ws.mergeCells(`A${r}:D${r}`);
+    // Тонкая цветная плашка сверху для аккуратности
+    ws.mergeCells(`A${r}:F${r}`);
+    ws.getRow(r).height = 6;
+    ws.getCell(`A${r}`).fill = solid(C.blueMid);
+    r++;
+
+    ws.mergeCells(`A${r}:F${r}`);
     const title = ws.getCell(`A${r}`);
-    title.value = 'Уведомление о прохождении обучения по БиОТ';
-    title.font = { name: 'Calibri', size: 15, bold: true, color: { argb: C.white } };
+    title.value = '🛡️  Уведомление о прохождении обучения по БиОТ';
+    title.font = { name: 'Calibri', size: 16, bold: true, color: { argb: C.white } };
     title.fill = solid(C.navy);
     title.alignment = { vertical: 'middle', horizontal: 'left', indent: 1, wrapText: true };
-    ws.getRow(r).height = 30;
+    ws.getRow(r).height = 34;
+    r++;
+
+    ws.mergeCells(`A${r}:F${r}`);
+    const dateCell = ws.getCell(`A${r}`);
+    dateCell.value = 'Дата формирования: ' + fmtDay(toDay(new Date()));
+    dateCell.font = { name: 'Calibri', size: 9, italic: true, color: { argb: C.white } };
+    dateCell.fill = solid(C.navy);
+    dateCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+    ws.getRow(r).height = 16;
     r += 2;
 
-    ws.mergeCells(`A${r}:D${r}`);
+    ws.mergeCells(`A${r}:F${r}`);
     const intro = ws.getCell(`A${r}`);
     intro.value = 'Просим Вас довести до сведения сотрудников подразделения необходимость прохождения '
       + 'обучения и тестирования по БиОТ на портале:';
     intro.font = { name: 'Calibri', size: 11, color: { argb: C.text } };
     intro.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true, indent: 1 };
-    ws.getRow(r).height = 40;
+    ws.getRow(r).height = 36;
     r++;
 
-    ws.mergeCells(`A${r}:D${r}`);
+    ws.mergeCells(`A${r}:F${r}`);
     const link = ws.getCell(`A${r}`);
-    link.value = { text: 'ТБ / БиОТ — Обучение и тестирование', hyperlink: portalUrl };
+    link.value = { text: '🔗  ТБ / БиОТ — Обучение и тестирование', hyperlink: portalUrl };
     link.font = { name: 'Calibri', size: 12, bold: true, underline: true, color: { argb: 'FF1155CC' } };
     link.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
-    ws.getRow(r).height = 22;
-    r += 2;
+    ws.getRow(r).height = 24;
+    r++;
 
-    ['№', 'Сотрудник', 'Логин', 'Пароль'].forEach((h, i) => {
+    ws.mergeCells(`A${r}:F${r}`);
+    const note = ws.getCell(`A${r}`);
+    note.value = 'ℹ️  Пароль каждого сотрудника совпадает с его логином (см. столбцы ниже) — вводить нужно оба значения одинаково.';
+    note.font = { name: 'Calibri', size: 9, italic: true, color: { argb: C.muted } };
+    note.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true, indent: 1 };
+    ws.getRow(r).height = 18;
+    r++;
+
+    ['№', 'Сотрудник', 'Отдел', 'Должность', 'Логин', 'Пароль'].forEach((h, i) => {
       const c = ws.getCell(r, i + 1);
       c.value = h;
       c.font = { name: 'Calibri', size: 10, bold: true, color: { argb: C.white } };
@@ -751,36 +773,58 @@ router.post('/credentials-notice', authRequired, requireRole('admin', 'superadmi
       c.alignment = { vertical: 'middle', horizontal: 'center' };
       c.border = { top: thin(C.white), left: thin(C.white), bottom: thin(C.white), right: thin(C.white) };
     });
-    ws.getRow(r).height = 22;
+    ws.getRow(r).height = 24;
     r++;
 
     rows.forEach((row, idx) => {
       const rr = ws.getRow(r);
-      rr.height = 20;
-      [idx + 1, row.fio, row.login, row.password].forEach((v, i) => {
+      rr.height = 21;
+      const isMissing = missing.includes(row.fio);
+      [idx + 1, row.fio, row.department, row.position, row.login, row.password].forEach((v, i) => {
         const c = rr.getCell(i + 1);
         c.value = v;
-        c.font = { name: 'Calibri', size: 10, color: { argb: C.text }, bold: i === 1 };
-        c.alignment = { vertical: 'middle', horizontal: i === 0 ? 'center' : i === 1 ? 'left' : 'center', indent: i === 1 ? 1 : 0 };
+        c.font = { name: 'Calibri', size: 10, color: { argb: C.text }, bold: i === 1 || i === 4 || i === 5 };
+        c.alignment = { vertical: 'middle', horizontal: i === 0 ? 'center' : (i === 1 || i === 2 || i === 3) ? 'left' : 'center', indent: (i === 1 || i === 2 || i === 3) ? 1 : 0 };
         c.border = gridBorder;
-        if (idx % 2 === 1) c.fill = solid(C.zebra);
+        if (i === 4 || i === 5) c.fill = solid('FFEFF9F0'); // логин/пароль слегка подсвечены
+        else if (idx % 2 === 1) c.fill = solid(C.zebra);
       });
+      if (isMissing) {
+        // помечаем строку сотрудника, которому логин/пароль присвоены заново
+        rr.getCell(2).note = 'Логин/пароль не были указаны — созданы заново при формировании этого уведомления.';
+      }
       r++;
     });
     r++;
 
-    ws.mergeCells(`A${r}:D${r}`);
+    if (missing.length) {
+      ws.mergeCells(`A${r}:F${r}`);
+      const warn = ws.getCell(`A${r}`);
+      warn.value = `⚠️  У ${missing.length} сотрудник(ов) логин/пароль не были указаны в системе — созданы заново: ${missing.join(', ')}.`;
+      warn.font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: 'FF9C5700' } };
+      warn.fill = solid('FFFFF3D6');
+      warn.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true, indent: 1 };
+      ws.getRow(r).height = Math.max(18, Math.ceil(missing.join(', ').length / 90) * 14 + 10);
+      r += 2;
+    }
+
+    ws.mergeCells(`A${r}:F${r}`);
     const outro = ws.getCell(`A${r}`);
     outro.value = 'После успешной сдачи тестирования сотруднику необходимо направить удостоверение по БиОТ '
       + 'в отдел ТБ административного здания для подписания.';
     outro.font = { name: 'Calibri', size: 10, italic: true, color: { argb: C.muted } };
     outro.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true, indent: 1 };
-    ws.getRow(r).height = 40;
+    ws.getRow(r).height = 36;
 
     const stamp = fmtDay(toDay(new Date())).split('.').reverse().join('-');
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition',
       `attachment; filename="credentials_${stamp}.xlsx"; filename*=UTF-8''${encodeURIComponent('Уведомление_о_обучении_' + stamp + '.xlsx')}`);
+    // Список сотрудников, кому логин/пароль присвоены заново — фронтенд читает этот
+    // заголовок и показывает всплывающее уведомление админу (base64, т.к. заголовки
+    // не поддерживают произвольную кириллицу без кодирования).
+    res.setHeader('X-Credentials-Missing', Buffer.from(JSON.stringify(missing), 'utf8').toString('base64'));
+    res.setHeader('Access-Control-Expose-Headers', 'X-Credentials-Missing, Content-Disposition');
     await wb.xlsx.write(res);
     res.end();
   } catch (e) {

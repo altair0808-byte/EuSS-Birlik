@@ -92,13 +92,33 @@ router.put('/', authRequired, requireRole('superadmin'), async (req, res) => {
 // Справочники «Отдел» / «Должность» (п.1 запроса) — единые списки для выпадающих
 // списков в карточке сотрудника, чтобы избежать разнобоя в написании (не «Инженер»,
 // «инженер», «Инженер ТБ» и т.п. вперемешку).
+// «Должность» — двуязычный справочник: каждая запись хранится как {ru, kz}. В самой
+// карточке сотрудника по-прежнему хранится ОДНО (русское) значение position — это
+// «канонический» текст, который используется в фильтрах, экспорте и т.п. Казахский
+// вариант — только для отображения интерфейса на казахском (сопоставление по ru,
+// см. posLabel() на фронтенде): вторая колонка сотрудникам не добавлялась специально,
+// чтобы не переделывать все места, где используется user.position.
+function normalizePositions(arr) {
+  if (!Array.isArray(arr)) return undefined;
+  const seen = new Map();
+  arr.forEach(v => {
+    // поддержка и старого формата (просто строка), и нового ({ru, kz})
+    const ru = String((typeof v === 'string' ? v : (v && v.ru)) || '').trim();
+    const kz = String((v && typeof v === 'object' ? v.kz : '') || '').trim();
+    if (!ru) return;
+    const prev = seen.get(ru);
+    seen.set(ru, { ru, kz: kz || (prev ? prev.kz : '') });
+  });
+  return [...seen.values()].sort((a, b) => a.ru.localeCompare(b.ru, 'ru'));
+}
+
 router.get('/dictionaries', authRequired, async (req, res) => {
   try {
     const result = await query('SELECT departments_list, positions_list FROM settings WHERE id = 1');
     const row = result.rows[0] || {};
     res.json({
       departments: Array.isArray(row.departments_list) ? row.departments_list : [],
-      positions: Array.isArray(row.positions_list) ? row.positions_list : []
+      positions: normalizePositions(row.positions_list) || []
     });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
@@ -109,11 +129,11 @@ router.get('/dictionaries', authRequired, async (req, res) => {
 // происходит на фронтенде, сюда отправляется итоговый список). Значения очищаются
 // от пустых строк и дублей и сортируются по алфавиту.
 router.put('/dictionaries', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const clean = arr => Array.isArray(arr)
+  const cleanDepartments = arr => Array.isArray(arr)
     ? [...new Set(arr.map(v => String(v || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru'))
     : undefined;
-  const departments = clean(req.body.departments);
-  const positions = clean(req.body.positions);
+  const departments = cleanDepartments(req.body.departments);
+  const positions = normalizePositions(req.body.positions);
   try {
     const result = await query(
       `UPDATE settings SET
@@ -124,7 +144,7 @@ router.put('/dictionaries', authRequired, requireRole('admin', 'superadmin'), as
       [departments ? JSON.stringify(departments) : null, positions ? JSON.stringify(positions) : null]
     );
     const row = result.rows[0] || {};
-    res.json({ departments: row.departments_list || [], positions: row.positions_list || [] });
+    res.json({ departments: row.departments_list || [], positions: normalizePositions(row.positions_list) || [] });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }
