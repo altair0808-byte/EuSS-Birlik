@@ -491,6 +491,7 @@ const api = {
   getAssignmentAnswers(id) { return this.req('/api/assignments/' + id + '/answers'); },
   // Протоколы (открытие/закрытие, п.1 и п.4)
   getProtocols(filter = {}) { return this.req('/api/protocols' + qs(filter)); },
+  getProtocolMembers(id) { return this.req('/api/protocols/' + id + '/members'); },
   getActiveProtocols() { return this.req('/api/protocols/active'); },
   getNextProtocolNumber(year) { return this.req('/api/protocols/next-number' + qs({ year })); },
   openProtocol(data) { return this.req('/api/protocols', { method: 'POST', body: data }); },
@@ -1403,6 +1404,15 @@ async function loadTabContent() {
               <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить</button>
             </div>
           </form>
+        </div>
+      </div>
+      <div id="protocolMembersModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[85vh] overflow-y-auto">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="text-lg font-bold" id="protocolMembersTitle">Протокол</h3>
+            <button type="button" onclick="document.getElementById('protocolMembersModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
+          </div>
+          <div id="protocolMembersBody"><div class="text-slate-400 text-sm">${t('loading')}</div></div>
         </div>
       </div>
     `;
@@ -3711,7 +3721,7 @@ function renderProtocolsView() {
     const isActiveNow = p.status === 'open' && String(p.open_date).slice(0,10) <= todayStr && todayStr <= String(p.close_date).slice(0,10);
     return `
     <tr class="hover:bg-slate-50">
-      <td class="px-4 py-3 font-bold text-slate-900">№ ${esc(p.protocol_number)}</td>
+      <td class="px-4 py-3 font-bold text-slate-900"><button type="button" onclick="openProtocolMembersModal(${p.id})" class="hover:text-blue-600 hover:underline">№ ${esc(p.protocol_number)}</button></td>
       <td class="px-4 py-3 text-slate-600">${fmtDate(p.open_date)}</td>
       <td class="px-4 py-3 text-slate-600">${fmtDate(p.close_date)}</td>
       <td class="px-4 py-3">
@@ -3731,6 +3741,54 @@ function renderProtocolsView() {
     </tr>
   `;
   }).join('');
+}
+
+async function openProtocolMembersModal(id) {
+  const modal = document.getElementById('protocolMembersModal');
+  const body = document.getElementById('protocolMembersBody');
+  const title = document.getElementById('protocolMembersTitle');
+  if (!modal || !body) return;
+  body.innerHTML = `<div class="text-slate-400 text-sm">${t('loading')}</div>`;
+  modal.classList.remove('hidden');
+  try {
+    const data = await api.getProtocolMembers(id);
+    if (title) title.textContent = `Протокол № ${data.protocol.protocol_number} (${fmtDate(data.protocol.open_date)} — ${fmtDate(data.protocol.close_date)})`;
+    if (!data.members.length) {
+      body.innerHTML = `<div class="text-slate-400 text-sm">В этом протоколе пока нет сотрудников.</div>`;
+      return;
+    }
+    body.innerHTML = `
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+          <thead class="bg-slate-50">
+            <tr>
+              <th class="px-3 py-2 text-left font-semibold text-slate-600">ФИО</th>
+              <th class="px-3 py-2 text-left font-semibold text-slate-600">Курс</th>
+              <th class="px-3 py-2 text-left font-semibold text-slate-600">Результат</th>
+              <th class="px-3 py-2 text-left font-semibold text-slate-600">№ сертификата</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            ${data.members.map(m => `
+              <tr class="hover:bg-slate-50">
+                <td class="px-3 py-2 font-medium text-slate-900">
+                  <button onclick="document.getElementById('protocolMembersModal').classList.add('hidden');openUserProfile(${m.user_id})" class="hover:text-blue-600 hover:underline text-left">${esc(m.last_name)} ${esc(m.first_name)}</button>
+                </td>
+                <td class="px-3 py-2 text-slate-600">${esc(CURRENT_LANG === 'kz' ? m.title_kz : m.title_ru)}</td>
+                <td class="px-3 py-2">
+                  <span class="text-xs font-semibold px-2 py-0.5 rounded ${m.status === 'passed' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}">${m.status === 'passed' ? 'Сдал' : 'Не сдал'}</span>
+                  ${m.score_percent !== null && m.score_percent !== undefined ? `<span class="text-xs text-slate-400 ml-1">${m.score_percent}%</span>` : ''}
+                </td>
+                <td class="px-3 py-2 font-mono text-xs text-slate-600">${esc(m.certificate_number || '—')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch (e) {
+    body.innerHTML = `<div class="text-red-600 text-sm">${t('error_generic')}${e && e.message ? ': ' + esc(e.message) : ''}</div>`;
+  }
 }
 
 async function downloadProtocolDocx(id) {
