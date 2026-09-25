@@ -387,6 +387,8 @@ const state = {
   assignFilter: { status: '', object: '', department: '', q: '', date_from: '', date_to: '' },
   meta: { objects: [], departments: [], pairs: [] },
   metaLoaded: false,
+  dictionaries: { departments: [], positions: [] },
+  dictionariesLoaded: false,
   org: JSON.parse(sessionStorage.getItem('orgFilter') || '{"object":"","department":""}'),   // единый фильтр «объект / отдел» для всех вкладок
   profileUserId: null,
   calendarDate: new Date(),
@@ -713,6 +715,18 @@ async function refreshOrgMeta() {
   } catch (e) {}
 }
 
+// Справочники «Отдел» / «Должность» (п.1 запроса) — грузятся один раз и переиспользуются
+// в модалке сотрудника (select) и во вкладке «Настройки» (управление списком).
+async function loadDictionaries(force = false) {
+  if (state.dictionariesLoaded && !force) return state.dictionaries;
+  try {
+    const d = await api.getDictionaries();
+    state.dictionaries = { departments: d.departments || [], positions: d.positions || [] };
+    state.dictionariesLoaded = true;
+  } catch (e) {}
+  return state.dictionaries;
+}
+
 function onOrgChange() {
   const o = document.getElementById('orgObject').value;
   let d = document.getElementById('orgDept').value;
@@ -926,6 +940,7 @@ async function loadTabContent() {
         <div id="expiringFilters" class="mb-3"></div>
         <div id="expiringList" class="space-y-2"><div class="text-slate-400 text-sm">${t('loading')}</div></div>
       </div>
+      ${assignModalHtml()}
     `;
     try {
       const [u, c, a] = await Promise.all([api.getUsers(orgParams()), api.getCourses(orgParams()), api.getAssignments({ ...orgParams(), active_only: 1 })]);
@@ -1012,9 +1027,22 @@ async function loadTabContent() {
             </div>
             <div class="grid grid-cols-2 gap-3">
               <div><label class="text-xs font-semibold text-slate-600">Объект</label><input id="uObject" class="w-full border p-2 rounded text-sm"></div>
-              <div><label class="text-xs font-semibold text-slate-600">Отдел</label><input id="uDept" class="w-full border p-2 rounded text-sm"></div>
+              <div>
+                <label class="text-xs font-semibold text-slate-600">Отдел</label>
+                <div class="flex items-center gap-1">
+                  <select id="uDept" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select>
+                  <button type="button" onclick="quickAddDictionaryValue('departments', 'uDept')" title="Добавить новый отдел в список" class="shrink-0 px-2 py-2 border rounded text-sm font-bold text-slate-500 hover:text-blue-600">+</button>
+                </div>
+              </div>
             </div>
-            <div><label class="text-xs font-semibold text-slate-600">Должность</label><input id="uPos" class="w-full border p-2 rounded text-sm"></div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Должность</label>
+              <div class="flex items-center gap-1">
+                <select id="uPos" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select>
+                <button type="button" onclick="quickAddDictionaryValue('positions', 'uPos')" title="Добавить новую должность в список" class="shrink-0 px-2 py-2 border rounded text-sm font-bold text-slate-500 hover:text-blue-600">+</button>
+              </div>
+              <p class="text-[11px] text-slate-400 mt-1">Список отделов и должностей ведётся во вкладке «Настройки» — так одна и та же должность у всех сотрудников пишется одинаково.</p>
+            </div>
             <div class="grid grid-cols-2 gap-3">
               <div><label class="text-xs font-semibold text-slate-600">Логин (табельный номер)</label><input id="uLogin" placeholder="Можно назначить позже" class="w-full border p-2 rounded text-sm"></div>
               <div><label class="text-xs font-semibold text-slate-600">Пароль</label><input type="password" id="uPass" placeholder="Не менять" class="w-full border p-2 rounded text-sm"></div>
@@ -1585,9 +1613,75 @@ async function loadTabContent() {
           </div>
         </fieldset>
       </div>
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-w-xl mt-6">
+        <h2 class="text-lg font-bold text-slate-900 mb-1">Отделы и должности</h2>
+        <p class="text-xs text-slate-500 mb-4">Эти списки используются в выпадающих полях «Отдел» и «Должность» в карточке сотрудника, чтобы значения не писались по-разному.</p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          <div>
+            <h3 class="text-sm font-bold text-slate-900 mb-2">Отделы</h3>
+            <div id="dictDepartmentsList" class="space-y-1 mb-2"></div>
+            <div class="flex gap-1">
+              <input id="dictDepartmentsNew" placeholder="Новый отдел" class="w-full border p-2 rounded text-sm" onkeydown="if(event.key==='Enter'){event.preventDefault();addDictionaryValueFromSettings('departments');}">
+              <button type="button" onclick="addDictionaryValueFromSettings('departments')" class="shrink-0 px-3 py-2 border rounded text-sm font-semibold">Добавить</button>
+            </div>
+          </div>
+          <div>
+            <h3 class="text-sm font-bold text-slate-900 mb-2">Должности</h3>
+            <div id="dictPositionsList" class="space-y-1 mb-2"></div>
+            <div class="flex gap-1">
+              <input id="dictPositionsNew" placeholder="Новая должность" class="w-full border p-2 rounded text-sm" onkeydown="if(event.key==='Enter'){event.preventDefault();addDictionaryValueFromSettings('positions');}">
+              <button type="button" onclick="addDictionaryValueFromSettings('positions')" class="shrink-0 px-3 py-2 border rounded text-sm font-semibold">Добавить</button>
+            </div>
+          </div>
+        </div>
+      </div>
     `;
     loadSettingsData();
+    renderDictionariesSettings();
   }
+}
+
+// --- Управление справочниками «Отдел» / «Должность» во вкладке «Настройки» ---
+async function renderDictionariesSettings() {
+  await loadDictionaries(true);
+  ['departments', 'positions'].forEach(kind => {
+    const box = document.getElementById(kind === 'departments' ? 'dictDepartmentsList' : 'dictPositionsList');
+    if (!box) return;
+    const values = state.dictionaries[kind];
+    box.innerHTML = values.length
+      ? values.map(v => `
+        <div class="flex items-center justify-between gap-2 px-2 py-1 rounded bg-slate-50 border border-slate-100 text-sm">
+          <span>${esc(v)}</span>
+          <button type="button" onclick="removeDictionaryValueFromSettings('${kind}', '${jsAttrEsc(v)}')" class="text-red-500 hover:text-red-700 text-xs font-bold" title="Удалить">✕</button>
+        </div>
+      `).join('')
+      : `<div class="text-xs text-slate-400">Список пуст</div>`;
+  });
+}
+
+async function saveDictionariesFromSettings() {
+  try {
+    const saved = await api.saveDictionaries(state.dictionaries);
+    state.dictionaries = { departments: saved.departments || [], positions: saved.positions || [] };
+    renderDictionariesSettings();
+  } catch (e) {
+    alert('Не удалось сохранить список: ' + (e.message || 'ошибка сервера'));
+  }
+}
+
+function addDictionaryValueFromSettings(kind) {
+  const inputId = kind === 'departments' ? 'dictDepartmentsNew' : 'dictPositionsNew';
+  const input = document.getElementById(inputId);
+  const value = (input.value || '').trim();
+  if (!value) return;
+  if (!state.dictionaries[kind].includes(value)) state.dictionaries[kind] = [...state.dictionaries[kind], value];
+  input.value = '';
+  saveDictionariesFromSettings();
+}
+
+function removeDictionaryValueFromSettings(kind, value) {
+  state.dictionaries[kind] = state.dictionaries[kind].filter(v => v !== value);
+  saveDictionariesFromSettings();
 }
 
 // --- ЭКСПОРТ В EXCEL: окно настройки выгрузки ---
@@ -1799,6 +1893,7 @@ function renderDashCoursePanel() {
 // --- DASHBOARD: EXPIRING CERTIFICATES WIDGET (сортировка, фильтры, период, экспорт) ---
 let expData = [];
 const expState = { days: 30, q: '', course: '', status: '', sort: 'date_asc' };
+let expSelected = new Set(); // выбранные user_id — для скачивания уведомления с логинами/паролями (п.4 запроса)
 
 function expDaysLeft(a) {
   return Math.ceil((new Date(a.next_test_date) - new Date()) / 86400000);
@@ -1809,6 +1904,7 @@ async function loadExpiringWidget() {
   if (!div) return;
   try {
     expData = await api.getExpiring(expState.days, orgParams());
+    expSelected = new Set();
     renderExpiringFilters();
     renderExpiringList();
   } catch (e) {
@@ -1854,6 +1950,11 @@ function renderExpiringFilters() {
       <span id="expCount"></span>
       <button type="button" onclick="resetExpFilters()" class="text-blue-600 hover:underline font-semibold">${_L('Сбросить фильтры', 'Сүзгілерді тазарту')}</button>
       <button type="button" onclick="exportExpiringCsv()" class="text-emerald-700 hover:underline font-semibold">⬇ CSV</button>
+      <label class="flex items-center gap-1 cursor-pointer select-none">
+        <input type="checkbox" id="expSelectAll" onchange="toggleExpSelectAll(this.checked)">
+        ${_L('Выбрать всех видимых', 'Барлығын таңдау')}
+      </label>
+      <button type="button" onclick="downloadCredentialsNoticeFromExpiring()" class="text-indigo-700 hover:underline font-semibold">⬇ ${_L('Уведомление (логин/пароль)', 'Хабарлама (логин/құпиясөз)')}</button>
     </div>`;
 }
 
@@ -1929,20 +2030,69 @@ function renderExpiringList() {
     const badgeText = overdue ? `${Math.abs(daysLeft)} ${CURRENT_LANG === 'kz' ? 'күн' : 'дн.'} ${t('overdue')}` : today ? t('expires_today') : `${daysLeft} ${t('days_left')}`;
     return `
       <div class="flex flex-wrap items-center justify-between gap-2 p-3 rounded-lg border ${overdue ? 'border-red-200 bg-red-50/40' : 'border-slate-100'}">
-        <div class="min-w-0">
-          <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <button onclick="openUserProfile(${a.user_id})" class="font-semibold text-slate-900 text-sm hover:text-blue-600 hover:underline text-left">${esc(a.last_name)} ${esc(a.first_name)}</button>
-            <span class="text-xs font-semibold px-2 py-0.5 rounded-md" style="border:1.5px solid ${col.fg};background:${col.bg};color:${col.fg}" title="${esc(catLabelOf(a))}">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</span>
+        <div class="flex items-start gap-2 min-w-0">
+          <input type="checkbox" class="mt-1.5" onchange="toggleExpRow(${a.user_id}, this.checked)" ${expSelected.has(Number(a.user_id)) ? 'checked' : ''}>
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <button onclick="openUserProfile(${a.user_id})" class="font-semibold text-slate-900 text-sm hover:text-blue-600 hover:underline text-left">${esc(a.last_name)} ${esc(a.first_name)}</button>
+              <span class="text-xs font-mono text-slate-500" title="${_L('Логин', 'Логин')}">${_L('логин', 'логин')}: ${a.login ? esc(a.login) : '—'}</span>
+              <span class="text-xs font-semibold px-2 py-0.5 rounded-md" style="border:1.5px solid ${col.fg};background:${col.bg};color:${col.fg}" title="${esc(catLabelOf(a))}">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</span>
+            </div>
+            <div class="text-xs text-slate-500 mt-0.5">${esc(a.object || '—')} / ${esc(a.department || '—')}</div>
           </div>
-          <div class="text-xs text-slate-500 mt-0.5">${esc(a.object || '—')} / ${esc(a.department || '—')}</div>
         </div>
         <div class="flex items-center gap-2">
           <span class="text-xs font-bold px-2.5 py-1 rounded-lg ${badgeClass}">${badgeText}</span>
           <span class="text-xs text-slate-400">${nextDate.toLocaleDateString('ru-RU')}</span>
+          <button type="button" onclick="openAssignModal(${a.user_id}, null, ${a.course_id})" class="text-xs font-semibold px-2.5 py-1 rounded-lg bg-blue-600 text-white hover:bg-blue-700 whitespace-nowrap">${_L('Записать на обучение', 'Оқуға жазу')}</button>
         </div>
       </div>
     `;
   }).join('');
+}
+
+function toggleExpRow(userId, checked) {
+  const id = Number(userId);
+  if (checked) expSelected.add(id); else expSelected.delete(id);
+}
+
+function toggleExpSelectAll(checked) {
+  const list = getExpiringFiltered();
+  if (checked) list.forEach(a => expSelected.add(Number(a.user_id)));
+  else list.forEach(a => expSelected.delete(Number(a.user_id)));
+  renderExpiringList();
+}
+
+// Скачивает файл-уведомление (Сотрудник/Логин/Пароль + текст обращения) для выбранных
+// сотрудников с истекающим/просроченным обучением (п.4 запроса). Если ни один не выбран —
+// используются все, что сейчас видны в списке (с учётом фильтров).
+async function downloadCredentialsNoticeFromExpiring() {
+  const ids = expSelected.size ? [...expSelected] : [...new Set(getExpiringFiltered().map(a => Number(a.user_id)))];
+  if (!ids.length) {
+    alert(_L('Нет сотрудников для уведомления.', 'Хабарлау үшін қызметкер жоқ.'));
+    return;
+  }
+  const resetPasswords = confirm(
+    'Перевыпустить пароли сотрудникам, у которых логин и пароль уже есть?\n\n' +
+    'Это нужно, чтобы пароль можно было показать в файле (старые пароли хранятся ' +
+    'в системе только в зашифрованном виде и восстановить их нельзя).\n\n' +
+    'ОК — перевыпустить всем (старые пароли перестанут действовать).\n' +
+    'Отмена — оставить как есть; для тех, у кого пароль уже был, в файле будет отметка «не изменялся».'
+  );
+  try {
+    const res = await api.exportCredentialsNotice({ user_ids: ids, reset_passwords: resetPasswords });
+    const blob = await res.blob();
+    let name = 'credentials.xlsx';
+    const m = (res.headers.get('content-disposition') || '').match(/filename\*=UTF-8''([^;]+)/i);
+    if (m) { try { name = decodeURIComponent(m[1]); } catch (e) {} }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('Не удалось сформировать файл: ' + (e.message || 'ошибка сервера'));
+  }
 }
 
 function exportExpiringCsv() {
@@ -2140,13 +2290,26 @@ async function submitProfileStatusForm(e, userId) {
   loadUserProfile(userId);
 }
 
-function openUserModal(u = null) {
+// Заполняет select значениями справочника; если у сотрудника уже стоит значение,
+// которого в справочнике ещё нет (старые данные / значение удалили из списка),
+// добавляем его отдельным пунктом — иначе оно потеряется при сохранении карточки.
+function fillDictionarySelect(selectId, values, current) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  const list = [...values];
+  if (current && !list.includes(current)) list.unshift(current);
+  sel.innerHTML = '<option value="">— не выбрано —</option>' + list.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  sel.value = current || '';
+}
+
+async function openUserModal(u = null) {
   document.getElementById('userId').value = u ? u.id : '';
   document.getElementById('uLastName').value = u ? u.last_name : '';
   document.getElementById('uFirstName').value = u ? u.first_name : '';
   document.getElementById('uObject').value = u ? u.object : '';
-  document.getElementById('uDept').value = u ? u.department : '';
-  document.getElementById('uPos').value = u ? u.position : '';
+  const dict = await loadDictionaries();
+  fillDictionarySelect('uDept', dict.departments, u ? u.department : '');
+  fillDictionarySelect('uPos', dict.positions, u ? u.position : '');
   document.getElementById('uLogin').value = u ? u.login : '';
   document.getElementById('uPass').value = '';
   document.getElementById('uCertNumber').value = u ? (u.permanent_certificate_number || '') : '';
@@ -2164,6 +2327,26 @@ function openUserModal(u = null) {
     ? (u ? _L('Редактировать администратора', 'Әкімшіні өзгерту') : _L('Добавить администратора', 'Әкімші қосу'))
     : (u ? 'Редактировать сотрудника' : 'Добавить сотрудника');
   document.getElementById('userModal').classList.remove('hidden');
+}
+
+// Быстрое добавление нового значения в справочник прямо из карточки сотрудника,
+// без похода во вкладку «Настройки» — сохраняется сразу на сервере.
+async function quickAddDictionaryValue(kind, selectId) {
+  const label = kind === 'departments' ? 'отдела' : 'должности';
+  const value = (prompt(`Название нового ${label}:`) || '').trim();
+  if (!value) return;
+  const dict = await loadDictionaries();
+  if (!dict[kind].includes(value)) {
+    const updated = { departments: dict.departments, positions: dict.positions, [kind]: [...dict[kind], value] };
+    try {
+      const saved = await api.saveDictionaries(updated);
+      state.dictionaries = { departments: saved.departments || [], positions: saved.positions || [] };
+    } catch (e) {
+      alert('Не удалось сохранить: ' + (e.message || 'ошибка сервера'));
+      return;
+    }
+  }
+  fillDictionarySelect(selectId, state.dictionaries[kind], value);
 }
 
 function closeUserModal() {
@@ -3317,9 +3500,15 @@ async function submitAssignForm(e) {
   if (res.skipped) {
     alert(`Назначено: ${res.created}. Пропущено (некорректный id): ${res.skipped}.`);
   }
-  // Назначали с карточки сотрудника — обновляем именно её, а не список всех назначений
+  // Назначали с карточки сотрудника — обновляем именно её, а не список всех назначений.
+  // Назначали с главной (виджет «Скоро истекает») — обновляем весь дашборд, чтобы
+  // запись пропала из списка просроченных и обновились счётчики.
   if (asLockedUserId) {
-    loadUserProfile(asLockedUserId);
+    if (document.getElementById('profileContent')) {
+      loadUserProfile(asLockedUserId);
+    } else if (document.getElementById('expiringList')) {
+      loadTabContent();
+    }
   } else if (document.getElementById('assignTable')) {
     loadAssignmentsList();
   } else if (document.getElementById('coursesList')) {
