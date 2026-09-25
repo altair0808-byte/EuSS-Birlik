@@ -17,6 +17,19 @@ function escapeForLike(str) {
   return String(str || '').replace(/[%_\\]/g, '\\$&');
 }
 
+// Номер сертификата сотрудника (п.1 запроса): по умолчанию равен его логину (табельному
+// номеру) — сотрудник видит на сертификате тот же номер, под которым он входит в систему.
+// Если у сотрудника вручную задан «№ сертификата» в карточке (permanent_certificate_number) —
+// он имеет приоритет (осознанный ручной override, как было раньше). Если логина нет —
+// присваивается следующий свободный номер по общей нумерации (как раньше, getNextCertNumber).
+async function getCertNumberForUser(userId) {
+  const uRes = await query('SELECT login, permanent_certificate_number FROM users WHERE id = $1', [userId]);
+  const u = uRes.rows[0];
+  if (u && u.permanent_certificate_number) return u.permanent_certificate_number;
+  if (u && u.login) return u.login;
+  return getNextCertNumber();
+}
+
 // Независимая нумерация сертификатов (п.7 запроса): без сброса (в т.ч. по
 // году) и без повторного использования номеров, даже если сотрудник удалён
 // или перемещён. Формат (префикс + количество цифр) настраивается в
@@ -93,7 +106,7 @@ router.get('/last-numbers', authRequired, requireRole('admin', 'superadmin'), as
 // Заполняет недостающие исторические поля (дату следующего прохождения, номер
 // сертификата), когда админ вносит уже пройденное ранее (до внедрения системы)
 // обучение сотрудника, а не создаёт новое назначение теста.
-async function buildHistoricalFields(course_id, hist) {
+async function buildHistoricalFields(course_id, hist, userId) {
   const cRes = await query('SELECT validity_months, no_expiry FROM courses WHERE id = $1', [course_id]);
   const validityMonths = cRes.rows[0]?.validity_months || 12;
   const noExpiry = !!cRes.rows[0]?.no_expiry;
@@ -106,7 +119,7 @@ async function buildHistoricalFields(course_id, hist) {
     nextTestDate = d.toISOString();
   }
   let certNumber = hist.certificate_number;
-  if (!certNumber) certNumber = await getNextCertNumber();
+  if (!certNumber) certNumber = userId ? await getCertNumberForUser(userId) : await getNextCertNumber();
 
   return {
     status: 'passed',
@@ -135,7 +148,7 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
       return res.status(400).json({ error: 'not_employee', message: 'Курсы можно назначать только сотрудникам' });
     }
     if (historical) {
-      const h = await buildHistoricalFields(course_id, { test_date, next_test_date, certificate_number, score_percent });
+      const h = await buildHistoricalFields(course_id, { test_date, next_test_date, certificate_number, score_percent }, user_id);
       const result = await query(`
         INSERT INTO assignments (user_id, course_id, protocol_number, protocol_date, assigned_by,
           status, score_percent, test_date, next_test_date, certificate_number)
@@ -195,7 +208,7 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (re
       if (historical) {
         // Каждому сотруднику отдельный номер сертификата (getNextCertNumber читает
         // максимум из БД на каждый вызов — работает корректно и в цикле).
-        const h = await buildHistoricalFields(course_id, { test_date, next_test_date, score_percent });
+        const h = await buildHistoricalFields(course_id, { test_date, next_test_date, score_percent }, userId);
         const result = await client.query(`
           INSERT INTO assignments (user_id, course_id, protocol_number, protocol_date, assigned_by,
             status, score_percent, test_date, next_test_date, certificate_number)
@@ -418,7 +431,7 @@ router.post('/:id/submit', authRequired, async (req, res) => {
 
     let certNum = a.certificate_number;
     if (passed && !certNum) {
-      certNum = await getNextCertNumber();
+      certNum = await getCertNumberForUser(a.user_id);
     }
 
     const now = new Date();

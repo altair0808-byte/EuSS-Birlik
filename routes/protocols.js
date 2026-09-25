@@ -114,6 +114,33 @@ router.get('/next-number', authRequired, requireRole('admin', 'superadmin'), asy
   }
 });
 
+// Список сотрудников, попавших в протокол — что показывает «№ протокола» при клике во
+// вкладке «Протоколы» (п.4 запроса): ФИО, курс, статус (сдал/не сдал), результат %,
+// номер сертификата. Тот же состав участников, что уходит в Word-протокол (MEMBER_JOIN).
+router.get('/:id/members', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+  try {
+    const pRes = await query(`SELECT ${PROTOCOL_COLS} FROM protocols p WHERE p.id = $1`, [req.params.id]);
+    const p = pRes.rows[0];
+    if (!p) return res.status(404).json({ error: 'not_found', message: 'Протокол не найден' });
+
+    const mRes = await query(`
+      SELECT a.id AS assignment_id, a.user_id, a.status, a.test_date, a.score_percent, a.certificate_number,
+             u.last_name, u.first_name, u.object, u.department, u.position,
+             c.id AS course_id, c.title_ru, c.title_kz
+      FROM protocols p
+      JOIN assignments a ON ${MEMBER_JOIN}
+      JOIN users u ON u.id = a.user_id AND u.role = 'employee'
+      JOIN courses c ON c.id = a.course_id
+      WHERE p.id = $1
+      ORDER BY a.test_date NULLS LAST, u.last_name, u.first_name
+    `, [p.id]);
+
+    res.json({ protocol: p, members: mRes.rows });
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
 // Скачать протокол в Word (.docx): дата открытия и номер подставляются в шапку,
 // сотрудники протокола — в таблицу (ФИО кириллицей).
 router.get('/:id/download', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {

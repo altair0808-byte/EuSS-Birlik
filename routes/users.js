@@ -11,6 +11,7 @@ const { authRequired, requireRole } = require('./auth');
 const { makeUploader } = require('../upload');
 const { buildHistoricalFields } = require('./assignments');
 const { computeFioFields, transliterate } = require('../lib/fio');
+const { splitMulti } = require('../lib/multiFilter');
 
 // Ищет уже существующего сотрудника с таким же ФИО (без учёта регистра/пробелов) —
 // п.9 запроса: "УТЯШЕВ АЛТАИР" / "утяшев алтаир" / "Утяшев Алтаир" — одна запись.
@@ -42,15 +43,27 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, re
     // Кадровый статус: по умолчанию отдаём только действующих сотрудников (employment_status='active'),
     // как и раньше — уволенные/в декрете не должны неожиданно появляться в общем списке и статистике.
     // ?status=archive — вкладка «Архив» (уволены / в декрете). ?status=all — вообще без фильтра.
+    // ?statuses=fired,maternity — точечный мульти-выбор конкретных статусов (п.2 запроса,
+    // мульти-выбор фильтров) — если передан, имеет приоритет над ?status.
+    const statusesParam = splitMulti(req.query.statuses);
     const statusFilter = req.query.status === 'archive' ? 'archive' : (req.query.status === 'all' ? 'all' : 'active');
     let sql = `SELECT id, last_name, first_name, object, department, position, login, role, active,
                       employment_status, status_date, created_at, permanent_certificate_number, tco_badge
                FROM users WHERE role = $1`;
     const params = [role];
-    if (statusFilter === 'active') sql += ` AND employment_status = 'active'`;
+    if (statusesParam.length) {
+      params.push(statusesParam);
+      sql += ` AND employment_status = ANY($${params.length}::text[])`;
+    } else if (statusFilter === 'active') sql += ` AND employment_status = 'active'`;
     else if (statusFilter === 'archive') sql += ` AND employment_status IN ('fired', 'maternity')`;
-    if (object) { params.push(object); sql += ` AND object = $${params.length}`; }
-    if (department) { params.push(department); sql += ` AND department = $${params.length}`; }
+    // Объект / отдел / должность — теперь мульти-выбор (п.2 запроса): можно показать сразу
+    // несколько объектов, отделов или должностей вместо одного за раз.
+    const objects = splitMulti(object);
+    const departments = splitMulti(department);
+    const positions = splitMulti(req.query.position);
+    if (objects.length) { params.push(objects); sql += ` AND object = ANY($${params.length}::text[])`; }
+    if (departments.length) { params.push(departments); sql += ` AND department = ANY($${params.length}::text[])`; }
+    if (positions.length) { params.push(positions); sql += ` AND position = ANY($${params.length}::text[])`; }
     if (q) {
       // Поиск одновременно по русскому написанию и по английской транслитерации
       // (п.9 запроса): "Утяшев", "Altair", "Utyashev", "Алтаир" должны находить
@@ -248,7 +261,7 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
               next_test_date: get('next_test_date'),
               certificate_number: get('certificate_number'),
               score_percent: get('score_percent')
-            });
+            }, userId);
             await query(`
               INSERT INTO assignments (user_id, course_id, protocol_number, protocol_date, assigned_by,
                 status, score_percent, test_date, next_test_date, certificate_number)
