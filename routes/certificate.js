@@ -155,7 +155,7 @@ router.get('/:id', authRequired, async (req, res) => {
   try {
     const aRes = await query(
       `SELECT a.*,
-              u.last_name, u.first_name, u.position as user_position, u.department, u.object,
+              u.login AS user_login, u.permanent_certificate_number AS user_perm_cert, u.last_name, u.first_name, u.position as user_position, u.department, u.object,
               c.title_ru, c.title_kz, c.validity_months, c.no_expiry
        FROM assignments a
        JOIN users u ON a.user_id = u.id
@@ -167,6 +167,8 @@ router.get('/:id', authRequired, async (req, res) => {
       return res.status(404).json({ error: 'not_found' });
     }
     const a = aRes.rows[0];
+    // Номер сертификата всегда равен логину сотрудника (запасной вариант — № из карточки)
+    a.certificate_number = a.user_login || a.user_perm_cert || a.certificate_number;
 
     if (req.user.role === 'employee' && Number(req.user.id) !== Number(a.user_id)) {
       return res.status(403).json({ error: 'forbidden' });

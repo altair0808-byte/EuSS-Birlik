@@ -437,7 +437,7 @@ router.post('/:id/submit', authRequired, async (req, res) => {
     const passed = scorePercent >= course.pass_score_percent;
 
     let certNum = a.certificate_number;
-    if (passed && !certNum) {
+    if (passed) {
       certNum = await getCertNumberForUser(a.user_id);
     }
 
