@@ -59,6 +59,14 @@ const I18N = {
     nav_settings: 'Настройки',
     nav_my_tests: 'Мои тесты',
     nav_calendar: 'Календарь',
+    nav_protocols: 'Протоколы',
+    nav_certificates: 'Сертификаты',
+    certificates_title: 'Выданные сертификаты',
+    certificates_search_placeholder: 'Поиск по номеру сертификата или ФИО...',
+    certificates_no_expiry: 'бессрочно',
+    certificates_issue_date: 'Дата выдачи',
+    certificates_valid_until: 'Действителен до',
+    certificates_empty: 'Сертификатов пока нет',
 
     role_superadmin: 'Суперадминистратор',
     role_admin: 'Администратор (Инженер ТБ)',
@@ -386,6 +394,8 @@ const state = {
   activeProtocols: [],
   protocolYear: null,          // выбранная вкладка-год во вкладке «Протоколы»
   protocolSortDesc: true,      // сортировка по дате открытия: true — новые сверху
+  certificates: [],
+  certSearch: '',
   courseFilter: { q: '', cat: '*' },   // cat: '*' = все, '' = без категории, иначе ключ категории
   collapsedCats: new Set(),
   assignCat: '*'
@@ -434,6 +444,7 @@ const api = {
   getUsersMeta() { return this.req('/api/users/meta/objects'); },
   saveUser(data, id) { return this.req(id ? '/api/users/' + id : '/api/users', { method: id ? 'PUT' : 'POST', body: data }); },
   deleteUser(id) { return this.req('/api/users/' + id, { method: 'DELETE' }); },
+  setEmploymentStatus(id, employment_status, status_date) { return this.req('/api/users/' + id + '/employment-status', { method: 'PATCH', body: { employment_status, status_date } }); },
   getCourses(filter = {}) { return this.req('/api/courses' + qs(filter)); },
   getCourse(id) { return this.req('/api/courses/' + id); },
   saveCourse(data, id) { return this.req(id ? '/api/courses/' + id : '/api/courses', { method: id ? 'PUT' : 'POST', body: data }); },
@@ -466,6 +477,8 @@ const api = {
   closeProtocol(id) { return this.req('/api/protocols/' + id + '/close', { method: 'POST' }); },
   reopenProtocol(id) { return this.req('/api/protocols/' + id + '/reopen', { method: 'POST' }); },
   deleteProtocol(id) { return this.req('/api/protocols/' + id, { method: 'DELETE' }); },
+  // Сертификаты (п.7)
+  getCertificates(filter = {}) { return this.req('/api/assignments/certificates' + qs(filter)); },
   // Материалы/видео курса отдельно RU/KZ (п.3)
   uploadMaterial(courseId, lang, file) {
     const fd = new FormData(); fd.append('file', file);
@@ -619,7 +632,7 @@ function switchLang(l) {
 }
 
 // --- ЕДИНЫЙ ФИЛЬТР «ОБЪЕКТ / ОТДЕЛ» (виден на всех рабочих вкладках администратора) ---
-const ORG_TABS = ['dashboard', 'users', 'courses', 'assignments', 'protocols', 'calendar'];
+const ORG_TABS = ['dashboard', 'users', 'archive', 'courses', 'assignments', 'protocols', 'certificates', 'calendar'];
 
 function orgParams() {
   const o = {};
@@ -810,10 +823,12 @@ function renderMain(app) {
           ${!isEmployee ? `
             <button onclick="setTab('dashboard')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'dashboard' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_dashboard')}</button>
             <button onclick="setTab('users')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_users')}</button>
+            <button onclick="setTab('archive')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'archive' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Архив', 'Мұрағат')}</button>
             ${state.user.role === 'superadmin' ? `<button onclick="setTab('admins')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'admins' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Администраторы', 'Әкімшілер')}</button>` : ''}
             <button onclick="setTab('courses')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'courses' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_courses')}</button>
             <button onclick="setTab('assignments')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'assignments' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_assignments')}</button>
-            <button onclick="setTab('protocols')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'protocols' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">Протоколы</button>
+            <button onclick="setTab('protocols')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'protocols' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_protocols')}</button>
+            <button onclick="setTab('certificates')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'certificates' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_certificates')}</button>
             <button onclick="setTab('calendar')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'calendar' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_calendar')}</button>
             <a href="#" onclick="openExportModal();return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-emerald-700 hover:bg-emerald-50">📥 ${t('nav_export')}</a>
             <button onclick="setTab('settings')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'settings' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_settings')}</button>
@@ -905,7 +920,7 @@ async function loadTabContent() {
       </div>
     `;
     try {
-      const [u, c, a] = await Promise.all([api.getUsers(orgParams()), api.getCourses(orgParams()), api.getAssignments(orgParams())]);
+      const [u, c, a] = await Promise.all([api.getUsers(orgParams()), api.getCourses(orgParams()), api.getAssignments({ ...orgParams(), active_only: 1 })]);
       document.getElementById('dashUsers').textContent = u.length;
       document.getElementById('dashCourses').textContent = c.length;
       document.getElementById('dashAssignments').textContent = a.length;
@@ -939,21 +954,25 @@ async function loadTabContent() {
     loadExpiringWidget();
   }
 
-  if (state.tab === 'users' || state.tab === 'admins') {
+  if (state.tab === 'users' || state.tab === 'admins' || state.tab === 'archive') {
     // «Администраторы» — отдельная вкладка (только суперадмин): админы не входят в список сотрудников и статистику
+    // «Архив» — уволенные и находящиеся в декрете сотрудники: не входят в общий список и статистику,
+    // но история их обучения (протоколы, сертификаты) никуда не пропадает.
     const isAdminsTab = state.tab === 'admins';
+    const isArchiveTab = state.tab === 'archive';
     container.innerHTML = `
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
         <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
-          <h2 class="text-lg font-bold text-slate-900">${isAdminsTab ? _L('Администраторы', 'Әкімшілер') : t('users_title')}</h2>
+          <h2 class="text-lg font-bold text-slate-900">${isArchiveTab ? _L('Архив', 'Мұрағат') : isAdminsTab ? _L('Администраторы', 'Әкімшілер') : t('users_title')}</h2>
           <div class="flex gap-2">
-            ${isAdminsTab ? '' : `<input type="file" id="importFile" accept=".xlsx" class="hidden" onchange="handleImportFile(this)">
+            ${isAdminsTab || isArchiveTab ? '' : `<input type="file" id="importFile" accept=".xlsx" class="hidden" onchange="handleImportFile(this)">
             <button onclick="downloadUsersTemplate()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">⬇ Скачать бланк</button>
             <button onclick="document.getElementById('importFile').click()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">📥 ${t('import_excel')}</button>`}
-            <button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${isAdminsTab ? _L('Добавить администратора', 'Әкімші қосу') : t('add_user')}</button>
+            ${isArchiveTab ? '' : `<button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${isAdminsTab ? _L('Добавить администратора', 'Әкімші қосу') : t('add_user')}</button>`}
           </div>
         </div>
         ${isAdminsTab ? `<p class="text-xs text-slate-500 mb-4">${_L('Администраторы управляют системой. Они не входят в список сотрудников, статистику, назначения, протоколы и экспорт.', 'Әкімшілер жүйені басқарады. Олар қызметкерлер тізіміне, статистикаға, тағайындауларға, хаттамаларға және экспортқа кірмейді.')}</p>` : ''}
+        ${isArchiveTab ? `<p class="text-xs text-slate-500 mb-4">${_L('Уволенные и сотрудники в декретном отпуске. Они не входят в общий список сотрудников и статистику (в т.ч. на главной странице), но их история обучения, протоколы и сертификаты сохраняются. Кнопка «Восстановить» возвращает сотрудника в штат.', 'Жұмыстан босатылған және декреттегі қызметкерлер. Олар жалпы тізімге және статистикаға кірмейді, бірақ оқу тарихы, хаттамалары мен сертификаттары сақталады.')}</p>` : ''}
         <div class="flex flex-wrap gap-2 mb-4">
           <input id="uFilterQ" type="text" placeholder="${t('search_placeholder')}" value="${esc(state.usersFilter.q)}" oninput="onUsersFilterChange()" class="flex-1 min-w-[200px] border border-slate-300 rounded-lg px-3 py-2 text-sm">
           
@@ -966,7 +985,7 @@ async function loadTabContent() {
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">Логин</th>
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">Объект / Отдел</th>
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">Должность</th>
-                <th class="px-4 py-3 text-left font-semibold text-slate-600">Роль</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">${isArchiveTab ? _L('Статус', 'Мәртебе') : 'Роль'}</th>
                 <th class="px-4 py-3 text-right font-semibold text-slate-600">${t('actions')}</th>
               </tr>
             </thead>
@@ -1013,6 +1032,24 @@ async function loadTabContent() {
             <div class="flex justify-end space-x-2 pt-3 border-t">
               <button type="button" onclick="closeUserModal()" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
               <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить</button>
+            </div>
+          </form>
+        </div>
+      </div>
+      <div id="statusModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6">
+          <h3 class="text-lg font-bold mb-1" id="statusModalTitle">Статус сотрудника</h3>
+          <p class="text-xs text-slate-500 mb-4" id="statusModalHint"></p>
+          <form onsubmit="submitStatusForm(event)" class="space-y-3">
+            <input type="hidden" id="statusUserId">
+            <input type="hidden" id="statusValue">
+            <div>
+              <label class="text-xs font-semibold text-slate-600" id="statusDateLabel">Дата</label>
+              <input type="date" id="statusDate" class="w-full border p-2 rounded text-sm">
+            </div>
+            <div class="flex justify-end space-x-2 pt-3 border-t">
+              <button type="button" onclick="closeStatusModal()" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
+              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Подтвердить</button>
             </div>
           </form>
         </div>
@@ -1934,7 +1971,12 @@ async function loadUsersList() {
   let users;
   try {
     const isAdminsTab = state.tab === 'admins';
-    users = await api.getUsers({ q: state.usersFilter.q, ...(isAdminsTab ? { role: 'admin' } : orgParams()) });
+    const isArchiveTab = state.tab === 'archive';
+    users = await api.getUsers({
+      q: state.usersFilter.q,
+      ...(isAdminsTab ? { role: 'admin' } : orgParams()),
+      status: isArchiveTab ? 'archive' : 'active'
+    });
   } catch (e) {
     if (tbody) tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-red-600">${t('error_generic')}${e && e.message ? ': ' + esc(e.message) : ''}</td></tr>`;
     return;
@@ -1945,6 +1987,9 @@ async function loadUsersList() {
     tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-slate-400">${t('no_data')}</td></tr>`;
     return;
   }
+  const isArchiveTab = state.tab === 'archive';
+  const isAdminsTab = state.tab === 'admins';
+  const statusLabel = s => s === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В декрете', 'Декретте');
   tbody.innerHTML = state.users.map(u => `
     <tr class="hover:bg-slate-50">
       <td class="px-4 py-3 font-medium text-slate-900">
@@ -1953,14 +1998,104 @@ async function loadUsersList() {
       <td class="px-4 py-3 font-mono text-slate-600">${u.login ? esc(u.login) : '<span class="text-slate-400 italic font-sans">не назначен</span>'}</td>
       <td class="px-4 py-3 text-slate-600">${esc(u.object || '—')} / ${esc(u.department || '—')}</td>
       <td class="px-4 py-3 text-slate-600">${esc(u.position || '—')}</td>
-      <td class="px-4 py-3"><span class="text-xs font-semibold px-2 py-0.5 rounded ${u.role === 'superadmin' ? 'bg-purple-100 text-purple-700' : u.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-700'}">${esc(u.role)}</span></td>
-      <td class="px-4 py-3 text-right space-x-2">
-        <button onclick="editUser(${u.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>
-        <button onclick="delUser(${u.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
+      <td class="px-4 py-3">
+        ${isArchiveTab
+          ? `<span class="text-xs font-semibold px-2 py-0.5 rounded ${u.employment_status === 'fired' ? 'bg-red-100 text-red-700' : 'bg-purple-100 text-purple-700'}">${statusLabel(u.employment_status)}</span>${u.status_date ? `<div class="text-[11px] text-slate-400 mt-0.5">${fmtDate(u.status_date)}</div>` : ''}`
+          : `<span class="text-xs font-semibold px-2 py-0.5 rounded ${u.role === 'superadmin' ? 'bg-purple-100 text-purple-700' : u.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-700'}">${esc(u.role)}</span>`}
+      </td>
+      <td class="px-4 py-3 text-right space-x-2 whitespace-nowrap">
+        ${isArchiveTab ? `
+          <button onclick="openStatusModal(${u.id}, 'active')" class="text-emerald-700 hover:underline text-xs">${_L('Восстановить', 'Қалпына келтіру')}</button>
+          <button onclick="delUser(${u.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
+        ` : `
+          <button onclick="editUser(${u.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>
+          ${!isAdminsTab ? `
+            <button onclick="openStatusModal(${u.id}, 'fired')" class="text-amber-700 hover:underline text-xs">${_L('Уволить', 'Жұмыстан босату')}</button>
+            <button onclick="openStatusModal(${u.id}, 'maternity')" class="text-purple-700 hover:underline text-xs">${_L('В декрет', 'Декретке')}</button>
+          ` : ''}
+          <button onclick="delUser(${u.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
+        `}
       </td>
     </tr>
   `).join('');
   populateUsersMetaFilters();
+}
+
+// --- Кадровый статус: уволен / в декрете / вернуть в штат (вкладки "Сотрудники" ⇄ "Архив") ---
+function openStatusModal(id, status) {
+  document.getElementById('statusUserId').value = id;
+  document.getElementById('statusValue').value = status;
+  const titles = {
+    fired: _L('Уволить сотрудника', 'Қызметкерді жұмыстан босату'),
+    maternity: _L('Отправить в декрет', 'Декретке жіберу'),
+    active: _L('Вернуть в штат', 'Штатқа қайтару')
+  };
+  const hints = {
+    fired: _L('Сотрудник переместится во вкладку «Архив», перестанет входить в статистику и в списки для назначения тестов. История обучения и сертификаты сохранятся.', 'Қызметкер «Мұрағат» бөліміне ауысады, статистикаға кірмейді. Оқу тарихы сақталады.'),
+    maternity: _L('Сотрудник переместится во вкладку «Архив», перестанет входить в статистику и в списки для назначения тестов. История обучения и сертификаты сохранятся.', 'Қызметкер «Мұрағат» бөліміне ауысады, статистикаға кірмейді. Оқу тарихы сақталады.'),
+    active: _L('Сотрудник вернётся в общий список «Сотрудники» и снова будет учитываться в статистике.', 'Қызметкер жалпы тізімге қайтады және қайта статистикаға кіреді.')
+  };
+  document.getElementById('statusModalTitle').textContent = titles[status] || '';
+  document.getElementById('statusModalHint').textContent = hints[status] || '';
+  const dateLabel = document.getElementById('statusDateLabel');
+  const dateInput = document.getElementById('statusDate');
+  if (status === 'active') {
+    dateLabel.textContent = _L('Дата возврата (необязательно)', 'Оралу күні');
+    dateInput.required = false;
+    dateInput.value = '';
+  } else {
+    dateLabel.textContent = status === 'fired' ? _L('Дата увольнения', 'Жұмыстан босату күні') : _L('Дата начала декретного отпуска', 'Декрет басталу күні');
+    dateInput.required = true;
+    dateInput.value = toLocalDateStr(new Date());
+  }
+  document.getElementById('statusModal').classList.remove('hidden');
+}
+
+function closeStatusModal() {
+  document.getElementById('statusModal').classList.add('hidden');
+}
+
+async function submitStatusForm(e) {
+  e.preventDefault();
+  const id = document.getElementById('statusUserId').value;
+  const status = document.getElementById('statusValue').value;
+  const date = document.getElementById('statusDate').value || null;
+  const btn = e.target.querySelector('button[type=submit]');
+  if (btn) btn.disabled = true;
+  try {
+    await api.setEmploymentStatus(id, status, date);
+  } catch (err) {
+    alert('Не удалось изменить статус: ' + (err.message || 'ошибка сервера'));
+    if (btn) btn.disabled = false;
+    return;
+  }
+  if (btn) btn.disabled = false;
+  closeStatusModal();
+  loadUsersList();
+}
+
+// Те же действия («Уволить» / «В декрет» / «Восстановить»), но с карточки профиля сотрудника —
+// после сохранения перезагружаем профиль, а не список (вкладки "Сотрудники"/"Архив" тут нет).
+function openProfileStatusModal(id, status) {
+  openStatusModal(id, status);
+}
+
+async function submitProfileStatusForm(e, userId) {
+  e.preventDefault();
+  const status = document.getElementById('statusValue').value;
+  const date = document.getElementById('statusDate').value || null;
+  const btn = e.target.querySelector('button[type=submit]');
+  if (btn) btn.disabled = true;
+  try {
+    await api.setEmploymentStatus(userId, status, date);
+  } catch (err) {
+    alert('Не удалось изменить статус: ' + (err.message || 'ошибка сервера'));
+    if (btn) btn.disabled = false;
+    return;
+  }
+  if (btn) btn.disabled = false;
+  closeStatusModal();
+  loadUserProfile(userId);
 }
 
 function openUserModal(u = null) {
@@ -2964,6 +3099,8 @@ let asLockedUserId = null;
 
 async function openAssignModal(presetUserId, presetUserIds, presetCourseId) {
   asLockedUserId = presetUserId ? Number(presetUserId) : null;
+  // getUsers() без параметра status по умолчанию отдаёт только действующих сотрудников —
+  // уволенные и находящиеся в декрете (вкладка «Архив») в список для назначения теста не попадают.
   const [allUsers, courses] = await Promise.all([api.getUsers(), api.getCourses()]);
   asAllEmployees = allUsers.filter(u => u.role === 'employee');
   if (asLockedUserId) {
@@ -3373,10 +3510,10 @@ function openUserProfile(userId) {
 // пользователя. Сначала переключаем вкладку (это синхронно кладёт разметку модалки
 // в DOM), и только потом открываем её — иначе элементов модалки ещё не существует.
 async function editUserFromProfile(id) {
-  state.tab = 'users';
-  render();
   try {
     const u = await api.getUser(id);
+    state.tab = (u.employment_status && u.employment_status !== 'active') ? 'archive' : 'users';
+    render();
     openUserModal(u);
   } catch (e) {
     alert(t('error_generic'));
@@ -3396,16 +3533,42 @@ async function loadUserProfile(userId) {
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
         <div class="flex flex-wrap justify-between items-start gap-4">
           <div>
-            <h2 class="text-xl font-bold text-slate-900">${esc(user.last_name)} ${esc(user.first_name)}</h2>
+            <h2 class="text-xl font-bold text-slate-900">${esc(user.last_name)} ${esc(user.first_name)}
+              ${user.employment_status && user.employment_status !== 'active' ? `<span class="ml-2 align-middle text-xs font-semibold px-2 py-0.5 rounded ${user.employment_status === 'fired' ? 'bg-red-100 text-red-700' : 'bg-purple-100 text-purple-700'}">${user.employment_status === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В декрете', 'Декретте')}</span>` : ''}
+            </h2>
             <p class="text-sm text-slate-500 mt-1">${esc(user.position || '—')} · ${esc(user.object || '—')} / ${esc(user.department || '—')}</p>
             <p class="text-xs text-slate-400 mt-1">${t('login_field')}: <span class="font-mono">${user.login ? esc(user.login) : 'не назначен'}</span> · ${esc(roleName)}</p>
             <p class="text-xs text-slate-400 mt-1">№ сертификата: <span class="font-mono font-semibold text-slate-600">${user.permanent_certificate_number ? esc(user.permanent_certificate_number) : 'не присвоен'}</span></p>
           </div>
-          <div class="flex gap-2">
+          <div class="flex flex-wrap gap-2 justify-end">
             <button onclick="openAssignModal(${user.id})" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold">+ Назначить курс</button>
             <button onclick="editUserFromProfile(${user.id})" class="px-4 py-2 border rounded-lg text-sm font-semibold hover:bg-slate-50">${t('edit')}</button>
             <a href="#" onclick="exportUserJournal(${user.id}, '${jsAttrEsc((user.last_name || '') + '_' + (user.first_name || ''))}');return false;" title="${_L('Выгрузка обучения этого сотрудника', 'Осы қызметкердің оқуын жүктеу')}" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold">📥 ${t('download_report')}</a>
+            ${user.role === 'employee' ? (
+              user.employment_status && user.employment_status !== 'active'
+                ? `<button onclick="openProfileStatusModal(${user.id}, 'active')" class="px-4 py-2 border border-emerald-300 text-emerald-700 rounded-lg text-sm font-semibold hover:bg-emerald-50">${_L('Восстановить', 'Қалпына келтіру')}</button>`
+                : `<button onclick="openProfileStatusModal(${user.id}, 'fired')" class="px-4 py-2 border border-amber-300 text-amber-700 rounded-lg text-sm font-semibold hover:bg-amber-50">${_L('Уволить', 'Жұмыстан босату')}</button>
+                   <button onclick="openProfileStatusModal(${user.id}, 'maternity')" class="px-4 py-2 border border-purple-300 text-purple-700 rounded-lg text-sm font-semibold hover:bg-purple-50">${_L('В декрет', 'Декретке')}</button>`
+            ) : ''}
           </div>
+        </div>
+      </div>
+      <div id="statusModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6">
+          <h3 class="text-lg font-bold mb-1" id="statusModalTitle">Статус сотрудника</h3>
+          <p class="text-xs text-slate-500 mb-4" id="statusModalHint"></p>
+          <form onsubmit="submitProfileStatusForm(event, ${user.id})" class="space-y-3">
+            <input type="hidden" id="statusUserId">
+            <input type="hidden" id="statusValue">
+            <div>
+              <label class="text-xs font-semibold text-slate-600" id="statusDateLabel">Дата</label>
+              <input type="date" id="statusDate" class="w-full border p-2 rounded text-sm">
+            </div>
+            <div class="flex justify-end space-x-2 pt-3 border-t">
+              <button type="button" onclick="closeStatusModal()" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
+              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Подтвердить</button>
+            </div>
+          </form>
         </div>
       </div>
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">

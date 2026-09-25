@@ -6,6 +6,7 @@ const { Pool, types } = require('pg');
 // гарантированно помещаются в Number).
 types.setTypeParser(20, v => (v === null ? null : parseInt(v, 10)));
 const bcrypt = require('bcryptjs');
+const { computeFioFields } = require('./lib/fio');
 
 const connectionString = process.env.DATABASE_URL;
 
@@ -44,6 +45,32 @@ async function initDb() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS permanent_certificate_number TEXT;
     -- № пропуска ТШО (TCO Badge) — попадает в колонку «ТШО рұқсатнама / № пропуска ТШО» Word-протокола
     ALTER TABLE users ADD COLUMN IF NOT EXISTS tco_badge TEXT;
+
+    -- Кадровый статус сотрудника: 'active' (работает), 'fired' (уволен), 'maternity' (в декрете).
+    -- Уволенные и находящиеся в декрете сразу переносятся во вкладку «Архив» и перестают
+    -- учитываться в статистике и списках для назначения тестов — см. routes/users.js
+    -- (эндпоинт PATCH /api/users/:id/employment-status) и index.html (вкладка "Архив").
+    -- Поле active при этом синхронизируется автоматически (0 — вход в систему заблокирован).
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_status TEXT NOT NULL DEFAULT 'active';
+    -- Дата увольнения / дата начала декретного отпуска (необязательно, для карточки в архиве)
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS status_date DATE;
+    UPDATE users SET employment_status = 'active' WHERE employment_status IS NULL;
+
+    -- Защита от дублей сотрудников (п.9 запроса): "УТЯШЕВ АЛТАИР" / "утяшев алтаир" /
+    -- "Утяшев Алтаир" должны считаться одной записью, а поиск должен работать и по
+    -- русскому написанию, и по английской транслитерации (Altair/Utyashev).
+    -- full_name_normalized — "фамилия имя" в нижнем регистре (сравнение дублей).
+    -- full_name_translit — латинская транслитерация ФИО (поиск по-английски).
+    -- Заполняются в JS при создании/изменении сотрудника (см. lib/fio.js, routes/users.js).
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name_normalized TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name_translit TEXT;
+    CREATE INDEX IF NOT EXISTS idx_users_full_name_normalized ON users(full_name_normalized);
+    CREATE INDEX IF NOT EXISTS idx_users_full_name_translit ON users(full_name_translit);
+
+    -- Быстрый поиск максимального уже выданного номера сертификата (используется
+    -- новой, устойчивой к ручным номерам логикой присвоения — см. routes/assignments.js).
+    CREATE INDEX IF NOT EXISTS idx_assignments_certificate_number ON assignments(certificate_number);
+    CREATE INDEX IF NOT EXISTS idx_users_permanent_certificate_number ON users(permanent_certificate_number);
 
     -- Материалы и видео курса отдельно на русском и казахском языке (п.3 запроса):
     -- раньше был один файл на курс, теперь администратор может загрузить свою
@@ -200,6 +227,26 @@ async function initDb() {
     ALTER TABLE settings ADD COLUMN IF NOT EXISTS certificate_digits INT DEFAULT 4;
     ALTER TABLE settings ADD COLUMN IF NOT EXISTS certificate_next_number INT DEFAULT 1;
   `);
+
+  // Разовое заполнение full_name_normalized/full_name_translit для сотрудников,
+  // созданных до этого обновления (новые записи заполняются сразу в routes/users.js).
+  try {
+    const toBackfill = await pool.query(
+      `SELECT id, last_name, first_name FROM users WHERE full_name_normalized IS NULL`
+    );
+    for (const u of toBackfill.rows) {
+      const { normalized, translit } = computeFioFields(u.last_name, u.first_name);
+      await pool.query(
+        `UPDATE users SET full_name_normalized = $1, full_name_translit = $2 WHERE id = $3`,
+        [normalized, translit, u.id]
+      );
+    }
+    if (toBackfill.rows.length) {
+      console.log(`[migrate] Заполнены поля нормализации ФИО для ${toBackfill.rows.length} сотрудников`);
+    }
+  } catch (e) {
+    console.error('Ошибка заполнения full_name_normalized/full_name_translit:', e.message);
+  }
 
   const superLogin = process.env.SUPERADMIN_LOGIN || '8888';
   const superPass = process.env.SUPERADMIN_PASSWORD || '88885555';
