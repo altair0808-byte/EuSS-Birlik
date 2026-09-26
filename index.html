@@ -982,7 +982,7 @@ async function loadTabContent() {
           <div class="text-xs font-bold text-red-700 uppercase leading-tight min-h-[2em] flex items-start">Просрочено</div>
           <div class="text-2xl font-black text-red-600 mt-1 tabular-nums" id="dashOverdue">...</div>
         </div>
-        <div id="dashMandatoryCard" class="hidden bg-white p-4 rounded-xl border border-red-200 bg-red-50/40 shadow-sm flex flex-col">
+        <div id="dashMandatoryCard" onclick="openMandatoryMissingList()" class="hidden bg-white p-4 rounded-xl border border-red-200 bg-red-50/40 shadow-sm flex flex-col cursor-pointer hover:bg-red-50" title="Показать, кто именно не прошёл">
           <div class="text-xs font-bold text-red-700 uppercase leading-tight min-h-[2em] flex items-start">Не прошли обязательное обучение</div>
           <div class="text-2xl font-black text-red-600 mt-1 tabular-nums" id="dashMandatoryMissing">...</div>
         </div>
@@ -1012,13 +1012,18 @@ async function loadTabContent() {
       const [u, c, a] = await Promise.all([api.getUsers(orgParams()), api.getCourses(orgParams()), api.getAssignments({ ...orgParams(), active_only: 1 })]);
       document.getElementById('dashUsers').textContent = u.length;
 
-      // Разбивка по статусам записей проверки знаний.
       const now = new Date();
-      const pending = a.filter(x => x.status === 'pending' || x.status === 'in_progress').length;
-      const passed = a.filter(x => x.status === 'passed').length;
-      const failed = a.filter(x => x.status === 'failed').length;
-      // Просрочено оценивается только по актуальной записи (последняя успешная по сотруднику
-      // и курсу) — если сотрудник уже пересдал курс, его старая просроченная запись не считается.
+      // «Прошли обучение», «Ожидают», «Не сдали», «Просрочено» считаем по количеству
+      // СОТРУДНИКОВ (уникальных user_id), а не записей о тестах — иначе, если сотруднику
+      // назначено несколько курсов, одна и та же запись «прошёл» по каждому курсу считалась
+      // отдельно и «Прошли обучение» могло стать больше, чем «Сотрудников всего».
+      // «Прошли обучение» — это ДЕЙСТВУЮЩЕЕ обучение (сертификат ещё не просрочен): если
+      // у последнего успешного прохождения курса срок уже истёк, сотрудник считается в
+      // «Просрочено», а не одновременно и «прошёл», и «просрочен» по одному и тому же курсу.
+      const pendingUsers = new Set(a.filter(x => x.status === 'pending' || x.status === 'in_progress').map(x => x.user_id));
+      const failedUsers = new Set(a.filter(x => x.status === 'failed').map(x => x.user_id));
+      // Берём только актуальную запись по каждой паре сотрудник+курс (последнюю успешную) —
+      // если сотрудник уже пересдал курс, его старая запись в расчёт не идёт.
       const latestPassed = new Map();
       a.filter(x => x.status === 'passed').forEach(x => {
         const k = `${x.user_id}:${x.course_id}`;
@@ -1026,11 +1031,16 @@ async function loadTabContent() {
         const tx = String(x.test_date || ''), tc = cur ? String(cur.test_date || '') : '';
         if (!cur || tx > tc || (tx === tc && Number(x.id) > Number(cur.id))) latestPassed.set(k, x);
       });
-      const overdue = [...latestPassed.values()].filter(x => x.next_test_date && new Date(x.next_test_date) < now).length;
-      document.getElementById('dashPassed').textContent = passed;
-      document.getElementById('dashPending').textContent = pending;
-      document.getElementById('dashFailed').textContent = failed;
-      document.getElementById('dashOverdue').textContent = overdue;
+      const passedUsers = new Set();
+      const overdueUsers = new Set();
+      latestPassed.forEach(x => {
+        const isOverdue = x.next_test_date && new Date(x.next_test_date) < now;
+        (isOverdue ? overdueUsers : passedUsers).add(x.user_id);
+      });
+      document.getElementById('dashPassed').textContent = passedUsers.size;
+      document.getElementById('dashPending').textContent = pendingUsers.size;
+      document.getElementById('dashFailed').textContent = failedUsers.size;
+      document.getElementById('dashOverdue').textContent = overdueUsers.size;
     } catch (e) {}
     loadDashboardCourseStats();
     loadExpiringWidget();
@@ -1183,14 +1193,14 @@ async function loadTabContent() {
         <div id="coursesList" class="space-y-7"><div class="p-4 text-slate-400">Загрузка курсов...</div></div>
       </div>
       <div id="untrainedModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
-        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[85vh] flex flex-col">
+        <div class="bg-white rounded-xl shadow-2xl max-w-xl w-full p-6 max-h-[85vh] flex flex-col">
           <div class="flex justify-between items-center mb-3">
             <h3 class="text-lg font-bold" id="untrainedModalTitle">Не прошли обучение</h3>
             <button onclick="document.getElementById('untrainedModal').classList.add('hidden')" class="text-slate-400 hover:text-slate-700 text-xl leading-none">&times;</button>
           </div>
-          <p class="text-xs text-slate-500 mb-3">Активные сотрудники, которые добавлены в систему, но ещё ни разу не сдали этот курс.</p>
+          <p class="text-xs text-slate-500 mb-3" id="untrainedModalDesc">Активные сотрудники, которые добавлены в систему, но ещё ни разу не сдали этот курс.</p>
           <div id="untrainedModalBody" class="space-y-1 overflow-y-auto flex-1"></div>
-          <div class="flex justify-end pt-3 border-t mt-3">
+          <div class="flex justify-end pt-3 border-t mt-3" id="untrainedAssignAllRow">
             <button type="button" id="untrainedAssignAllBtn" onclick="assignCourseToUntrained()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700">Назначить курс всем из списка</button>
           </div>
         </div>
@@ -2728,9 +2738,13 @@ async function openUntrainedModal(courseId, title) {
   const modal = document.getElementById('untrainedModal');
   const body = document.getElementById('untrainedModalBody');
   const titleEl = document.getElementById('untrainedModalTitle');
+  const descEl = document.getElementById('untrainedModalDesc');
   const btn = document.getElementById('untrainedAssignAllBtn');
+  const btnRow = document.getElementById('untrainedAssignAllRow');
   if (!modal || !body) return;
   if (titleEl) titleEl.textContent = `Не прошли обучение — ${title}`;
+  if (descEl) descEl.textContent = 'Активные сотрудники, которые добавлены в систему, но ещё ни разу не сдали этот курс.';
+  if (btnRow) btnRow.classList.remove('hidden');
   if (btn) btn.classList.add('hidden');
   body.innerHTML = `<div class="text-slate-400 text-sm">${t('loading')}</div>`;
   modal.classList.remove('hidden');
@@ -2751,6 +2765,62 @@ async function openUntrainedModal(courseId, title) {
         <button type="button" onclick="document.getElementById('untrainedModal').classList.add('hidden'); openUserProfile(${u.id})" class="text-xs text-blue-600 hover:underline whitespace-nowrap">Карточка</button>
       </div>
     `).join('');
+  } catch (e) {
+    body.innerHTML = `<div class="text-red-600 text-sm">${t('error_generic')}</div>`;
+  }
+}
+
+// Открывает тот же модал, но со сводкой сразу по ВСЕМ обязательным курсам, где есть непрошедшие
+// (п.3 запроса — доработка карточки «Не прошли обязательное обучение» на главной до конца):
+// раньше при нескольких обязательных курсах клик по карточке вёл только на один курс и просил
+// переключать вкладки самому. Теперь сразу видно всех сотрудников по каждому недостающему
+// обязательному курсу с отдельной кнопкой «Назначить всем» на каждую группу.
+async function openMandatoryMissingList() {
+  const modal = document.getElementById('untrainedModal');
+  const body = document.getElementById('untrainedModalBody');
+  const titleEl = document.getElementById('untrainedModalTitle');
+  const descEl = document.getElementById('untrainedModalDesc');
+  const btnRow = document.getElementById('untrainedAssignAllRow');
+  if (!modal || !body) return;
+  untrainedModalCourseId = null;
+  untrainedModalUserIds = [];
+  if (titleEl) titleEl.textContent = 'Не прошли обязательное обучение';
+  if (descEl) descEl.textContent = 'Активные сотрудники, которым не хватает хотя бы одного обязательного курса — сгруппировано по курсу.';
+  if (btnRow) btnRow.classList.add('hidden');
+  const missingCourses = dashCourseStats.filter(c => c.is_mandatory && (c.untrained || 0) > 0);
+  if (!missingCourses.length) {
+    body.innerHTML = `<div class="text-emerald-600 text-sm font-semibold text-center py-6">✓ Все активные сотрудники прошли все обязательные курсы.</div>`;
+    modal.classList.remove('hidden');
+    return;
+  }
+  body.innerHTML = `<div class="text-slate-400 text-sm">${t('loading')}</div>`;
+  modal.classList.remove('hidden');
+  try {
+    const lists = await Promise.all(missingCourses.map(c => api.getUntrainedEmployees(c.id, orgParams())));
+    body.innerHTML = missingCourses.map((c, idx) => {
+      const list = lists[idx] || [];
+      const title = CURRENT_LANG === 'kz' ? (c.title_kz || c.title_ru) : (c.title_ru || c.title_kz);
+      const ids = list.map(u => u.id);
+      return `
+        <div class="mb-4 last:mb-0">
+          <div class="flex items-center justify-between gap-2 mb-1.5">
+            <div class="text-sm font-bold text-slate-700">${esc(title)} <span class="text-red-600">(${list.length})</span></div>
+            ${ids.length ? `<button type="button" onclick='openAssignModal(null, ${JSON.stringify(ids)}, ${c.id})' class="text-xs font-semibold text-blue-600 hover:underline whitespace-nowrap">Назначить всем &rarr;</button>` : ''}
+          </div>
+          <div class="space-y-1">
+            ${list.map(u => `
+              <div class="flex items-center justify-between px-3 py-2 border rounded-lg text-sm hover:bg-slate-50">
+                <div>
+                  <div class="font-semibold text-slate-800">${esc(u.last_name)} ${esc(u.first_name)}</div>
+                  <div class="text-xs text-slate-400">${esc(posLabel(u.position) || '—')} · ${esc(u.object || '—')} / ${esc(u.department || '—')}${u.has_assignment ? '' : ' · курс ещё не назначался'}</div>
+                </div>
+                <button type="button" onclick="document.getElementById('untrainedModal').classList.add('hidden'); openUserProfile(${u.id})" class="text-xs text-blue-600 hover:underline whitespace-nowrap">Карточка</button>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }).join('');
   } catch (e) {
     body.innerHTML = `<div class="text-red-600 text-sm">${t('error_generic')}</div>`;
   }
