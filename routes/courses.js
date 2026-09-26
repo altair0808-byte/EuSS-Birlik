@@ -105,8 +105,19 @@ router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), a
     const coursesRes = await query(`
       SELECT c.id, c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.is_mandatory,
         (SELECT COUNT(*)::int FROM users u WHERE u.role = 'employee' AND u.active = 1 AND ${ORG_SQL}) AS total_employees,
+        -- «Прошли обучение» — только ДЕЙСТВУЮЩЕЕ обучение по этому курсу: берём актуальную
+        -- (последнюю) запись 'passed' по каждому сотруднику и убираем из неё тех, у кого срок
+        -- уже истёк — они показываются отдельно в «Просрочено» (см. overdue ниже), а не одновременно
+        -- в обеих графах.
         (SELECT COUNT(DISTINCT a.user_id)::int FROM assignments a JOIN users u ON u.id = a.user_id
-           WHERE u.role = 'employee' AND a.course_id = c.id AND a.status = 'passed' AND ${ORG_SQL}) AS trained_employees,
+           WHERE u.role = 'employee' AND a.course_id = c.id AND a.status = 'passed' AND ${ORG_SQL}
+            AND NOT (NULLIF(a.next_test_date, '') IS NOT NULL AND NULLIF(a.next_test_date, '')::timestamptz < NOW())
+            AND NOT EXISTS (
+              SELECT 1 FROM assignments n
+              WHERE n.user_id = a.user_id AND n.course_id = a.course_id AND n.status = 'passed'
+                AND (COALESCE(n.test_date, '') > COALESCE(a.test_date, '')
+                     OR (COALESCE(n.test_date, '') = COALESCE(a.test_date, '') AND n.id > a.id))
+            )) AS trained_employees,
         (SELECT COUNT(*)::int FROM assignments a JOIN users u ON u.id = a.user_id
            WHERE u.role = 'employee' AND a.course_id = c.id AND a.status IN ('pending','in_progress') AND ${ORG_SQL}) AS pending,
         (SELECT COUNT(*)::int FROM assignments a JOIN users u ON u.id = a.user_id
