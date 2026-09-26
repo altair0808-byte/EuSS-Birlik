@@ -171,13 +171,6 @@ async function initDb() {
     ALTER TABLE settings ADD COLUMN IF NOT EXISTS positions_list JSONB NOT NULL DEFAULT '[]'::jsonb;
   `);
 
-  // Сотрудника можно создать/импортировать только по ФИО, без логина и пароля,
-  // и назначить их позже через карточку профиля — поэтому эти поля больше не обязательны.
-  await pool.query(`
-    ALTER TABLE users ALTER COLUMN login DROP NOT NULL;
-    ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
-  `);
-
   // Протоколы комиссии: администратор "открывает" протокол на диапазон дат —
   // всем сотрудникам, кто пройдёт проверку знаний внутри этого диапазона,
   // номер протокола присваивается автоматически (см. routes/protocols.js
@@ -220,7 +213,7 @@ async function initDb() {
       position TEXT NOT NULL DEFAULT '',
       login TEXT UNIQUE,
       password_hash TEXT,
-      role TEXT NOT NULL CHECK(role IN ('superadmin','admin','employee')),
+      role TEXT NOT NULL CHECK(role IN ('superadmin','admin','assistant','employee')),
       active SMALLINT NOT NULL DEFAULT 1,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
@@ -287,6 +280,37 @@ async function initDb() {
     );
 
     INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+  `);
+
+  // Сотрудника можно создать/импортировать только по ФИО, без логина и пароля,
+  // и назначить их позже через карточку профиля — поэтому эти поля больше не обязательны.
+  // (Перенесено сюда, после CREATE TABLE users выше — ALTER TABLE на несуществующей
+  // таблице ломает initDb() на совсем свежей базе.)
+  await pool.query(`
+    ALTER TABLE users ALTER COLUMN login DROP NOT NULL;
+    ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+  `);
+
+  // ===================== Роль «Ассистент» + ИИН (ТЗ: роли/ИИН/PDF=копия Word) =====================
+  // Новая системная роль 'assistant' — наблюдатель уровня руководителя/табельщика/координатора,
+  // ограниченный выданной зоной (объекты/отделы). Снимаем старый CHECK и ставим новый со
+  // включённой 'assistant' (роли не сносим, только расширяем — см. routes/users.js validateRole()).
+  // (Перенесено сюда же — по той же причине: должно идти после CREATE TABLE users.)
+  await pool.query(`
+    ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+    ALTER TABLE users ADD CONSTRAINT users_role_check
+      CHECK (role IN ('superadmin','admin','assistant','employee'));
+
+    -- Зона видимости ассистента: если оба массива пусты — трактуем как "доступа нет"
+    -- (безопасный дефолт), а не "доступ ко всем". См. lib/multiFilter.js:scopedFilter().
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS assistant_objects TEXT[] NOT NULL DEFAULT '{}';
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS assistant_departments TEXT[] NOT NULL DEFAULT '{}';
+
+    -- ИИН (Individual Identification Number, Казахстан) — 12 цифр, поле карточки сотрудника.
+    -- Не форсируем уникальность на уровне БД (возможны дубли при переходном импорте) и
+    -- намеренно НЕ выводим в Word/PDF протокол (повышенная чувствительность персональных данных).
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS iin TEXT;
+    CREATE INDEX IF NOT EXISTS idx_users_iin ON users(iin);
   `);
 
   await pool.query(`

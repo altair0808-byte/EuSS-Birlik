@@ -584,6 +584,26 @@ function jsAttrEsc(str) {
   return String(str ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
 }
 
+// ИИН — маскирование (ТЗ «роли/ИИН/PDF=копия Word», ответ по §11.3): в списках сотрудников
+// показывается замаскированным (••••••••1234), раскрывается по клику; повторный клик или
+// уход со страницы (перерисовка списка) снова скрывает значение. Действует для всех ролей,
+// которые видят список (admin/assistant/superadmin) — не только для assistant.
+function maskIin(iin) {
+  const s = String(iin || '');
+  if (s.length <= 4) return '•'.repeat(s.length);
+  return '•'.repeat(s.length - 4) + s.slice(-4);
+}
+function iinCellHtml(iin) {
+  if (!iin) return '<span class="text-slate-400">—</span>';
+  return `<span class="font-mono cursor-pointer select-none hover:text-blue-600" data-revealed="0" data-iin="${esc(iin)}" title="${_L('Показать/скрыть ИИН', 'ЖСН көрсету/жасыру')}" onclick="toggleIinReveal(this)">${esc(maskIin(iin))}</span>`;
+}
+function toggleIinReveal(el) {
+  const full = el.dataset.iin || '';
+  const revealed = el.dataset.revealed === '1';
+  el.dataset.revealed = revealed ? '0' : '1';
+  el.textContent = revealed ? maskIin(full) : full;
+}
+
 // --- ПРОСМОТР МАТЕРИАЛОВ И ВИДЕО ПРЯМО НА САЙТЕ (без открытия в отдельном окне) ---
 function isVideoFileUrl(url) { return /\.(mp4|webm|ogg|mov|m4v|avi|mkv)(\?|#|$)/i.test(url); }
 function isPdfFileUrl(url) { return /\.pdf(\?|#|$)/i.test(url); }
@@ -894,14 +914,30 @@ async function handleLogin(e) {
   }
 }
 
+// Упрощённый дашборд ("наблюдатель"): роль assistant, либо любой пользователь
+// с назначенной ролью в комиссии (committee_role), кроме superadmin — ему всегда
+// показываем полный интерфейс. См. ТЗ §5.
+const OBSERVER_TABS = ['users', 'protocols'];
+function isObserverUser() {
+  return state.user.role !== 'superadmin' &&
+    (state.user.role === 'assistant' || !!state.user.committee_role);
+}
+
 function renderMain(app) {
   const isEmployee = state.user.role === 'employee';
+  const isObserver = isObserverUser();
   // Сотруднику всегда доступна только вкладка "Мои тесты" — не даём ему
   // увидеть админский раздел (например, если вкладка осталась в состоянии
   // 'dashboard'/'users'/... после перезагрузки страницы или входа под другой
   // ролью в этом же браузере).
   if (isEmployee && state.tab !== 'my_tests') {
     state.tab = 'my_tests';
+  }
+  // Аналогично для наблюдателя: у него нет доступа к 'dashboard', 'archive',
+  // 'courses', 'settings' и т.д. — если вкладка осталась не той, сбрасываем
+  // на "Сотрудники".
+  if (!isEmployee && isObserver && !OBSERVER_TABS.includes(state.tab)) {
+    state.tab = 'users';
   }
   const roleName = t('role_' + state.user.role) || state.user.role;
 
@@ -927,7 +963,14 @@ function renderMain(app) {
       <!-- Навигация -->
       <nav class="bg-slate-50 border-t border-slate-200">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-1 sm:space-x-4 overflow-x-auto py-2">
-          ${!isEmployee ? `
+          ${isEmployee ? `
+            <button onclick="setTab('my_tests')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'my_tests' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_my_tests')}</button>
+          ` : isObserver ? `
+            <button onclick="setTab('users')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_users')}</button>
+            <button onclick="setTab('protocols')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'protocols' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_protocols')}</button>
+            <a href="#" onclick="openExportModal();return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-emerald-700 hover:bg-emerald-50">📥 ${t('nav_export')}</a>
+            ${state.user.committee_role ? `<a href="#" onclick="openSignatureModal();return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-indigo-700 hover:bg-indigo-50">✍️ Электронная подпись</a>` : ''}
+          ` : `
             <button onclick="setTab('dashboard')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'dashboard' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_dashboard')}</button>
             <button onclick="setTab('users')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_users')}</button>
             <button onclick="setTab('archive')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'archive' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Архив', 'Мұрағат')}</button>
@@ -940,8 +983,6 @@ function renderMain(app) {
             <a href="#" onclick="openExportModal();return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-emerald-700 hover:bg-emerald-50">📥 ${t('nav_export')}</a>
             <button onclick="setTab('settings')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'settings' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_settings')}</button>
             ${state.user.committee_role ? `<a href="#" onclick="openSignatureModal();return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-indigo-700 hover:bg-indigo-50">✍️ Электронная подпись</a>` : ''}
-          ` : `
-            <button onclick="setTab('my_tests')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'my_tests' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_my_tests')}</button>
           `}
         </div>
       </nav>
@@ -1066,10 +1107,10 @@ async function loadTabContent() {
         <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
           <h2 class="text-lg font-bold text-slate-900">${isArchiveTab ? _L('Архив', 'Мұрағат') : isAdminsTab ? _L('Администраторы', 'Әкімшілер') : t('users_title')}</h2>
           <div class="flex gap-2">
-            ${isAdminsTab || isArchiveTab ? '' : `<input type="file" id="importFile" accept=".xlsx" class="hidden" onchange="handleImportFile(this)">
+            ${isAdminsTab || isArchiveTab || isObserverUser() ? '' : `<input type="file" id="importFile" accept=".xlsx" class="hidden" onchange="handleImportFile(this)">
             <button onclick="downloadUsersTemplate()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">⬇ Скачать бланк</button>
             <button onclick="document.getElementById('importFile').click()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">📥 ${t('import_excel')}</button>`}
-            ${isArchiveTab ? '' : `<button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${isAdminsTab ? _L('Добавить администратора', 'Әкімші қосу') : t('add_user')}</button>`}
+            ${isArchiveTab || isObserverUser() ? '' : `<button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${isAdminsTab ? _L('Добавить администратора', 'Әкімші қосу') : t('add_user')}</button>`}
           </div>
         </div>
         ${isAdminsTab ? `<p class="text-xs text-slate-500 mb-4">${_L('Администраторы управляют системой. Они не входят в список сотрудников, статистику, назначения, протоколы и экспорт.', 'Әкімшілер жүйені басқарады. Олар қызметкерлер тізіміне, статистикаға, тағайындауларға, хаттамаларға және экспортқа кірмейді.')}</p>` : ''}
@@ -1078,22 +1119,23 @@ async function loadTabContent() {
           <input id="uFilterQ" type="text" placeholder="${t('search_placeholder')}" value="${esc(state.usersFilter.q)}" oninput="onUsersFilterChange()" class="flex-1 min-w-[200px] border border-slate-300 rounded-lg px-3 py-2 text-sm">
           ${!isAdminsTab ? usersFilterDropdownHtml('positions', _L('Все должности', 'Барлық лауазымдар'), (state.dictionaries.positions || []).map(p => p.ru), posLabel) : ''}
           ${isArchiveTab ? usersFilterDropdownHtml('statuses', _L('Все статусы', 'Барлық мәртебелер'), ['fired', 'maternity'], v => v === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В декрете', 'Декретте')) : ''}
-          ${!isAdminsTab && !isArchiveTab ? `<button type="button" id="bulkAssignBtn" onclick="openAssignModal(null, [...bulkSelectedUserIds])" class="hidden px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg whitespace-nowrap">${_L('Назначить выбранным', 'Таңдалғандарға тағайындау')} (<span id="bulkAssignCount">0</span>)</button>` : ''}
+          ${!isAdminsTab && !isArchiveTab && !isObserverUser() ? `<button type="button" id="bulkAssignBtn" onclick="openAssignModal(null, [...bulkSelectedUserIds])" class="hidden px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg whitespace-nowrap">${_L('Назначить выбранным', 'Таңдалғандарға тағайындау')} (<span id="bulkAssignCount">0</span>)</button>` : ''}
         </div>
         <div class="overflow-x-auto">
           <table class="min-w-full divide-y divide-slate-200 text-sm">
             <thead class="bg-slate-50">
               <tr>
-                ${!isAdminsTab && !isArchiveTab ? `<th class="px-4 py-3 text-left w-8"><input type="checkbox" id="uSelectAll" onchange="toggleBulkSelectAll(this.checked)" class="rounded text-blue-600"></th>` : ''}
+                ${!isAdminsTab && !isArchiveTab && !isObserverUser() ? `<th class="px-4 py-3 text-left w-8"><input type="checkbox" id="uSelectAll" onchange="toggleBulkSelectAll(this.checked)" class="rounded text-blue-600"></th>` : ''}
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">ФИО</th>
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">Логин</th>
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">Объект / Отдел</th>
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">Должность</th>
+                ${!isAdminsTab ? `<th class="px-4 py-3 text-left font-semibold text-slate-600">ИИН</th>` : ''}
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">${isArchiveTab ? _L('Статус', 'Мәртебе') : 'Роль'}</th>
                 <th class="px-4 py-3 text-right font-semibold text-slate-600">${t('actions')}</th>
               </tr>
             </thead>
-            <tbody id="usersTable" class="divide-y divide-slate-100"><tr><td colspan="${!isAdminsTab && !isArchiveTab ? 7 : 6}" class="p-4 text-center text-slate-400">Загрузка...</td></tr></tbody>
+            <tbody id="usersTable" class="divide-y divide-slate-100"><tr><td colspan="${(!isAdminsTab && !isArchiveTab && !isObserverUser() ? 7 : 6) + (!isAdminsTab ? 1 : 0)}" class="p-4 text-center text-slate-400">Загрузка...</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -1138,13 +1180,33 @@ async function loadTabContent() {
               <input id="uTcoBadge" placeholder="Например, 300375" class="w-full border p-2 rounded text-sm">
               <p class="text-[11px] text-slate-400 mt-1">Подставляется в колонку «ТШО рұқсатнама / № пропуска ТШО» Word-протокола.</p>
             </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">ИИН</label>
+              <input id="uIin" inputmode="numeric" maxlength="12" placeholder="12 цифр" class="w-full border p-2 rounded text-sm">
+              <p class="text-[11px] text-slate-400 mt-1">Необязательно. Ровно 12 цифр. В Word/PDF протокол не выводится.</p>
+            </div>
             <p class="text-xs text-slate-400 -mt-1">Логин и пароль можно не указывать сейчас, а добавить позже — просто откройте карточку сотрудника ещё раз и нажмите «Изменить». При указании логина обязательно укажите и пароль.</p>
             <div id="roleFieldWrapper">
               <label class="text-xs font-semibold text-slate-600">Роль</label>
-              <select id="uRole" class="w-full border p-2 rounded text-sm">
+              <select id="uRole" onchange="onUserRoleFieldChange()" class="w-full border p-2 rounded text-sm">
                 <option value="employee">Сотрудник</option>
+                <option value="assistant">Ассистент</option>
                 <option value="admin">Администратор (Инженер ТБ)</option>
               </select>
+            </div>
+            <div id="assistantZoneWrapper" class="hidden border rounded-lg p-3 bg-slate-50">
+              <label class="text-xs font-semibold text-slate-600">Доступная зона</label>
+              <p class="text-[11px] text-slate-400 mb-2">Если ничего не выбрано — доступа к сотрудникам нет. Иначе видны только выбранные объекты/отделы.</p>
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <div class="text-[11px] font-semibold text-slate-500 mb-1">Объекты</div>
+                  <div id="uAssistantObjects" class="max-h-32 overflow-y-auto border rounded bg-white p-1.5 space-y-1 text-sm"></div>
+                </div>
+                <div>
+                  <div class="text-[11px] font-semibold text-slate-500 mb-1">Отделы</div>
+                  <div id="uAssistantDepartments" class="max-h-32 overflow-y-auto border rounded bg-white p-1.5 space-y-1 text-sm"></div>
+                </div>
+              </div>
             </div>
             <div>
               <label class="text-xs font-semibold text-slate-600">Роль в комиссии</label>
@@ -1456,7 +1518,7 @@ async function loadTabContent() {
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
         <div class="flex justify-between items-center mb-4">
           <h2 class="text-lg font-bold text-slate-900">Протоколы комиссии</h2>
-          <button onclick="openProtocolModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold">+ Открыть протокол</button>
+          ${!isObserverUser() ? `<button onclick="openProtocolModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold">+ Открыть протокол</button>` : ''}
         </div>
         ${orgNoteHtml('Показаны протоколы, по которым есть сотрудники:')}
         <p class="text-xs text-slate-500 mb-4">
@@ -2607,37 +2669,44 @@ async function loadUsersList() {
       ...(isArchiveTab && state.usersFilter.statuses.length ? { statuses: state.usersFilter.statuses.join(',') } : {})
     });
   } catch (e) {
-    if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="p-4 text-center text-red-600">${t('error_generic')}${e && e.message ? ': ' + esc(e.message) : ''}</td></tr>`;
+    if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="p-4 text-center text-red-600">${t('error_generic')}${e && e.message ? ': ' + esc(e.message) : ''}</td></tr>`;
     return;
   }
   state.users = users.filter(u => u.role !== "superadmin");
   if (!tbody) return;
   const isArchiveTab = state.tab === 'archive';
   const isAdminsTab = state.tab === 'admins';
-  const showCheckbox = !isAdminsTab && !isArchiveTab;
-  const colspan = showCheckbox ? 7 : 6;
+  const showCheckbox = !isAdminsTab && !isArchiveTab && !isObserverUser();
+  const colspan = (showCheckbox ? 7 : 6) + (!isAdminsTab ? 1 : 0);
   if (!state.users.length) {
     tbody.innerHTML = `<tr><td colspan="${colspan}" class="p-4 text-center text-slate-400">${t('no_data')}</td></tr>`;
     updateBulkAssignButton();
     return;
   }
   const statusLabel = s => s === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В декрете', 'Декретте');
+  // Ассистент (и вообще любой "наблюдатель") видит только чтение + карточку сотрудника
+  // (openUserProfile), там же и ограниченное редактирование — см. ТЗ §3, §10. В списке
+  // кнопки полного редактирования/статуса/удаления и чекбоксы массового назначения скрыты.
+  const isObserver = isObserverUser();
   tbody.innerHTML = state.users.map(u => `
     <tr class="hover:bg-slate-50">
-      ${showCheckbox ? `<td class="px-4 py-3"><input type="checkbox" data-uid="${u.id}" ${bulkSelectedUserIds.has(u.id) ? 'checked' : ''} onchange="toggleBulkSelect(${u.id}, this.checked)" class="rounded text-blue-600"></td>` : ''}
+      ${showCheckbox && !isObserver ? `<td class="px-4 py-3"><input type="checkbox" data-uid="${u.id}" ${bulkSelectedUserIds.has(u.id) ? 'checked' : ''} onchange="toggleBulkSelect(${u.id}, this.checked)" class="rounded text-blue-600"></td>` : ''}
       <td class="px-4 py-3 font-medium text-slate-900">
         ${u.role === 'admin' ? `${esc(u.last_name)} ${esc(u.first_name)}` : `<button onclick="openUserProfile(${u.id})" class="hover:text-blue-600 hover:underline text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>`}
       </td>
       <td class="px-4 py-3 font-mono text-slate-600">${u.login ? esc(u.login) : '<span class="text-slate-400 italic font-sans">не назначен</span>'}</td>
       <td class="px-4 py-3 text-slate-600">${esc(u.object || '—')} / ${esc(u.department || '—')}</td>
       <td class="px-4 py-3 text-slate-600">${esc(posLabel(u.position) || '—')}</td>
+      ${!isAdminsTab ? `<td class="px-4 py-3 text-xs text-slate-600">${iinCellHtml(u.iin)}</td>` : ''}
       <td class="px-4 py-3">
         ${isArchiveTab
           ? `<span class="text-xs font-semibold px-2 py-0.5 rounded ${u.employment_status === 'fired' ? 'bg-red-100 text-red-700' : 'bg-purple-100 text-purple-700'}">${statusLabel(u.employment_status)}</span>${u.status_date ? `<div class="text-[11px] text-slate-400 mt-0.5">${fmtDate(u.status_date)}</div>` : ''}`
           : `<span class="text-xs font-semibold px-2 py-0.5 rounded ${u.role === 'superadmin' ? 'bg-purple-100 text-purple-700' : u.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-700'}">${esc(u.role)}</span>`}
       </td>
       <td class="px-4 py-3 text-right space-x-2 whitespace-nowrap">
-        ${isArchiveTab ? `
+        ${isObserver ? `
+          <button onclick="openUserProfile(${u.id})" class="text-blue-600 hover:underline text-xs">${_L('Открыть', 'Ашу')}</button>
+        ` : isArchiveTab ? `
           <button onclick="openStatusModal(${u.id}, 'active')" class="text-emerald-700 hover:underline text-xs">${_L('Восстановить', 'Қалпына келтіру')}</button>
           <button onclick="delUser(${u.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
         ` : `
@@ -2774,6 +2843,7 @@ async function openUserModal(u = null) {
   document.getElementById('uPass').value = '';
   document.getElementById('uCertNumber').value = u ? (u.permanent_certificate_number || '') : '';
   document.getElementById('uTcoBadge').value = u ? (u.tco_badge || '') : '';
+  document.getElementById('uIin').value = u ? (u.iin || '') : '';
   document.getElementById('uRole').value = u ? u.role : (state.tab === 'admins' ? 'admin' : 'employee');
   const committeeSel = document.getElementById('uCommitteeRole');
   if (committeeSel) committeeSel.value = u ? (u.committee_role || '') : '';
@@ -2785,10 +2855,32 @@ async function openUserModal(u = null) {
       roleWrapper.classList.add('hidden');
     }
   }
+  renderAssistantZoneCheckboxes(u ? (u.assistant_objects || []) : [], u ? (u.assistant_departments || []) : []);
+  onUserRoleFieldChange();
   document.getElementById('userModalTitle').textContent = state.tab === 'admins'
     ? (u ? _L('Редактировать администратора', 'Әкімшіні өзгерту') : _L('Добавить администратора', 'Әкімші қосу'))
     : (u ? 'Редактировать сотрудника' : 'Добавить сотрудника');
   document.getElementById('userModal').classList.remove('hidden');
+}
+
+// Блок «Доступная зона» (объекты/отделы) в карточке сотрудника — показывается только когда
+// выбрана роль «Ассистент» (видно только суперадмину, т.к. и весь блок роли виден только ему).
+function renderAssistantZoneCheckboxes(selectedObjects, selectedDepartments) {
+  const objBox = document.getElementById('uAssistantObjects');
+  const depBox = document.getElementById('uAssistantDepartments');
+  if (!objBox || !depBox) return;
+  const objects = (state.meta && state.meta.objects) || [];
+  const departments = (state.meta && state.meta.departments) || (state.dictionaries && state.dictionaries.departments) || [];
+  const row = (val, checked) => `<label class="flex items-center gap-1.5"><input type="checkbox" class="rounded text-blue-600" value="${esc(val)}" ${checked ? 'checked' : ''}><span class="truncate">${esc(val)}</span></label>`;
+  objBox.innerHTML = objects.length ? objects.map(o => row(o, selectedObjects.includes(o))).join('') : '<div class="text-[11px] text-slate-400">нет данных</div>';
+  depBox.innerHTML = departments.length ? departments.map(d => row(d, selectedDepartments.includes(d))).join('') : '<div class="text-[11px] text-slate-400">нет данных</div>';
+}
+
+function onUserRoleFieldChange() {
+  const roleSel = document.getElementById('uRole');
+  const wrapper = document.getElementById('assistantZoneWrapper');
+  if (!roleSel || !wrapper) return;
+  wrapper.classList.toggle('hidden', roleSel.value !== 'assistant');
 }
 
 // Быстрое добавление нового значения в справочник прямо из карточки сотрудника,
@@ -2849,8 +2941,16 @@ async function saveUserForm(e) {
     role: document.getElementById('uRole').value,
     permanent_certificate_number: document.getElementById('uCertNumber').value.trim(),
     tco_badge: document.getElementById('uTcoBadge').value.trim(),
+    iin: document.getElementById('uIin') ? document.getElementById('uIin').value.trim() : '',
     committee_role: document.getElementById('uCommitteeRole') ? document.getElementById('uCommitteeRole').value : ''
   };
+  if (data.role === 'assistant') {
+    data.assistant_objects = Array.from(document.querySelectorAll('#uAssistantObjects input:checked')).map(el => el.value);
+    data.assistant_departments = Array.from(document.querySelectorAll('#uAssistantDepartments input:checked')).map(el => el.value);
+  } else {
+    data.assistant_objects = [];
+    data.assistant_departments = [];
+  }
   const pass = document.getElementById('uPass').value;
   if (pass) data.password = pass;
   if (data.login && !pass && !id) {
@@ -2869,7 +2969,8 @@ async function saveUserForm(e) {
       missing_fields: 'Укажите фамилию и имя',
       forbidden_role: 'Недостаточно прав для назначения этой роли',
       forbidden: 'Недостаточно прав',
-      invalid_committee_role: 'Недопустимая роль в комиссии'
+      invalid_committee_role: 'Недопустимая роль в комиссии',
+      invalid_iin: 'ИИН должен состоять ровно из 12 цифр'
     };
     alert('Не удалось сохранить сотрудника: ' + (map[err.message] || err.message || 'ошибка сервера'));
     if (btn) btn.disabled = false;
@@ -4209,7 +4310,7 @@ function renderProtocolsView() {
       <td class="px-4 py-3 text-right space-x-2 whitespace-nowrap">
         <button onclick="downloadProtocolDocx(${p.id})" class="text-indigo-600 hover:underline text-xs font-semibold">Скачать Word</button>
         <button onclick="downloadProtocolPdf(${p.id})" class="text-purple-600 hover:underline text-xs font-semibold">Скачать PDF</button>
-        ${p.locked ? `
+        ${isObserverUser() ? '' : p.locked ? `
           <span class="text-[11px] text-slate-400 font-semibold" title="Протокол полностью подписан комиссией — изменение, закрытие и удаление запрещены">🔒 Подписан</span>
         ` : `
           <button onclick="editProtocol(${p.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>
@@ -4539,6 +4640,43 @@ async function editUserFromProfile(id) {
   }
 }
 
+// Облегчённое редактирование карточки для роли «Ассистент» — только 4 поля,
+// разрешённые бэкендом (ФИО, Должность, № пропуска ТШО, ИИН), см. ТЗ §3/§10.
+async function editAssistantFields(id) {
+  const u = await api.getUser(id);
+  document.getElementById('aeUserId').value = u.id;
+  document.getElementById('aeLastName').value = u.last_name || '';
+  document.getElementById('aeFirstName').value = u.first_name || '';
+  document.getElementById('aeTcoBadge').value = u.tco_badge || '';
+  document.getElementById('aeIin').value = u.iin || '';
+  const dict = await loadDictionaries();
+  fillPositionSelect('aePos', dict.positions, u.position || '');
+  document.getElementById('assistantEditModal').classList.remove('hidden');
+}
+
+async function submitAssistantFieldsForm(e) {
+  e.preventDefault();
+  const id = document.getElementById('aeUserId').value;
+  const data = {
+    last_name: document.getElementById('aeLastName').value.trim(),
+    first_name: document.getElementById('aeFirstName').value.trim(),
+    position: document.getElementById('aePos').value.trim(),
+    tco_badge: document.getElementById('aeTcoBadge').value.trim(),
+    iin: document.getElementById('aeIin').value.trim()
+  };
+  const btn = e.target.querySelector('button[type=submit]');
+  if (btn) btn.disabled = true;
+  try {
+    await api.saveUser(data, id);
+    document.getElementById('assistantEditModal').classList.add('hidden');
+    loadUserProfile(id);
+  } catch (err) {
+    alert('Не удалось сохранить: ' + (err.message === 'invalid_iin' ? 'ИИН должен состоять ровно из 12 цифр' : (err.message || 'ошибка сервера')));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function loadUserProfile(userId) {
   const div = document.getElementById('profileContent');
   if (!div) return;
@@ -4558,18 +4696,44 @@ async function loadUserProfile(userId) {
             <p class="text-sm text-slate-500 mt-1">${esc(posLabel(user.position) || '—')} · ${esc(user.object || '—')} / ${esc(user.department || '—')}</p>
             <p class="text-xs text-slate-400 mt-1">${t('login_field')}: <span class="font-mono">${user.login ? esc(user.login) : 'не назначен'}</span> · ${esc(roleName)}</p>
             <p class="text-xs text-slate-400 mt-1">№ сертификата: <span class="font-mono font-semibold text-slate-600">${user.permanent_certificate_number ? esc(user.permanent_certificate_number) : 'не присвоен'}</span></p>
+            <p class="text-xs text-slate-400 mt-1">ИИН: ${iinCellHtml(user.iin)}</p>
           </div>
           <div class="flex flex-wrap gap-2 justify-end">
-            <button onclick="openAssignModal(${user.id})" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold">+ Назначить курс</button>
-            <button onclick="editUserFromProfile(${user.id})" class="px-4 py-2 border rounded-lg text-sm font-semibold hover:bg-slate-50">${t('edit')}</button>
-            <a href="#" onclick="exportUserJournal(${user.id}, '${jsAttrEsc((user.last_name || '') + '_' + (user.first_name || ''))}');return false;" title="${_L('Выгрузка обучения этого сотрудника', 'Осы қызметкердің оқуын жүктеу')}" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold">📥 ${t('download_report')}</a>
-            ${user.role === 'employee' ? (
-              user.employment_status && user.employment_status !== 'active'
-                ? `<button onclick="openProfileStatusModal(${user.id}, 'active')" class="px-4 py-2 border border-emerald-300 text-emerald-700 rounded-lg text-sm font-semibold hover:bg-emerald-50">${_L('Восстановить', 'Қалпына келтіру')}</button>`
-                : `<button onclick="openProfileStatusModal(${user.id}, 'fired')" class="px-4 py-2 border border-amber-300 text-amber-700 rounded-lg text-sm font-semibold hover:bg-amber-50">${_L('Уволить', 'Жұмыстан босату')}</button>
-                   <button onclick="openProfileStatusModal(${user.id}, 'maternity')" class="px-4 py-2 border border-purple-300 text-purple-700 rounded-lg text-sm font-semibold hover:bg-purple-50">${_L('В декрет', 'Декретке')}</button>`
-            ) : ''}
+            ${isObserverUser() ? `
+              <button onclick="editAssistantFields(${user.id})" class="px-4 py-2 border rounded-lg text-sm font-semibold hover:bg-slate-50">${t('edit')}</button>
+              ${user.role === 'employee' ? `<a href="#" onclick="exportUserJournal(${user.id}, '${jsAttrEsc((user.last_name || '') + '_' + (user.first_name || ''))}');return false;" title="${_L('Выгрузка обучения этого сотрудника', 'Осы қызметкердің оқуын жүктеу')}" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold">📥 ${t('download_report')}</a>` : ''}
+            ` : `
+              <button onclick="openAssignModal(${user.id})" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold">+ Назначить курс</button>
+              <button onclick="editUserFromProfile(${user.id})" class="px-4 py-2 border rounded-lg text-sm font-semibold hover:bg-slate-50">${t('edit')}</button>
+              <a href="#" onclick="exportUserJournal(${user.id}, '${jsAttrEsc((user.last_name || '') + '_' + (user.first_name || ''))}');return false;" title="${_L('Выгрузка обучения этого сотрудника', 'Осы қызметкердің оқуын жүктеу')}" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold">📥 ${t('download_report')}</a>
+              ${user.role === 'employee' ? (
+                user.employment_status && user.employment_status !== 'active'
+                  ? `<button onclick="openProfileStatusModal(${user.id}, 'active')" class="px-4 py-2 border border-emerald-300 text-emerald-700 rounded-lg text-sm font-semibold hover:bg-emerald-50">${_L('Восстановить', 'Қалпына келтіру')}</button>`
+                  : `<button onclick="openProfileStatusModal(${user.id}, 'fired')" class="px-4 py-2 border border-amber-300 text-amber-700 rounded-lg text-sm font-semibold hover:bg-amber-50">${_L('Уволить', 'Жұмыстан босату')}</button>
+                     <button onclick="openProfileStatusModal(${user.id}, 'maternity')" class="px-4 py-2 border border-purple-300 text-purple-700 rounded-lg text-sm font-semibold hover:bg-purple-50">${_L('В декрет', 'Декретке')}</button>`
+              ) : ''}
+            `}
           </div>
+        </div>
+      </div>
+      <div id="assistantEditModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6">
+          <h3 class="text-lg font-bold mb-4">Редактировать карточку</h3>
+          <form onsubmit="submitAssistantFieldsForm(event)" class="space-y-3">
+            <input type="hidden" id="aeUserId">
+            <div><label class="text-xs font-semibold text-slate-600">Фамилия</label><input id="aeLastName" required class="w-full border p-2 rounded text-sm"></div>
+            <div><label class="text-xs font-semibold text-slate-600">Имя</label><input id="aeFirstName" required class="w-full border p-2 rounded text-sm"></div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Должность</label>
+              <select id="aePos" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select>
+            </div>
+            <div><label class="text-xs font-semibold text-slate-600">№ пропуска ТШО</label><input id="aeTcoBadge" class="w-full border p-2 rounded text-sm"></div>
+            <div><label class="text-xs font-semibold text-slate-600">ИИН</label><input id="aeIin" inputmode="numeric" maxlength="12" placeholder="12 цифр" class="w-full border p-2 rounded text-sm"></div>
+            <div class="flex justify-end space-x-2 pt-3 border-t">
+              <button type="button" onclick="document.getElementById('assistantEditModal').classList.add('hidden')" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
+              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить</button>
+            </div>
+          </form>
         </div>
       </div>
       <div id="statusModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
