@@ -35,6 +35,7 @@ app.use('/api/protocols', require('./routes/protocols'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/export', require('./routes/export'));
 app.use('/api/certificates', require('./routes/certificate'));
+app.use('/api/signatures', require('./routes/signatures'));
 
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));

@@ -148,4 +148,4 @@ async function buildProtocolDocx({ protocolNumber, openDate, members }) {
   return { buffer, fileName: protocolFileName(openDate, protocolNumber), count: employees.length };
 }
 
-module.exports = { buildProtocolDocx, protocolFileName, toCyrillic, fullNameCyr, MONTHS_RU };
+module.exports = { buildProtocolDocx, buildEmployeeRows, protocolFileName, toCyrillic, fullNameCyr, MONTHS_RU };

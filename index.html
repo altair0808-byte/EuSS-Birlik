@@ -510,6 +510,14 @@ const api = {
   closeProtocol(id) { return this.req('/api/protocols/' + id + '/close', { method: 'POST' }); },
   reopenProtocol(id) { return this.req('/api/protocols/' + id + '/reopen', { method: 'POST' }); },
   deleteProtocol(id) { return this.req('/api/protocols/' + id, { method: 'DELETE' }); },
+  // Электронная подпись сотрудника (профиль «Мой профиль → Электронная подпись»)
+  getMySignature() { return this.req('/api/signatures/me'); },
+  saveMySignature(signature_data, current_password) { return this.req('/api/signatures/me', { method: 'POST', body: { signature_data, current_password } }); },
+  clearMySignature(current_password) { return this.req('/api/signatures/me', { method: 'DELETE', body: { current_password } }); },
+  // Электронное подписание протокола комиссией
+  getProtocolSignStatus(id) { return this.req('/api/protocols/' + id + '/signatures'); },
+  signProtocol(id, password) { return this.req('/api/protocols/' + id + '/sign', { method: 'POST', body: { password } }); },
+  getProtocolJournal(id) { return this.req('/api/protocols/' + id + '/journal'); },
   // Сертификаты (п.7)
   getCertificates(filter = {}) { return this.req('/api/assignments/certificates' + qs(filter)); },
   // Материалы/видео курса отдельно RU/KZ (п.3)
@@ -931,6 +939,7 @@ function renderMain(app) {
             <button onclick="setTab('calendar')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'calendar' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_calendar')}</button>
             <a href="#" onclick="openExportModal();return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-emerald-700 hover:bg-emerald-50">📥 ${t('nav_export')}</a>
             <button onclick="setTab('settings')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'settings' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_settings')}</button>
+            ${state.user.committee_role ? `<a href="#" onclick="openSignatureModal();return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-indigo-700 hover:bg-indigo-50">✍️ Электронная подпись</a>` : ''}
           ` : `
             <button onclick="setTab('my_tests')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'my_tests' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_my_tests')}</button>
           `}
@@ -1136,6 +1145,16 @@ async function loadTabContent() {
                 <option value="employee">Сотрудник</option>
                 <option value="admin">Администратор (Инженер ТБ)</option>
               </select>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Роль в комиссии</label>
+              <select id="uCommitteeRole" class="w-full border p-2 rounded text-sm">
+                <option value="">— нет —</option>
+                <option value="chairman">Председатель</option>
+                <option value="biot_engineer">Инженер по БиОТ</option>
+                <option value="member">Член комиссии</option>
+              </select>
+              <p class="text-[11px] text-slate-400 mt-1">Даёт доступ к электронной подписи протоколов комиссии («Электронная подпись» в меню).</p>
             </div>
             <div class="flex justify-end space-x-2 pt-3 border-t">
               <button type="button" onclick="closeUserModal()" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
@@ -1924,6 +1943,196 @@ function exportUserJournal(userId, name) {
   downloadAuthed('/api/export/excel' + qs({ user_id: userId, sort: 'course' }), `Обучение_${name}.xlsx`);
 }
 
+// ===================== ЭЛЕКТРОННАЯ ПОДПИСЬ («Мой профиль») =====================
+// Доступна только пользователям с назначенной ролью в комиссии (state.user.committee_role,
+// см. пункт навигации выше). Подпись рисуется на <canvas> через pointer events (работает
+// мышью, пальцем и стилусом) и отправляется на сервер как base64 PNG (routes/signatures.js).
+async function openSignatureModal() {
+  let m = document.getElementById('signatureModal');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'signatureModal';
+    m.className = 'fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50';
+    document.body.appendChild(m);
+  }
+  m.innerHTML = `<div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6"><div class="text-slate-400 text-sm">${t('loading')}</div></div>`;
+  m.classList.remove('hidden');
+  try {
+    const data = await api.getMySignature();
+    renderSignatureModal(data);
+  } catch (e) {
+    m.innerHTML = `
+      <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6">
+        <div class="text-red-600 text-sm">${esc(e.message || 'Не удалось загрузить данные подписи')}</div>
+        <div class="flex justify-end pt-3 mt-3 border-t"><button onclick="closeSignatureModal()" class="px-4 py-2 border rounded-lg text-sm">Закрыть</button></div>
+      </div>`;
+  }
+}
+
+function closeSignatureModal() {
+  const m = document.getElementById('signatureModal');
+  if (m) m.classList.add('hidden');
+}
+
+function renderSignatureModal(data) {
+  const m = document.getElementById('signatureModal');
+  if (!m) return;
+  const hasSaved = !!data.signature_data;
+  m.innerHTML = `
+    <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6">
+      <div class="flex justify-between items-start mb-1">
+        <h3 class="text-lg font-bold text-slate-900">✍️ Электронная подпись</h3>
+        <button type="button" onclick="closeSignatureModal()" class="text-slate-400 hover:text-slate-700 text-xl leading-none">&times;</button>
+      </div>
+      <p class="text-xs text-slate-500 mb-3">
+        Роль в комиссии: <span class="font-semibold text-slate-700">${esc(data.committee_role_label || '—')}</span>.
+        Эта подпись подставляется в протокол при его электронном подписании.
+      </p>
+      ${!data.committee_role ? `
+        <div class="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 mb-3">
+          Вашему аккаунту не назначена роль в комиссии — обратитесь к администратору.
+        </div>
+      ` : ''}
+      ${hasSaved ? `
+        <div class="flex items-center gap-3 mb-4 p-3 bg-slate-50 rounded-lg border border-slate-200">
+          <img src="${data.signature_data}" alt="Текущая подпись" class="h-14 border border-slate-200 rounded bg-white">
+          <div class="text-xs text-slate-500">Текущая сохранённая подпись${data.signature_updated_at ? `<br>обновлена ${fmtDateTime(data.signature_updated_at)}` : ''}</div>
+        </div>
+      ` : `<p class="text-xs text-slate-500 mb-3">Подпись ещё не сохранена — распишитесь ниже пальцем, стилусом или мышью.</p>`}
+      <label class="text-xs font-semibold text-slate-600 mb-1 block">${hasSaved ? 'Новая подпись (заменит текущую после сохранения)' : 'Ваша подпись'}</label>
+      <canvas id="sigCanvas" width="460" height="160" class="w-full border-2 border-dashed border-slate-300 rounded-lg bg-white" style="touch-action:none; cursor:crosshair;"></canvas>
+      <div class="flex justify-between items-center mt-1 mb-3">
+        <button type="button" onclick="clearSignatureCanvas()" class="text-xs text-slate-500 hover:text-red-600 hover:underline">Очистить холст</button>
+        <span class="text-[11px] text-slate-400">Рисуйте мышью, пальцем или стилусом</span>
+      </div>
+      ${hasSaved ? `
+        <div class="mb-3">
+          <label class="text-xs font-semibold text-slate-600">Текущий пароль аккаунта</label>
+          <input type="password" id="sigPassword" class="w-full border p-2 rounded text-sm" placeholder="Требуется, чтобы обновить или удалить подпись">
+        </div>
+      ` : ''}
+      <div id="sigError" class="text-xs text-red-600 mb-2 hidden"></div>
+      <div class="flex justify-between items-center gap-2 pt-3 border-t">
+        <div>${hasSaved ? `<button type="button" onclick="clearSavedSignature()" id="sigClearBtn" class="px-4 py-2 border border-red-300 text-red-600 rounded-lg text-sm hover:bg-red-50">Очистить</button>` : ''}</div>
+        <div class="flex gap-2">
+          <button type="button" onclick="closeSignatureModal()" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
+          <button type="button" onclick="saveSignatureCanvas()" id="sigSaveBtn" ${data.committee_role ? '' : 'disabled'} class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed">${hasSaved ? 'Обновить' : 'Сохранить'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+  initSignatureCanvas();
+}
+
+function initSignatureCanvas() {
+  const canvas = document.getElementById('sigCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  canvas.dataset.drawn = '0';
+  let drawing = false;
+  let last = null;
+  function posFromEvent(e) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
+  }
+  function start(e) {
+    e.preventDefault();
+    drawing = true;
+    last = posFromEvent(e);
+    if (canvas.setPointerCapture) { try { canvas.setPointerCapture(e.pointerId); } catch (err) {} }
+  }
+  function move(e) {
+    if (!drawing) return;
+    e.preventDefault();
+    const p = posFromEvent(e);
+    ctx.beginPath();
+    ctx.moveTo(last.x, last.y);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    last = p;
+    canvas.dataset.drawn = '1';
+  }
+  function end(e) { drawing = false; }
+  canvas.addEventListener('pointerdown', start);
+  canvas.addEventListener('pointermove', move);
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointerleave', end);
+  canvas.addEventListener('pointercancel', end);
+}
+
+function clearSignatureCanvas() {
+  const canvas = document.getElementById('sigCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  canvas.dataset.drawn = '0';
+}
+
+function showSigError(msg) {
+  const el = document.getElementById('sigError');
+  if (!el) return;
+  if (!msg) { el.classList.add('hidden'); el.textContent = ''; return; }
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+async function saveSignatureCanvas() {
+  const canvas = document.getElementById('sigCanvas');
+  if (!canvas) return;
+  showSigError('');
+  if (canvas.dataset.drawn !== '1') {
+    showSigError('Сначала распишитесь в поле выше.');
+    return;
+  }
+  const passEl = document.getElementById('sigPassword');
+  const password = passEl ? passEl.value : '';
+  if (passEl && !password) {
+    showSigError('Введите текущий пароль, чтобы обновить подпись.');
+    return;
+  }
+  const dataUrl = canvas.toDataURL('image/png');
+  const btn = document.getElementById('sigSaveBtn');
+  if (btn) btn.disabled = true;
+  try {
+    await api.saveMySignature(dataUrl, password || undefined);
+    const fresh = await api.getMySignature();
+    renderSignatureModal(fresh);
+  } catch (e) {
+    showSigError(e.message || 'Не удалось сохранить подпись');
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function clearSavedSignature() {
+  if (!confirm('Удалить сохранённую подпись? Подписывать протоколы будет нельзя, пока не сохраните новую.')) return;
+  showSigError('');
+  const passEl = document.getElementById('sigPassword');
+  const password = passEl ? passEl.value : '';
+  if (passEl && !password) {
+    showSigError('Введите текущий пароль, чтобы удалить подпись.');
+    return;
+  }
+  const btn = document.getElementById('sigClearBtn');
+  if (btn) btn.disabled = true;
+  try {
+    await api.clearMySignature(password || undefined);
+    const fresh = await api.getMySignature();
+    renderSignatureModal(fresh);
+  } catch (e) {
+    showSigError(e.message || 'Не удалось удалить подпись');
+    if (btn) btn.disabled = false;
+  }
+}
+
 // --- DASHBOARD: STATISTICS SPLIT BY COURSE (п.5 запроса) ---
 let dashCourseStats = [];
 let dashSelectedCourseId = null;
@@ -2566,6 +2775,8 @@ async function openUserModal(u = null) {
   document.getElementById('uCertNumber').value = u ? (u.permanent_certificate_number || '') : '';
   document.getElementById('uTcoBadge').value = u ? (u.tco_badge || '') : '';
   document.getElementById('uRole').value = u ? u.role : (state.tab === 'admins' ? 'admin' : 'employee');
+  const committeeSel = document.getElementById('uCommitteeRole');
+  if (committeeSel) committeeSel.value = u ? (u.committee_role || '') : '';
   const roleWrapper = document.getElementById('roleFieldWrapper');
   if (roleWrapper) {
     if (state.user && state.user.role === 'superadmin') {
@@ -2637,7 +2848,8 @@ async function saveUserForm(e) {
     login: document.getElementById('uLogin').value.trim(),
     role: document.getElementById('uRole').value,
     permanent_certificate_number: document.getElementById('uCertNumber').value.trim(),
-    tco_badge: document.getElementById('uTcoBadge').value.trim()
+    tco_badge: document.getElementById('uTcoBadge').value.trim(),
+    committee_role: document.getElementById('uCommitteeRole') ? document.getElementById('uCommitteeRole').value : ''
   };
   const pass = document.getElementById('uPass').value;
   if (pass) data.password = pass;
@@ -2656,7 +2868,8 @@ async function saveUserForm(e) {
       password_required: 'При указании логина укажите и пароль',
       missing_fields: 'Укажите фамилию и имя',
       forbidden_role: 'Недостаточно прав для назначения этой роли',
-      forbidden: 'Недостаточно прав'
+      forbidden: 'Недостаточно прав',
+      invalid_committee_role: 'Недопустимая роль в комиссии'
     };
     alert('Не удалось сохранить сотрудника: ' + (map[err.message] || err.message || 'ошибка сервера'));
     if (btn) btn.disabled = false;
@@ -3905,6 +4118,15 @@ function fmtDate(d) {
   return parts.length === 3 ? `${parts[2]}.${parts[1]}.${parts[0]}` : s;
 }
 
+// Дата+время (подписи протокола, журнал подписания) — сервер отдаёт ISO-строку/timestamptz
+function fmtDateTime(d) {
+  if (!d) return '—';
+  const dt = new Date(d);
+  if (isNaN(dt.getTime())) return String(d);
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(dt.getDate())}.${pad(dt.getMonth() + 1)}.${dt.getFullYear()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+}
+
 function protocolYearOf(p) {
   return parseInt(String(p.open_date).slice(0, 4), 10);
 }
@@ -3986,11 +4208,16 @@ function renderProtocolsView() {
       <td class="px-4 py-3 text-slate-600">${p.assignments_count || 0}</td>
       <td class="px-4 py-3 text-right space-x-2 whitespace-nowrap">
         <button onclick="downloadProtocolDocx(${p.id})" class="text-indigo-600 hover:underline text-xs font-semibold">Скачать Word</button>
-        <button onclick="editProtocol(${p.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>
-        ${p.status === 'open'
-          ? `<button onclick="closeProtocolAction(${p.id})" class="text-amber-600 hover:underline text-xs">Закрыть</button>`
-          : `<button onclick="reopenProtocolAction(${p.id})" class="text-emerald-600 hover:underline text-xs">Открыть снова</button>`}
-        <button onclick="deleteProtocolAction(${p.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
+        <button onclick="downloadProtocolPdf(${p.id})" class="text-purple-600 hover:underline text-xs font-semibold">Скачать PDF</button>
+        ${p.locked ? `
+          <span class="text-[11px] text-slate-400 font-semibold" title="Протокол полностью подписан комиссией — изменение, закрытие и удаление запрещены">🔒 Подписан</span>
+        ` : `
+          <button onclick="editProtocol(${p.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>
+          ${p.status === 'open'
+            ? `<button onclick="closeProtocolAction(${p.id})" class="text-amber-600 hover:underline text-xs">Закрыть</button>`
+            : `<button onclick="reopenProtocolAction(${p.id})" class="text-emerald-600 hover:underline text-xs">Открыть снова</button>`}
+          <button onclick="deleteProtocolAction(${p.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
+        `}
       </td>
     </tr>
   `;
@@ -4007,11 +4234,9 @@ async function openProtocolMembersModal(id) {
   try {
     const data = await api.getProtocolMembers(id);
     if (title) title.textContent = `Протокол № ${data.protocol.protocol_number} (${fmtDate(data.protocol.open_date)} — ${fmtDate(data.protocol.close_date)})`;
-    if (!data.members.length) {
-      body.innerHTML = `<div class="text-slate-400 text-sm">В этом протоколе пока нет сотрудников.</div>`;
-      return;
-    }
-    body.innerHTML = `
+    const membersHtml = !data.members.length
+      ? `<div class="text-slate-400 text-sm">В этом протоколе пока нет сотрудников.</div>`
+      : `
       <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-slate-200 text-sm">
           <thead class="bg-slate-50">
@@ -4040,8 +4265,150 @@ async function openProtocolMembersModal(id) {
         </table>
       </div>
     `;
+    body.innerHTML = `
+      <div class="flex justify-end gap-3 mb-3">
+        <button type="button" onclick="downloadProtocolDocx(${id})" class="text-indigo-600 hover:underline text-xs font-semibold">Скачать Word</button>
+        <button type="button" onclick="downloadProtocolPdf(${id})" class="text-purple-600 hover:underline text-xs font-semibold">Скачать PDF</button>
+      </div>
+      <div id="protoSignBlock" class="mb-4"></div>
+      ${membersHtml}
+    `;
+    loadProtocolSignBlock(id);
   } catch (e) {
     body.innerHTML = `<div class="text-red-600 text-sm">${t('error_generic')}${e && e.message ? ': ' + esc(e.message) : ''}</div>`;
+  }
+}
+
+// ===================== СТАТУС ЭЛЕКТРОННОГО ПОДПИСАНИЯ ПРОТОКОЛА =====================
+function protoStatusBadgeClass(label) {
+  if (label === 'Полностью подписан') return 'bg-emerald-100 text-emerald-800';
+  if (label === 'Частично подписан') return 'bg-amber-100 text-amber-800';
+  return 'bg-slate-100 text-slate-600';
+}
+
+// Строка одной роли комиссии: 🟢 подписано / 🟡 ваша очередь подписать / 🔴 ожидает
+function protocolSignRowHtml(id, r) {
+  const dot = r.signed ? '🟢' : (r.can_sign ? '🟡' : '🔴');
+  const info = r.signed
+    ? `<div class="text-xs text-slate-600 mt-0.5">${esc(r.signed_by.name)}${r.signed_by.position ? ', ' + esc(r.signed_by.position) : ''} — ${fmtDateTime(r.signed_at)}</div>`
+    : (r.can_sign
+        ? `<div class="text-xs text-amber-600 mt-0.5">Ваша очередь подписать</div>`
+        : `<div class="text-xs text-slate-400 mt-0.5">Ожидает подписи</div>`);
+  return `
+    <div class="p-2 bg-white rounded border border-slate-100">
+      <div class="flex items-start justify-between gap-2">
+        <div>
+          <div class="text-sm font-semibold text-slate-800">${dot} ${esc(r.label)}</div>
+          ${info}
+        </div>
+        ${r.can_sign ? `<button type="button" onclick="showProtocolSignForm(${id}, '${r.role}')" class="shrink-0 px-3 py-1.5 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700">Подписать протокол</button>` : ''}
+      </div>
+      ${r.can_sign ? `
+        <div id="protoSignForm_${r.role}" class="hidden mt-2 p-2 bg-blue-50 rounded border border-blue-200 flex items-center gap-2">
+          <input type="password" id="protoSignPass_${r.role}" placeholder="Пароль аккаунта" class="border p-1.5 rounded text-xs flex-1">
+          <button type="button" onclick="submitProtocolSign(${id}, '${r.role}')" class="px-2 py-1.5 bg-emerald-600 text-white text-xs font-semibold rounded hover:bg-emerald-700">Подтвердить</button>
+          <button type="button" onclick="document.getElementById('protoSignForm_${r.role}').classList.add('hidden')" class="px-2 py-1.5 border text-xs rounded">Отмена</button>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function showProtocolSignForm(id, role) {
+  document.querySelectorAll('[id^="protoSignForm_"]').forEach(el => el.classList.add('hidden'));
+  const f = document.getElementById('protoSignForm_' + role);
+  if (f) {
+    f.classList.remove('hidden');
+    const inp = document.getElementById('protoSignPass_' + role);
+    if (inp) inp.focus();
+  }
+}
+
+async function loadProtocolSignBlock(id) {
+  const el = document.getElementById('protoSignBlock');
+  if (!el) return;
+  el.innerHTML = `<div class="text-slate-400 text-xs">${t('loading')}</div>`;
+  try {
+    const status = await api.getProtocolSignStatus(id);
+    el.innerHTML = `
+      <div class="p-4 bg-slate-50 rounded-lg border border-slate-200">
+        <div class="flex items-center justify-between mb-2">
+          <h4 class="text-sm font-bold text-slate-800">Подписание протокола комиссией</h4>
+          <span class="text-xs font-bold px-2 py-1 rounded ${protoStatusBadgeClass(status.status_label)}">${esc(status.status_label)}</span>
+        </div>
+        ${status.locked ? `<p class="text-[11px] text-slate-500 mb-2">🔒 Протокол полностью подписан и запечатан — изменение, закрытие и удаление запрещены.</p>` : ''}
+        <div class="space-y-2">${status.roles.map(r => protocolSignRowHtml(id, r)).join('')}</div>
+        <div class="mt-3 pt-3 border-t border-slate-200">
+          <button type="button" onclick="toggleProtocolJournal(${id})" id="protoJournalToggle" class="text-xs text-indigo-600 hover:underline font-semibold">Журнал подписания ▾</button>
+          <div id="protoJournalBody" class="hidden mt-2"></div>
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    el.innerHTML = `<div class="text-red-600 text-xs">${t('error_generic')}${e && e.message ? ': ' + esc(e.message) : ''}</div>`;
+  }
+}
+
+async function submitProtocolSign(id, role) {
+  const passEl = document.getElementById('protoSignPass_' + role);
+  const password = passEl ? passEl.value : '';
+  if (!password) { alert('Введите пароль аккаунта, чтобы подтвердить подпись.'); return; }
+  try {
+    const res = await api.signProtocol(id, password);
+    await loadProtocolSignBlock(id);
+    loadProtocolsList();
+    if (res.fully_signed) alert('Протокол полностью подписан всеми членами комиссии и запечатан — дальнейшие изменения запрещены.');
+  } catch (e) {
+    alert(e.message || 'Не удалось подписать протокол');
+  }
+}
+
+// Журнал подписания — раскрывающийся список (ФИО, роль, дата/время, IP, устройство)
+async function toggleProtocolJournal(id) {
+  const body = document.getElementById('protoJournalBody');
+  const btn = document.getElementById('protoJournalToggle');
+  if (!body) return;
+  const willShow = body.classList.contains('hidden');
+  if (!willShow) {
+    body.classList.add('hidden');
+    if (btn) btn.textContent = 'Журнал подписания ▾';
+    return;
+  }
+  body.classList.remove('hidden');
+  if (btn) btn.textContent = 'Журнал подписания ▴';
+  body.innerHTML = `<div class="text-slate-400 text-xs">${t('loading')}</div>`;
+  try {
+    const rows = await api.getProtocolJournal(id);
+    if (!rows.length) {
+      body.innerHTML = `<div class="text-slate-400 text-xs">Пока никто не подписал протокол.</div>`;
+      return;
+    }
+    body.innerHTML = `
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-xs">
+          <thead><tr class="text-slate-500">
+            <th class="text-left px-2 py-1">ФИО</th>
+            <th class="text-left px-2 py-1">Роль</th>
+            <th class="text-left px-2 py-1">Дата и время</th>
+            <th class="text-left px-2 py-1">IP</th>
+            <th class="text-left px-2 py-1">Устройство</th>
+          </tr></thead>
+          <tbody class="divide-y divide-slate-100">
+            ${rows.map(r => `
+              <tr>
+                <td class="px-2 py-1 font-medium text-slate-800">${esc(r.last_name)} ${esc(r.first_name)}</td>
+                <td class="px-2 py-1 text-slate-600">${esc(r.committee_role_label)}</td>
+                <td class="px-2 py-1 text-slate-600">${fmtDateTime(r.signed_at)}</td>
+                <td class="px-2 py-1 font-mono text-slate-500">${esc(r.ip_address || '—')}</td>
+                <td class="px-2 py-1 text-slate-500">${esc(String(r.user_agent || '—').slice(0, 60))}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch (e) {
+    body.innerHTML = `<div class="text-red-600 text-xs">${t('error_generic')}</div>`;
   }
 }
 
@@ -4064,6 +4431,11 @@ async function downloadProtocolDocx(id) {
   } catch (e) {
     alert('Не удалось скачать протокол: ' + e.message);
   }
+}
+
+// PDF со статусом подписания (открывается во вкладке — Content-Disposition: inline на сервере)
+function downloadProtocolPdf(id) {
+  downloadAuthed('/api/protocols/' + id + '/pdf');
 }
 
 // Предложить следующий номер по нумерации года даты открытия (пока номер не правили вручную)

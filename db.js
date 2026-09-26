@@ -307,6 +307,46 @@ async function initDb() {
     ALTER TABLE settings ADD COLUMN IF NOT EXISTS certificate_next_number INT DEFAULT 1;
   `);
 
+  // ===================== Модуль электронного подписания протоколов =====================
+  // Профиль подписанта (п.1 запроса): образец подписи хранится прямо в карточке
+  // пользователя как base64 PNG, полученный с canvas на фронтенде (палец на телефоне,
+  // стилус на планшете, мышь на компьютере — см. index.html, signaturePad*). Это тот же
+  // подход, что уже используется для логотипа/печати/подписи председателя в settings
+  // (logo_data/stamp_data/chairman1_signature) — локальный диск сервера не persistent.
+  // committee_role — роль пользователя в комиссии по проверке знаний; назначается
+  // администратором в карточке сотрудника (routes/users.js). Без этой роли аккаунт
+  // не может ни сохранить подпись, ни подписать протокол (routes/signatures.js).
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS committee_role TEXT;
+    ALTER TABLE users DROP CONSTRAINT IF EXISTS users_committee_role_check;
+    ALTER TABLE users ADD CONSTRAINT users_committee_role_check
+      CHECK (committee_role IS NULL OR committee_role IN ('chairman','biot_engineer','member'));
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS signature_data TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS signature_updated_at TIMESTAMPTZ;
+
+    -- Протокол «запечатывается», когда его подписали все три роли комиссии (п.8 запроса):
+    -- редактирование блокируется, а итоговый PDF с подписями сохраняется тут же (signed_pdf_data),
+    -- чтобы при повторном скачивании отдавался ровно тот же файл и та же контрольная сумма (pdf_hash).
+    ALTER TABLE protocols ADD COLUMN IF NOT EXISTS locked BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE protocols ADD COLUMN IF NOT EXISTS fully_signed_at TIMESTAMPTZ;
+    ALTER TABLE protocols ADD COLUMN IF NOT EXISTS pdf_hash TEXT;
+    ALTER TABLE protocols ADD COLUMN IF NOT EXISTS signed_pdf_data TEXT;
+    ALTER TABLE protocols ADD COLUMN IF NOT EXISTS pdf_version INT NOT NULL DEFAULT 1;
+
+    -- Журнал подписания (п.5 запроса): одна запись на подпись одной роли одного протокола
+    -- (ФИО/роль — через user_id, дата/время — signed_at, IP и браузер/устройство — ниже).
+    CREATE TABLE IF NOT EXISTS protocol_signatures (
+      id BIGSERIAL PRIMARY KEY,
+      protocol_id BIGINT NOT NULL REFERENCES protocols(id) ON DELETE CASCADE,
+      committee_role TEXT NOT NULL CHECK (committee_role IN ('chairman','biot_engineer','member')),
+      user_id BIGINT NOT NULL REFERENCES users(id),
+      signed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      ip_address TEXT,
+      user_agent TEXT,
+      UNIQUE (protocol_id, committee_role)
+    );
+  `);
+
   // Разовое заполнение full_name_normalized/full_name_translit для сотрудников,
   // созданных до этого обновления (новые записи заполняются сразу в routes/users.js).
   try {
