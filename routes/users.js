@@ -11,7 +11,7 @@ const { authRequired, requireRole } = require('./auth');
 const { makeUploader } = require('../upload');
 const { buildHistoricalFields } = require('./assignments');
 const { computeFioFields, transliterate } = require('../lib/fio');
-const { splitMulti } = require('../lib/multiFilter');
+const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 const { COMMITTEE_ROLES } = require('../lib/committeeRoles');
 
 // Ищет уже существующего сотрудника с таким же ФИО (без учёта регистра/пробелов) —
@@ -32,7 +32,9 @@ async function findDuplicateEmployee(lastName, firstName, excludeId) {
 const upload = makeUploader('imports');
 
 // List users (суперадмин скрыт из списка)
-router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+// 'assistant' допущен — но видит только сотрудников своей зоны (assistant_objects/departments),
+// см. scopedFilter() ниже; если зона не выдана — пустой список (безопасный дефолт).
+router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   try {
     const { object, department, q } = req.query;
     // Администраторы не входят в список сотрудников и статистику: по умолчанию отдаём только
@@ -50,7 +52,7 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, re
     const statusFilter = req.query.status === 'archive' ? 'archive' : (req.query.status === 'all' ? 'all' : 'active');
     let sql = `SELECT id, last_name, first_name, object, department, position, login, role, active,
                       employment_status, status_date, created_at, permanent_certificate_number, tco_badge,
-                      committee_role
+                      committee_role, iin
                FROM users WHERE role = $1`;
     const params = [role];
     if (statusesParam.length) {
@@ -60,8 +62,12 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, re
     else if (statusFilter === 'archive') sql += ` AND employment_status IN ('fired', 'maternity')`;
     // Объект / отдел / должность — теперь мульти-выбор (п.2 запроса): можно показать сразу
     // несколько объектов, отделов или должностей вместо одного за раз.
-    const objects = splitMulti(object);
-    const departments = splitMulti(department);
+    // Для role='assistant' пересекаем выбор пользователя с его зоной (scopedFilter) —
+    // если зона не выдана суперадмином, доступа нет, отдаём пустой список без запроса к БД.
+    const scope = scopedFilter(req.user, splitMulti(object), splitMulti(department));
+    if (scope.noAccess) return res.json([]);
+    const objects = scope.objects;
+    const departments = scope.departments;
     const positions = splitMulti(req.query.position);
     if (objects.length) { params.push(objects); sql += ` AND object = ANY($${params.length}::text[])`; }
     if (departments.length) { params.push(departments); sql += ` AND department = ANY($${params.length}::text[])`; }
@@ -386,17 +392,20 @@ router.get('/meta/objects', authRequired, requireRole('admin', 'superadmin'), as
 });
 
 // Get single user (профиль сотрудника) — должен быть после /meta/objects, чтобы не перехватывать его
-router.get('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.get('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   try {
     const result = await query(
       `SELECT id, last_name, first_name, object, department, position, login, role, active,
               employment_status, status_date, created_at, permanent_certificate_number, tco_badge,
-              committee_role
+              committee_role, iin
        FROM users WHERE id = $1 AND role != 'superadmin'`,
       [req.params.id]
     );
     const user = result.rows[0];
     if (!user) return res.status(404).json({ error: 'not_found' });
+    if (!isInAssistantScope(req.user, user)) {
+      return res.status(403).json({ error: 'forbidden', message: 'Сотрудник вне вашей зоны доступа' });
+    }
     res.json(user);
   } catch (e) {
     console.error('Error fetching user:', e);
@@ -441,10 +450,50 @@ router.patch('/:id/employment-status', authRequired, requireRole('admin', 'super
   }
 });
 
+// ТЗ: роли/ИИН/PDF=копия Word §2, §9 — admin и assistant не могут назначать роли вообще
+// (поле «Роль» видит только суперадмин, как и раньше); суперадмин может назначить
+// admin/assistant/employee (роль superadmin через этот эндпоинт не выдаётся никому).
 function validateRole(requesterRole, targetRole) {
   if (requesterRole === 'admin') return targetRole === 'employee';
-  if (requesterRole === 'superadmin') return ['admin', 'employee'].includes(targetRole);
+  if (requesterRole === 'superadmin') return ['admin', 'assistant', 'employee'].includes(targetRole);
   return false;
+}
+
+// Поля карточки сотрудника, которые роль 'assistant' вправе редактировать (ТЗ §3):
+// ФИО / Должность / № пропуска ТШО / ИИН — и ничего больше (объект/отдел, логин/пароль,
+// № сертификата, роль, статус — только admin/superadmin).
+const ASSISTANT_EDITABLE_FIELDS = ['last_name', 'first_name', 'position', 'tco_badge', 'iin'];
+
+// ИИН (Казахстан) — ровно 12 цифр, без пробелов/дефисов. Пустое значение снимает поле.
+// Контрольную сумму по алгоритму РК на первом этапе не проверяем (ТЗ §6, №6 открытых вопросов).
+function normalizeIin(value) {
+  if (value === undefined) return undefined;
+  const v = String(value || '').trim();
+  if (!v) return null;
+  if (!/^\d{12}$/.test(v)) {
+    throw new Error('invalid_iin');
+  }
+  return v;
+}
+
+// Зона видимости ассистента (ТЗ §4): суперадмин выбирает assistant_objects/assistant_departments
+// в userModal; пустые массивы обоих полей — "доступа нет" (безопасный дефолт).
+function normalizeZoneArray(value) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return [];
+  return value.map(v => String(v || '').trim()).filter(Boolean);
+}
+
+// Виден ли targetUser текущему пользователю с учётом его зоны (assistant) — для
+// admin/superadmin всегда true. Сам сотрудник (employee) сверяется по object/department.
+function isInAssistantScope(reqUser, targetUser) {
+  if (!reqUser || reqUser.role !== 'assistant') return true;
+  const zoneObjects = Array.isArray(reqUser.assistant_objects) ? reqUser.assistant_objects : [];
+  const zoneDepartments = Array.isArray(reqUser.assistant_departments) ? reqUser.assistant_departments : [];
+  if (!zoneObjects.length && !zoneDepartments.length) return false;
+  const objOk = zoneObjects.length ? zoneObjects.includes(targetUser.object) : true;
+  const depOk = zoneDepartments.length ? zoneDepartments.includes(targetUser.department) : true;
+  return objOk && depOk;
 }
 
 // Роль в комиссии по проверке знаний (модуль электронного подписания протоколов,
@@ -462,7 +511,7 @@ function normalizeCommitteeRole(value) {
 // Логин и пароль необязательны при создании — можно добавить сотрудника
 // только по ФИО и назначить ему доступ позже через редактирование карточки.
 router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { last_name, first_name, object, department, position, login, password, role, permanent_certificate_number, tco_badge, committee_role } = req.body;
+  const { last_name, first_name, object, department, position, login, password, role, permanent_certificate_number, tco_badge, committee_role, iin, assistant_objects, assistant_departments } = req.body;
   const targetRole = role || 'employee';
   const loginVal = login && String(login).trim() ? String(login).trim() : null;
 
@@ -481,6 +530,15 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
   } catch (e) {
     return res.status(400).json({ error: 'invalid_committee_role', message: 'Недопустимая роль в комиссии' });
   }
+  let iinVal;
+  try {
+    iinVal = normalizeIin(iin) ?? null;
+  } catch (e) {
+    return res.status(400).json({ error: 'invalid_iin', message: 'ИИН должен состоять ровно из 12 цифр' });
+  }
+  // Зона видимости — только суперадмин может её выдавать, и только для роли assistant
+  const zoneObjects = targetRole === 'assistant' ? (normalizeZoneArray(assistant_objects) || []) : [];
+  const zoneDepartments = targetRole === 'assistant' ? (normalizeZoneArray(assistant_departments) || []) : [];
 
   try {
     if (loginVal) {
@@ -505,12 +563,12 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
     const hash = loginVal ? bcrypt.hashSync(String(password), 10) : null;
     const { normalized, translit } = computeFioFields(last_name, first_name);
     const result = await query(
-      `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role, permanent_certificate_number, tco_badge, full_name_normalized, full_name_translit, committee_role)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
+      `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role, permanent_certificate_number, tco_badge, full_name_normalized, full_name_translit, committee_role, iin, assistant_objects, assistant_departments)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
       [last_name, first_name, object || '', department || '', position || '', loginVal, hash, targetRole,
        String(permanent_certificate_number || '').trim() || null,
        String(tco_badge || '').trim() || null,
-       normalized, translit, committeeRoleVal]
+       normalized, translit, committeeRoleVal, iinVal, zoneObjects, zoneDepartments]
     );
     res.json({ id: result.rows[0].id });
   } catch (e) {
@@ -520,7 +578,7 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
 });
 
 // Update user
-router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.put('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   const id = Number(req.params.id);
   try {
     const targetRes = await query('SELECT * FROM users WHERE id = $1', [id]);
@@ -530,8 +588,23 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
     if (req.user.role === 'admin' && target.role !== 'employee') {
       return res.status(403).json({ error: 'forbidden', message: 'Администратор может редактировать только обычных сотрудников' });
     }
+    if (req.user.role === 'assistant') {
+      if (target.role !== 'employee') {
+        return res.status(403).json({ error: 'forbidden', message: 'Ассистент может редактировать только карточки сотрудников' });
+      }
+      if (!isInAssistantScope(req.user, target)) {
+        return res.status(403).json({ error: 'forbidden', message: 'Сотрудник вне вашей зоны доступа' });
+      }
+      // ТЗ §3, §9: ассистент может менять только ФИО/Должность/№ пропуска ТШО/ИИН —
+      // игнорируем остальные поля тела запроса, даже если фронтенд их случайно пришлёт.
+      const filtered = {};
+      for (const f of ASSISTANT_EDITABLE_FIELDS) {
+        if (req.body[f] !== undefined) filtered[f] = req.body[f];
+      }
+      req.body = filtered;
+    }
 
-    const { last_name, first_name, object, department, position, login, password, active, role, permanent_certificate_number, tco_badge, committee_role } = req.body;
+    const { last_name, first_name, object, department, position, login, password, active, role, permanent_certificate_number, tco_badge, committee_role, iin, assistant_objects, assistant_departments } = req.body;
     const fields = [];
     const params = [];
 
@@ -554,11 +627,36 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
         return res.status(403).json({ error: 'forbidden_role', message: 'Администратор не может назначать статус администратора' });
       }
       if (req.user.role === 'superadmin') {
-        if (!['admin', 'employee'].includes(role)) {
+        if (!['admin', 'assistant', 'employee'].includes(role)) {
           return res.status(400).json({ error: 'invalid_role' });
         }
         params.push(role);
         fields.push(`role = $${params.length}`);
+      }
+    }
+
+    // ИИН — доступно и ассистенту (входит в его 4 редактируемых поля), формат 12 цифр
+    if (iin !== undefined) {
+      let iinVal;
+      try {
+        iinVal = normalizeIin(iin) ?? null;
+      } catch (e) {
+        return res.status(400).json({ error: 'invalid_iin', message: 'ИИН должен состоять ровно из 12 цифр' });
+      }
+      params.push(iinVal);
+      fields.push(`iin = $${params.length}`);
+    }
+
+    // Зона видимости ассистента (ТЗ §4) — только суперадмин может её менять, и видна
+    // только когда у пользователя (текущего или уже назначенного) роль 'assistant'.
+    if (req.user.role === 'superadmin') {
+      if (assistant_objects !== undefined) {
+        params.push(normalizeZoneArray(assistant_objects) || []);
+        fields.push(`assistant_objects = $${params.length}`);
+      }
+      if (assistant_departments !== undefined) {
+        params.push(normalizeZoneArray(assistant_departments) || []);
+        fields.push(`assistant_departments = $${params.length}`);
       }
     }
 
@@ -663,15 +761,14 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
 });
 
 // Delete user
-router.delete('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+// ТЗ §3, §9: удаление сотрудников из базы — только суперадмин (admin эту "опасную"
+// операцию больше не может выполнять).
+router.delete('/:id', authRequired, requireRole('superadmin'), async (req, res) => {
   const id = Number(req.params.id);
   try {
     const targetRes = await query('SELECT * FROM users WHERE id = $1', [id]);
     const target = targetRes.rows[0];
     if (!target) return res.status(404).json({ error: 'not_found' });
-    if (req.user.role === 'admin' && target.role !== 'employee') {
-      return res.status(403).json({ error: 'forbidden' });
-    }
     if (target.role === 'superadmin') {
       return res.status(403).json({ error: 'cannot_delete_superadmin' });
     }

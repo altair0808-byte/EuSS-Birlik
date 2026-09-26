@@ -65,7 +65,12 @@ router.post('/login', async (req, res) => {
         object: user.object,
         department: user.department,
         position: user.position,
-        committee_role: user.committee_role || null
+        committee_role: user.committee_role || null,
+        // Зона видимости роли "ассистент" (ТЗ: роли/ИИН/PDF=копия Word, §4/§9) — кладём
+        // в токен, чтобы фронтенд сразу показал правильную зону без лишнего запроса.
+        // Сами эндпоинты всё равно перепроверяют req.user.role/зону на каждый запрос.
+        assistant_objects: user.assistant_objects || [],
+        assistant_departments: user.assistant_departments || []
       },
       JWT_SECRET,
       { expiresIn: '12h' }
@@ -82,7 +87,9 @@ router.post('/login', async (req, res) => {
         object: user.object,
         department: user.department,
         position: user.position,
-        committee_role: user.committee_role || null
+        committee_role: user.committee_role || null,
+        assistant_objects: user.assistant_objects || [],
+        assistant_departments: user.assistant_departments || []
       }
     });
   } catch (err) {

@@ -5,7 +5,7 @@ const { query, pool } = require('../db');
 const { authRequired, requireRole } = require('./auth');
 const { makeUploader } = require('../upload');
 const { findActiveProtocol, nextProtocolNumber } = require('./protocols');
-const { splitMulti } = require('../lib/multiFilter');
+const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 
 const uploadImport = makeUploader('imports');
 
@@ -256,7 +256,8 @@ router.get('/mine', authRequired, async (req, res) => {
 });
 
 // List all assignments
-router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+// ТЗ §3: ассистент видит назначения/результаты (только просмотр, без записи), в рамках зоны.
+router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   try {
     const { status, user_id, course_id, object, department, q, date_from, date_to, active_only } = req.query;
     let sql = `
@@ -275,8 +276,10 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, re
     if (status) { params.push(status); sql += ` AND a.status = $${params.length}`; }
     if (user_id) { params.push(user_id); sql += ` AND a.user_id = $${params.length}`; }
     if (course_id) { params.push(course_id); sql += ` AND a.course_id = $${params.length}`; }
-    const objects = splitMulti(object);
-    const departments = splitMulti(department);
+    const scope = scopedFilter(req.user, splitMulti(object), splitMulti(department));
+    if (scope.noAccess) return res.json([]);
+    const objects = scope.objects;
+    const departments = scope.departments;
     if (objects.length) { params.push(objects); sql += ` AND u.object = ANY($${params.length}::text[])`; }
     if (departments.length) { params.push(departments); sql += ` AND u.department = ANY($${params.length}::text[])`; }
     if (q) {
@@ -337,7 +340,8 @@ router.get('/expiring', authRequired, requireRole('admin', 'superadmin'), async 
 // Показывает номер, сотрудника, курс, дату выдачи/срок действия и протокол — по всем
 // сотрудникам сразу, с фильтром по объекту/отделу (единый фильтр, как на других вкладках)
 // и текстовым поиском по номеру сертификата или ФИО.
-router.get('/certificates', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+// ТЗ §3: сертификаты — просмотр доступен и ассистенту, только в его зоне.
+router.get('/certificates', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   try {
     const { object, department, q } = req.query;
     let sql = `
@@ -350,8 +354,10 @@ router.get('/certificates', authRequired, requireRole('admin', 'superadmin'), as
       WHERE a.certificate_number IS NOT NULL AND u.role = 'employee'
     `;
     const params = [];
-    const objects = splitMulti(object);
-    const departments = splitMulti(department);
+    const scope = scopedFilter(req.user, splitMulti(object), splitMulti(department));
+    if (scope.noAccess) return res.json([]);
+    const objects = scope.objects;
+    const departments = scope.departments;
     if (objects.length) { params.push(objects); sql += ` AND u.object = ANY($${params.length}::text[])`; }
     if (departments.length) { params.push(departments); sql += ` AND u.department = ANY($${params.length}::text[])`; }
     if (q) {

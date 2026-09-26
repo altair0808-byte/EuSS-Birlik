@@ -128,7 +128,9 @@ router.get('/dictionaries', authRequired, async (req, res) => {
 // Сохраняет справочники целиком (весь список сразу — добавление/удаление значений
 // происходит на фронтенде, сюда отправляется итоговый список). Значения очищаются
 // от пустых строк и дублей и сортируются по алфавиту.
-router.put('/dictionaries', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+// ТЗ §9: весь роутер settings — только суперадмин (справочники Отдел/Должность входят
+// в «Настройки» матрицы прав, admin больше не может их редактировать).
+router.put('/dictionaries', authRequired, requireRole('superadmin'), async (req, res) => {
   const cleanDepartments = arr => Array.isArray(arr)
     ? [...new Set(arr.map(v => String(v || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru'))
     : undefined;

@@ -6,7 +6,7 @@ const { query } = require('../db');
 const { authRequired, requireRole } = require('./auth');
 const { buildProtocolDocx } = require('../protocolDocx');
 const { buildProtocolPdf } = require('../protocolPdf');
-const { splitMulti } = require('../lib/multiFilter');
+const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 const { COMMITTEE_ROLES, COMMITTEE_ROLE_LABELS } = require('../lib/committeeRoles');
 
 // Протоколы комиссии по проверке знаний.
@@ -73,14 +73,40 @@ async function numberTaken(number, openDate, excludeId) {
   return result.rows.length > 0;
 }
 
+// Есть ли у ассистента (по его зоне) хотя бы один сотрудник среди участников протокола —
+// используется, чтобы разрешить/запретить одиночные операции по протоколу (§4, §9 ТЗ:
+// "assistant допущен к чтению протоколов, но только по своим объектам/отделам").
+async function assistantCanAccessProtocol(user, protocolId) {
+  if (!user || user.role !== 'assistant') return true;
+  const zoneObjects = Array.isArray(user.assistant_objects) ? user.assistant_objects : [];
+  const zoneDepartments = Array.isArray(user.assistant_departments) ? user.assistant_departments : [];
+  if (!zoneObjects.length && !zoneDepartments.length) return false;
+  const params = [protocolId];
+  let sql = `
+    SELECT 1 FROM protocols p
+    JOIN assignments a ON ${MEMBER_JOIN}
+    JOIN users u ON u.id = a.user_id AND u.role = 'employee'
+    WHERE p.id = $1
+  `;
+  if (zoneObjects.length) { params.push(zoneObjects); sql += ` AND u.object = ANY($${params.length}::text[])`; }
+  if (zoneDepartments.length) { params.push(zoneDepartments); sql += ` AND u.department = ANY($${params.length}::text[])`; }
+  sql += ' LIMIT 1';
+  const r = await query(sql, params);
+  return r.rows.length > 0;
+}
+
 // List all protocols (newest first)
-router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+// ТЗ §9: assistant допущен к списку, но только протоколы, где есть сотрудники его зоны.
+router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   try {
     // Единый фильтр по объекту/отделу (мульти-выбор — несколько значений через запятую):
     // считаем только сотрудников выбранных объектов/отделов и показываем только те
-    // протоколы, по которым такие сотрудники есть.
-    const objects = splitMulti(req.query.object);
-    const departments = splitMulti(req.query.department);
+    // протоколы, по которым такие сотрудники есть. Для assistant пересекаем с его зоной —
+    // если зона не выдана, доступа нет (безопасный дефолт).
+    const scope = scopedFilter(req.user, splitMulti(req.query.object), splitMulti(req.query.department));
+    if (scope.noAccess) return res.json([]);
+    const objects = scope.objects;
+    const departments = scope.departments;
     const result = await query(`
       SELECT ${PROTOCOL_COLS}, (
         SELECT COUNT(DISTINCT a.user_id)::int FROM assignments a JOIN users u ON u.id = a.user_id
@@ -126,11 +152,14 @@ router.get('/next-number', authRequired, requireRole('admin', 'superadmin'), asy
 // Список сотрудников, попавших в протокол — что показывает «№ протокола» при клике во
 // вкладке «Протоколы» (п.4 запроса): ФИО, курс, статус (сдал/не сдал), результат %,
 // номер сертификата. Тот же состав участников, что уходит в Word-протокол (MEMBER_JOIN).
-router.get('/:id/members', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.get('/:id/members', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   try {
     const pRes = await query(`SELECT ${PROTOCOL_COLS} FROM protocols p WHERE p.id = $1`, [req.params.id]);
     const p = pRes.rows[0];
     if (!p) return res.status(404).json({ error: 'not_found', message: 'Протокол не найден' });
+    if (!(await assistantCanAccessProtocol(req.user, p.id))) {
+      return res.status(403).json({ error: 'forbidden', message: 'Протокол вне вашей зоны доступа' });
+    }
 
     const mRes = await query(`
       SELECT a.id AS assignment_id, a.user_id, a.status, a.test_date, a.score_percent, a.certificate_number,
@@ -195,8 +224,11 @@ async function checkNotLocked(protocolId, res) {
 
 // Скачать протокол в Word (.docx): дата открытия и номер подставляются в шапку,
 // сотрудники протокола — в таблицу (ФИО кириллицей).
-router.get('/:id/download', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.get('/:id/download', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   try {
+    if (!(await assistantCanAccessProtocol(req.user, req.params.id))) {
+      return res.status(403).json({ error: 'forbidden', message: 'Протокол вне вашей зоны доступа' });
+    }
     const data = await loadProtocolWithMembers(req.params.id);
     if (!data) return res.status(404).json({ error: 'not_found', message: 'Протокол не найден' });
     const { protocol: p, members } = data;
@@ -223,11 +255,14 @@ router.get('/:id/download', authRequired, requireRole('admin', 'superadmin'), as
 // Статус подписания по всем трём ролям комиссии (п.2, п.7 запроса) + может ли
 // ТЕКУЩИЙ пользователь подписать прямо сейчас (своя роль, ещё не подписано,
 // протокол не заблокирован).
-router.get('/:id/signatures', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.get('/:id/signatures', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   try {
     const pRes = await query(`SELECT ${PROTOCOL_COLS} FROM protocols p WHERE p.id = $1`, [req.params.id]);
     const p = pRes.rows[0];
     if (!p) return res.status(404).json({ error: 'not_found' });
+    if (!(await assistantCanAccessProtocol(req.user, p.id))) {
+      return res.status(403).json({ error: 'forbidden', message: 'Протокол вне вашей зоны доступа' });
+    }
 
     const sigs = await loadProtocolSignatures(p.id);
     const byRole = Object.fromEntries(sigs.map(s => [s.committee_role, s]));
@@ -265,7 +300,7 @@ router.get('/:id/signatures', authRequired, requireRole('admin', 'superadmin'), 
 // заранее сохранённый образец подписи (см. routes/signatures.js). Когда подписаны
 // все три роли — протокол «запечатывается» (п.6, п.8): формируется и сохраняется
 // итоговый PDF, фиксируется его контрольная сумма, редактирование блокируется.
-router.post('/:id/sign', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.post('/:id/sign', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   const { password } = req.body || {};
   if (!password) {
     return res.status(400).json({ error: 'password_required', message: 'Для подтверждения подписи введите пароль аккаунта' });
@@ -335,8 +370,11 @@ router.post('/:id/sign', authRequired, requireRole('admin', 'superadmin'), async
 });
 
 // Журнал подписания (п.5 запроса): ФИО, роль, дата и время, IP, браузер/устройство, № протокола
-router.get('/:id/journal', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.get('/:id/journal', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   try {
+    if (!(await assistantCanAccessProtocol(req.user, req.params.id))) {
+      return res.status(403).json({ error: 'forbidden', message: 'Протокол вне вашей зоны доступа' });
+    }
     const r = await query(`
       SELECT ps.committee_role, ps.signed_at, ps.ip_address, ps.user_agent,
              u.last_name, u.first_name, p.protocol_number
@@ -356,8 +394,11 @@ router.get('/:id/journal', authRequired, requireRole('admin', 'superadmin'), asy
 // / Ожидает»). Пока протокол не подписан всеми — формируется «на лету» (предпросмотр,
 // уже проставленные подписи видны). После полного подписания отдаётся ровно тот файл,
 // что был сохранён при запечатывании (см. POST /:id/sign) — чтобы pdf_hash не «расходился».
-router.get('/:id/pdf', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.get('/:id/pdf', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   try {
+    if (!(await assistantCanAccessProtocol(req.user, req.params.id))) {
+      return res.status(403).json({ error: 'forbidden', message: 'Протокол вне вашей зоны доступа' });
+    }
     const pRes = await query('SELECT locked, signed_pdf_data, protocol_number, open_date FROM protocols WHERE id = $1', [req.params.id]);
     const p = pRes.rows[0];
     if (!p) return res.status(404).json({ error: 'not_found' });
@@ -416,8 +457,9 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
   }
 });
 
-// Изменить номер/даты протокола
-router.patch('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+// Изменить номер/даты протокола — ТЗ §9: сужено до суперадмина (admin теперь не может
+// менять номер/даты уже открытого протокола, только открывать/закрывать/переоткрывать).
+router.patch('/:id', authRequired, requireRole('superadmin'), async (req, res) => {
   const { protocol_number, open_date, close_date, status } = req.body;
   const fields = [];
   const params = [];
@@ -478,7 +520,8 @@ router.post('/:id/reopen', authRequired, requireRole('admin', 'superadmin'), asy
   }
 });
 
-router.delete('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+// Удалить протокол — ТЗ §3, §9: только суперадмин.
+router.delete('/:id', authRequired, requireRole('superadmin'), async (req, res) => {
   try {
     if (!(await checkNotLocked(req.params.id, res))) return;
     await query('DELETE FROM protocols WHERE id = $1', [req.params.id]);

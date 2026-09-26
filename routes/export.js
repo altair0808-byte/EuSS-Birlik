@@ -4,7 +4,7 @@ const ExcelJS = require('exceljs');
 const bcrypt = require('bcryptjs');
 const { query } = require('../db');
 const { authRequired, requireRole } = require('./auth');
-const { splitMulti } = require('../lib/multiFilter');
+const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 
 // Экспорт журнала обучения в Excel.
 //
@@ -535,13 +535,22 @@ function writeSummarySheet(wb, allRows, ctx) {
 }
 
 // ---------- маршрут ----------
-router.get('/excel', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+// ТЗ «роли/ИИН/PDF=копия Word», ответ по §11.2: assistant тоже получает экспорт в ПОЛНОМ
+// объёме (те же колонки, что у admin/superadmin), но ограничен своей зоной видимости
+// (assistant_objects/assistant_departments) — см. scopedFilter(). Если зона не выдана,
+// доступа к экспорту нет вообще (безопасный дефолт, как и в списке сотрудников).
+router.get('/excel', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   try {
     const { object, department, course_id, status, user_id, date_from, date_to } = req.query;
     const validity = ['overdue', 'soon', 'valid'].includes(req.query.validity) ? req.query.validity : '';
     const sortKey = SORTERS[req.query.sort] ? req.query.sort : 'org';
     const split = ['object', 'department', 'course'].includes(req.query.split) ? req.query.split : 'none';
     const latestOnly = req.query.latest === '1' || req.query.latest === 'true';
+
+    const scope = scopedFilter(req.user, splitMulti(object), splitMulti(department));
+    if (scope.noAccess) {
+      return res.status(403).json({ error: 'no_zone', message: 'Вам не выдана зона видимости (объекты/отделы) — обратитесь к суперадмину' });
+    }
 
     let sql = `
       SELECT a.id, a.user_id, a.course_id, a.status, a.score_percent, a.test_date, a.next_test_date,
@@ -560,8 +569,8 @@ router.get('/excel', authRequired, requireRole('admin', 'superadmin'), async (re
       WHERE u.role = 'employee'
     `;
     const params = [];
-    const objects = splitMulti(object);
-    const departments = splitMulti(department);
+    const objects = scope.objects;
+    const departments = scope.departments;
     if (objects.length) { params.push(objects); sql += ` AND u.object = ANY($${params.length}::text[])`; }
     if (departments.length) { params.push(departments); sql += ` AND u.department = ANY($${params.length}::text[])`; }
     if (course_id) { params.push(course_id); sql += ` AND a.course_id = $${params.length}`; }
