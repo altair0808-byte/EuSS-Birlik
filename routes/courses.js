@@ -397,7 +397,8 @@ router.get('/:id/untrained', authRequired, requireRole('admin', 'superadmin'), a
         ) AS has_assignment
       FROM users u
       WHERE u.role = 'employee' AND u.active = 1
-        AND ($2::text IS NULL OR u.object = $2) AND ($3::text IS NULL OR u.department = $3)
+        AND (cardinality($2::text[]) = 0 OR u.object = ANY($2::text[]))
+        AND (cardinality($3::text[]) = 0 OR u.department = ANY($3::text[]))
         AND NOT EXISTS (
           SELECT 1 FROM assignments a WHERE a.user_id = u.id AND a.course_id = $1 AND a.status = 'passed'
         )
