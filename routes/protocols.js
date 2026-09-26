@@ -1,9 +1,13 @@
 const express = require('express');
 const router = express.Router();
+const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const { query } = require('../db');
 const { authRequired, requireRole } = require('./auth');
 const { buildProtocolDocx } = require('../protocolDocx');
+const { buildProtocolPdf } = require('../protocolPdf');
 const { splitMulti } = require('../lib/multiFilter');
+const { COMMITTEE_ROLES, COMMITTEE_ROLE_LABELS } = require('../lib/committeeRoles');
 
 // Протоколы комиссии по проверке знаний.
 // Администратор «открывает» протокол — указывает его номер и диапазон дат
@@ -22,7 +26,9 @@ const { splitMulti } = require('../lib/multiFilter');
 const PROTOCOL_COLS = `
   p.id, p.protocol_number, p.status, p.created_by, p.created_at,
   to_char(p.open_date, 'YYYY-MM-DD') AS open_date,
-  to_char(p.close_date, 'YYYY-MM-DD') AS close_date
+  to_char(p.close_date, 'YYYY-MM-DD') AS close_date,
+  p.locked, p.pdf_hash, p.pdf_version,
+  to_char(p.fully_signed_at, 'YYYY-MM-DD"T"HH24:MI:SS') AS fully_signed_at
 `;
 
 // Кто входит в протокол: назначения, привязанные к нему при сдаче теста (protocol_id), а также
@@ -144,30 +150,61 @@ router.get('/:id/members', authRequired, requireRole('admin', 'superadmin'), asy
   }
 });
 
+// Протокол + его сотрудники — общие данные и для Word (.docx), и для PDF с блоком
+// электронного подписания (см. GET /:id/download и GET /:id/pdf ниже).
+async function loadProtocolWithMembers(id) {
+  const pRes = await query(`SELECT ${PROTOCOL_COLS} FROM protocols p WHERE p.id = $1`, [id]);
+  const p = pRes.rows[0];
+  if (!p) return null;
+  // Порядок — по времени сдачи теста (как сотрудники проходили проверку), затем по ФИО
+  const mRes = await query(`
+    SELECT a.user_id, a.status, a.test_date,
+           u.last_name, u.first_name, u.position, u.object, u.department,
+           u.permanent_certificate_number, u.tco_badge
+    FROM protocols p
+    JOIN assignments a ON ${MEMBER_JOIN}
+    JOIN users u ON u.id = a.user_id AND u.role = 'employee'
+    WHERE p.id = $1
+    ORDER BY a.test_date NULLS LAST, u.last_name, u.first_name, a.id
+  `, [p.id]);
+  return { protocol: p, members: mRes.rows };
+}
+
+// Подписи протокола, присоединённые к подписавшим пользователям (ФИО/должность/картинка
+// подписи) — используется и для статуса на экране, и для сборки итогового PDF.
+async function loadProtocolSignatures(protocolId) {
+  const r = await query(`
+    SELECT ps.committee_role, ps.user_id, ps.signed_at, ps.ip_address, ps.user_agent,
+           u.last_name, u.first_name, u.position, u.signature_data
+    FROM protocol_signatures ps
+    JOIN users u ON u.id = ps.user_id
+    WHERE ps.protocol_id = $1
+  `, [protocolId]);
+  return r.rows;
+}
+
+async function checkNotLocked(protocolId, res) {
+  const r = await query('SELECT locked FROM protocols WHERE id = $1', [protocolId]);
+  if (!r.rows[0]) { res.status(404).json({ error: 'not_found' }); return false; }
+  if (r.rows[0].locked) {
+    res.status(409).json({ error: 'locked', message: 'Протокол полностью подписан всеми членами комиссии — изменения запрещены' });
+    return false;
+  }
+  return true;
+}
+
 // Скачать протокол в Word (.docx): дата открытия и номер подставляются в шапку,
 // сотрудники протокола — в таблицу (ФИО кириллицей).
 router.get('/:id/download', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
-    const pRes = await query(`SELECT ${PROTOCOL_COLS} FROM protocols p WHERE p.id = $1`, [req.params.id]);
-    const p = pRes.rows[0];
-    if (!p) return res.status(404).json({ error: 'not_found', message: 'Протокол не найден' });
-
-    // Порядок — по времени сдачи теста (как сотрудники проходили проверку), затем по ФИО
-    const mRes = await query(`
-      SELECT a.user_id, a.status, a.test_date,
-             u.last_name, u.first_name, u.position, u.object, u.department,
-             u.permanent_certificate_number, u.tco_badge
-      FROM protocols p
-      JOIN assignments a ON ${MEMBER_JOIN}
-      JOIN users u ON u.id = a.user_id AND u.role = 'employee'
-      WHERE p.id = $1
-      ORDER BY a.test_date NULLS LAST, u.last_name, u.first_name, a.id
-    `, [p.id]);
+    const data = await loadProtocolWithMembers(req.params.id);
+    if (!data) return res.status(404).json({ error: 'not_found', message: 'Протокол не найден' });
+    const { protocol: p, members } = data;
 
     const { buffer, fileName } = await buildProtocolDocx({
       protocolNumber: p.protocol_number,
       openDate: p.open_date,
-      members: mRes.rows
+      members
     });
 
     const asciiName = `protocol_${p.open_date}_${String(p.protocol_number).replace(/[^A-Za-z0-9_-]/g, '')}.docx`;
@@ -179,6 +216,175 @@ router.get('/:id/download', authRequired, requireRole('admin', 'superadmin'), as
   } catch (e) {
     console.error('Error building protocol docx:', e);
     res.status(500).json({ error: 'docx_error', message: 'Не удалось сформировать Word-файл: ' + e.message });
+  }
+});
+
+// ===================== Электронное подписание протокола =====================
+// Статус подписания по всем трём ролям комиссии (п.2, п.7 запроса) + может ли
+// ТЕКУЩИЙ пользователь подписать прямо сейчас (своя роль, ещё не подписано,
+// протокол не заблокирован).
+router.get('/:id/signatures', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+  try {
+    const pRes = await query(`SELECT ${PROTOCOL_COLS} FROM protocols p WHERE p.id = $1`, [req.params.id]);
+    const p = pRes.rows[0];
+    if (!p) return res.status(404).json({ error: 'not_found' });
+
+    const sigs = await loadProtocolSignatures(p.id);
+    const byRole = Object.fromEntries(sigs.map(s => [s.committee_role, s]));
+
+    const meRes = await query('SELECT committee_role, signature_data FROM users WHERE id = $1', [req.user.id]);
+    const me = meRes.rows[0] || {};
+
+    const roles = COMMITTEE_ROLES.map(role => {
+      const s = byRole[role];
+      return {
+        role,
+        label: COMMITTEE_ROLE_LABELS[role],
+        signed: !!s,
+        signed_by: s ? { name: `${s.last_name || ''} ${s.first_name || ''}`.trim(), position: s.position } : null,
+        signed_at: s ? s.signed_at : null,
+        can_sign: !p.locked && !s && me.committee_role === role
+      };
+    });
+
+    res.json({
+      locked: !!p.locked,
+      fully_signed_at: p.fully_signed_at,
+      status_label: COMMITTEE_ROLES.every(r => byRole[r]) ? 'Полностью подписан' : (sigs.length ? 'Частично подписан' : 'Не подписан'),
+      roles,
+      my_committee_role: me.committee_role || null,
+      my_committee_role_label: me.committee_role ? COMMITTEE_ROLE_LABELS[me.committee_role] : null,
+      my_signature_saved: !!me.signature_data
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
+// Подписать протокол своей ролью (п.2-п.3 запроса): требует пароль аккаунта и
+// заранее сохранённый образец подписи (см. routes/signatures.js). Когда подписаны
+// все три роли — протокол «запечатывается» (п.6, п.8): формируется и сохраняется
+// итоговый PDF, фиксируется его контрольная сумма, редактирование блокируется.
+router.post('/:id/sign', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+  const { password } = req.body || {};
+  if (!password) {
+    return res.status(400).json({ error: 'password_required', message: 'Для подтверждения подписи введите пароль аккаунта' });
+  }
+  try {
+    const uRes = await query('SELECT * FROM users WHERE id = $1', [req.user.id]);
+    const me = uRes.rows[0];
+    if (!me) return res.status(404).json({ error: 'not_found' });
+    if (!me.committee_role) {
+      return res.status(403).json({ error: 'no_committee_role', message: 'У вашего аккаунта не назначена роль в комиссии' });
+    }
+    if (!me.signature_data) {
+      return res.status(400).json({ error: 'no_signature', message: 'Сначала сохраните образец подписи: «Мой профиль → Электронная подпись»' });
+    }
+    if (!bcrypt.compareSync(String(password), me.password_hash || '')) {
+      return res.status(401).json({ error: 'invalid_password', message: 'Неверный пароль' });
+    }
+
+    const pRes = await query('SELECT id, locked FROM protocols WHERE id = $1', [req.params.id]);
+    const p = pRes.rows[0];
+    if (!p) return res.status(404).json({ error: 'not_found', message: 'Протокол не найден' });
+    if (p.locked) {
+      return res.status(409).json({ error: 'already_locked', message: 'Протокол уже полностью подписан и закрыт для изменений' });
+    }
+
+    const already = await query(
+      'SELECT id FROM protocol_signatures WHERE protocol_id = $1 AND committee_role = $2',
+      [p.id, me.committee_role]
+    );
+    if (already.rows.length) {
+      return res.status(409).json({ error: 'already_signed', message: 'Эта роль уже подписала протокол' });
+    }
+
+    const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+    const ua = req.headers['user-agent'] || '';
+    await query(
+      `INSERT INTO protocol_signatures (protocol_id, committee_role, user_id, ip_address, user_agent)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [p.id, me.committee_role, me.id, ip, ua]
+    );
+
+    const countRes = await query('SELECT COUNT(*)::int AS c FROM protocol_signatures WHERE protocol_id = $1', [p.id]);
+    let fullySigned = false;
+    if (countRes.rows[0].c >= COMMITTEE_ROLES.length) {
+      fullySigned = true;
+      const data = await loadProtocolWithMembers(p.id);
+      const sigs = await loadProtocolSignatures(p.id);
+      const settingsRes = await query('SELECT company_name FROM settings WHERE id = 1');
+      const pdfBuffer = await buildProtocolPdf({
+        protocol: data.protocol,
+        members: data.members,
+        signatures: sigs,
+        companyName: (settingsRes.rows[0] || {}).company_name
+      });
+      const hash = crypto.createHash('sha256').update(pdfBuffer).digest('hex');
+      await query(
+        `UPDATE protocols SET locked = TRUE, fully_signed_at = NOW(), pdf_hash = $1, signed_pdf_data = $2 WHERE id = $3`,
+        [hash, pdfBuffer.toString('base64'), p.id]
+      );
+    }
+
+    res.json({ ok: true, fully_signed: fullySigned });
+  } catch (e) {
+    console.error('Protocol sign error:', e);
+    res.status(500).json({ error: 'sign_error', message: 'Не удалось подписать протокол: ' + e.message });
+  }
+});
+
+// Журнал подписания (п.5 запроса): ФИО, роль, дата и время, IP, браузер/устройство, № протокола
+router.get('/:id/journal', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+  try {
+    const r = await query(`
+      SELECT ps.committee_role, ps.signed_at, ps.ip_address, ps.user_agent,
+             u.last_name, u.first_name, p.protocol_number
+      FROM protocol_signatures ps
+      JOIN users u ON u.id = ps.user_id
+      JOIN protocols p ON p.id = ps.protocol_id
+      WHERE ps.protocol_id = $1
+      ORDER BY ps.signed_at DESC
+    `, [req.params.id]);
+    res.json(r.rows.map(row => ({ ...row, committee_role_label: COMMITTEE_ROLE_LABELS[row.committee_role] || row.committee_role })));
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
+// PDF-версия протокола со статусом подписания и подписями (п.4 запроса: пример «Подписан
+// / Ожидает»). Пока протокол не подписан всеми — формируется «на лету» (предпросмотр,
+// уже проставленные подписи видны). После полного подписания отдаётся ровно тот файл,
+// что был сохранён при запечатывании (см. POST /:id/sign) — чтобы pdf_hash не «расходился».
+router.get('/:id/pdf', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+  try {
+    const pRes = await query('SELECT locked, signed_pdf_data, protocol_number, open_date FROM protocols WHERE id = $1', [req.params.id]);
+    const p = pRes.rows[0];
+    if (!p) return res.status(404).json({ error: 'not_found' });
+
+    let buffer;
+    if (p.locked && p.signed_pdf_data) {
+      buffer = Buffer.from(p.signed_pdf_data, 'base64');
+    } else {
+      const data = await loadProtocolWithMembers(req.params.id);
+      if (!data) return res.status(404).json({ error: 'not_found' });
+      const sigs = await loadProtocolSignatures(req.params.id);
+      const settingsRes = await query('SELECT company_name FROM settings WHERE id = 1');
+      buffer = await buildProtocolPdf({
+        protocol: data.protocol,
+        members: data.members,
+        signatures: sigs,
+        companyName: (settingsRes.rows[0] || {}).company_name
+      });
+    }
+
+    const asciiName = `protocol_${p.open_date}_${String(p.protocol_number).replace(/[^A-Za-z0-9_-]/g, '')}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${asciiName}"`);
+    res.send(buffer);
+  } catch (e) {
+    console.error('Protocol PDF error:', e);
+    res.status(500).json({ error: 'pdf_error', message: 'Не удалось сформировать PDF: ' + e.message });
   }
 });
 
@@ -224,6 +430,7 @@ router.patch('/:id', authRequired, requireRole('admin', 'superadmin'), async (re
   }
   if (!fields.length) return res.json({ ok: true });
   try {
+    if (!(await checkNotLocked(req.params.id, res))) return;
     if (protocol_number !== undefined || open_date !== undefined) {
       const curRes = await query(`SELECT protocol_number, to_char(open_date, 'YYYY-MM-DD') AS open_date FROM protocols WHERE id = $1`, [req.params.id]);
       const cur = curRes.rows[0];
@@ -250,6 +457,7 @@ router.patch('/:id', authRequired, requireRole('admin', 'superadmin'), async (re
 // Закрыть протокол вручную (до истечения даты закрытия)
 router.post('/:id/close', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
+    if (!(await checkNotLocked(req.params.id, res))) return;
     const result = await query(`UPDATE protocols SET status = 'closed' WHERE id = $1 RETURNING id, status`, [req.params.id]);
     if (!result.rows[0]) return res.status(404).json({ error: 'not_found' });
     res.json(result.rows[0]);
@@ -261,6 +469,7 @@ router.post('/:id/close', authRequired, requireRole('admin', 'superadmin'), asyn
 // Снова открыть протокол
 router.post('/:id/reopen', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
+    if (!(await checkNotLocked(req.params.id, res))) return;
     const result = await query(`UPDATE protocols SET status = 'open' WHERE id = $1 RETURNING id, status`, [req.params.id]);
     if (!result.rows[0]) return res.status(404).json({ error: 'not_found' });
     res.json(result.rows[0]);
@@ -271,6 +480,7 @@ router.post('/:id/reopen', authRequired, requireRole('admin', 'superadmin'), asy
 
 router.delete('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
+    if (!(await checkNotLocked(req.params.id, res))) return;
     await query('DELETE FROM protocols WHERE id = $1', [req.params.id]);
     res.json({ ok: true });
   } catch (e) {

@@ -12,6 +12,7 @@ const { makeUploader } = require('../upload');
 const { buildHistoricalFields } = require('./assignments');
 const { computeFioFields, transliterate } = require('../lib/fio');
 const { splitMulti } = require('../lib/multiFilter');
+const { COMMITTEE_ROLES } = require('../lib/committeeRoles');
 
 // Ищет уже существующего сотрудника с таким же ФИО (без учёта регистра/пробелов) —
 // п.9 запроса: "УТЯШЕВ АЛТАИР" / "утяшев алтаир" / "Утяшев Алтаир" — одна запись.
@@ -48,7 +49,8 @@ router.get('/', authRequired, requireRole('admin', 'superadmin'), async (req, re
     const statusesParam = splitMulti(req.query.statuses);
     const statusFilter = req.query.status === 'archive' ? 'archive' : (req.query.status === 'all' ? 'all' : 'active');
     let sql = `SELECT id, last_name, first_name, object, department, position, login, role, active,
-                      employment_status, status_date, created_at, permanent_certificate_number, tco_badge
+                      employment_status, status_date, created_at, permanent_certificate_number, tco_badge,
+                      committee_role
                FROM users WHERE role = $1`;
     const params = [role];
     if (statusesParam.length) {
@@ -388,7 +390,8 @@ router.get('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
   try {
     const result = await query(
       `SELECT id, last_name, first_name, object, department, position, login, role, active,
-              employment_status, status_date, created_at, permanent_certificate_number, tco_badge
+              employment_status, status_date, created_at, permanent_certificate_number, tco_badge,
+              committee_role
        FROM users WHERE id = $1 AND role != 'superadmin'`,
       [req.params.id]
     );
@@ -444,11 +447,22 @@ function validateRole(requesterRole, targetRole) {
   return false;
 }
 
+// Роль в комиссии по проверке знаний (модуль электронного подписания протоколов,
+// п.1 запроса) — пустая строка/undefined снимают роль, иначе значение должно быть
+// одним из COMMITTEE_ROLES.
+function normalizeCommitteeRole(value) {
+  const v = value === undefined ? undefined : (String(value || '').trim() || null);
+  if (v !== undefined && v !== null && !COMMITTEE_ROLES.includes(v)) {
+    throw new Error('invalid_committee_role');
+  }
+  return v;
+}
+
 // Create single user
 // Логин и пароль необязательны при создании — можно добавить сотрудника
 // только по ФИО и назначить ему доступ позже через редактирование карточки.
 router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { last_name, first_name, object, department, position, login, password, role, permanent_certificate_number, tco_badge } = req.body;
+  const { last_name, first_name, object, department, position, login, password, role, permanent_certificate_number, tco_badge, committee_role } = req.body;
   const targetRole = role || 'employee';
   const loginVal = login && String(login).trim() ? String(login).trim() : null;
 
@@ -460,6 +474,12 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
   }
   if (loginVal && !password) {
     return res.status(400).json({ error: 'password_required', message: 'При указании логина укажите и пароль для него' });
+  }
+  let committeeRoleVal;
+  try {
+    committeeRoleVal = normalizeCommitteeRole(committee_role) || null;
+  } catch (e) {
+    return res.status(400).json({ error: 'invalid_committee_role', message: 'Недопустимая роль в комиссии' });
   }
 
   try {
@@ -485,12 +505,12 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
     const hash = loginVal ? bcrypt.hashSync(String(password), 10) : null;
     const { normalized, translit } = computeFioFields(last_name, first_name);
     const result = await query(
-      `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role, permanent_certificate_number, tco_badge, full_name_normalized, full_name_translit)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+      `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role, permanent_certificate_number, tco_badge, full_name_normalized, full_name_translit, committee_role)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
       [last_name, first_name, object || '', department || '', position || '', loginVal, hash, targetRole,
        String(permanent_certificate_number || '').trim() || null,
        String(tco_badge || '').trim() || null,
-       normalized, translit]
+       normalized, translit, committeeRoleVal]
     );
     res.json({ id: result.rows[0].id });
   } catch (e) {
@@ -511,9 +531,23 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
       return res.status(403).json({ error: 'forbidden', message: 'Администратор может редактировать только обычных сотрудников' });
     }
 
-    const { last_name, first_name, object, department, position, login, password, active, role, permanent_certificate_number, tco_badge } = req.body;
+    const { last_name, first_name, object, department, position, login, password, active, role, permanent_certificate_number, tco_badge, committee_role } = req.body;
     const fields = [];
     const params = [];
+
+    // Роль в комиссии по проверке знаний (модуль электронного подписания протоколов).
+    // Пустая строка/null снимает роль — при этом сохранённая подпись сотрудника
+    // не удаляется автоматически (администратор может назначить роль обратно позже).
+    if (committee_role !== undefined) {
+      let committeeRoleVal;
+      try {
+        committeeRoleVal = normalizeCommitteeRole(committee_role) || null;
+      } catch (e) {
+        return res.status(400).json({ error: 'invalid_committee_role', message: 'Недопустимая роль в комиссии' });
+      }
+      params.push(committeeRoleVal);
+      fields.push(`committee_role = $${params.length}`);
+    }
 
     if (role !== undefined) {
       if (req.user.role === 'admin' && role !== 'employee') {

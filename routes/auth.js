@@ -50,6 +50,11 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'invalid_credentials', message: 'Неверный логин или пароль' });
     }
 
+    // committee_role — роль в комиссии по проверке знаний (модуль электронного
+    // подписания протоколов, см. routes/signatures.js, routes/protocols.js).
+    // Кладём и в токен (фронтенду — чтобы показать пункт «Электронная подпись»
+    // без лишнего запроса), и в ответ логина; сами операции подписания/сохранения
+    // подписи на сервере всегда перепроверяют актуальное значение из БД, а не токена.
     const token = jwt.sign(
       {
         id: user.id,
@@ -59,7 +64,8 @@ router.post('/login', async (req, res) => {
         first_name: user.first_name,
         object: user.object,
         department: user.department,
-        position: user.position
+        position: user.position,
+        committee_role: user.committee_role || null
       },
       JWT_SECRET,
       { expiresIn: '12h' }
@@ -75,7 +81,8 @@ router.post('/login', async (req, res) => {
         first_name: user.first_name,
         object: user.object,
         department: user.department,
-        position: user.position
+        position: user.position,
+        committee_role: user.committee_role || null
       }
     });
   } catch (err) {
