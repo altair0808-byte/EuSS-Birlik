@@ -421,6 +421,31 @@ async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_certificates_uid ON certificates(certificate_uid);
   `);
 
+  // УДОСТОВЕРЕНИЯ — отдельный документ, НЕ сертификат (см. idCardService.js).
+  // Сертификат остаётся как был (таблица certificates выше). Удостоверение — второй
+  // документ на то же назначение, со своим номером (= логин сотрудника), своим UID
+  // (UD-...) и своим бланком. Миграция накатывается автоматически при старте сервера.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS id_cards (
+      id BIGSERIAL PRIMARY KEY,
+      employee_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      assignment_id BIGINT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+      protocol_id BIGINT REFERENCES protocols(id) ON DELETE SET NULL,
+      course_id BIGINT REFERENCES courses(id) ON DELETE SET NULL,
+      card_number TEXT NOT NULL,
+      card_uid TEXT NOT NULL UNIQUE,
+      issue_date DATE,
+      expiry_date DATE,
+      status TEXT NOT NULL DEFAULT 'VALID' CHECK (status IN ('VALID','EXPIRED','REVOKED')),
+      verification_token TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (assignment_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_id_cards_employee ON id_cards(employee_id);
+    CREATE INDEX IF NOT EXISTS idx_id_cards_uid ON id_cards(card_uid);
+  `);
+
   // Разовое заполнение full_name_normalized/full_name_translit для сотрудников,
   // созданных до этого обновления (новые записи заполняются сразу в routes/users.js).
   try {

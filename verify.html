@@ -33,7 +33,7 @@
 </head>
 <body>
   <div class="card">
-    <h1>Удостоверение о проверке знаний по БиОТ</h1>
+    <h1>Проверка документа о проверке знаний по БиОТ</h1>
     <p class="sub">Білімді тексеру куәлігі / Safety knowledge certificate</p>
     <div id="content" class="loading">Проверка... / Тексерілуде... / Checking...</div>
   </div>
@@ -56,19 +56,34 @@ async function run() {
   const uid = decodeURIComponent(location.pathname.split('/').pop());
   const content = document.getElementById('content');
   try {
-    const resp = await fetch('/api/certificates/verify/' + encodeURIComponent(uid));
-    const data = await resp.json();
+    // Один и тот же QR-адрес обслуживает ДВА разных документа: сертификат
+    // (/api/certificates/verify) и удостоверение (/api/id-cards/verify).
+    // UID удостоверения начинается с UD-, сертификата — с BIOT-, поэтому сначала
+    // спрашиваем подходящий сервис, а затем, на всякий случай, второй.
+    const isCard = /^UD-/i.test(uid);
+    const endpoints = isCard
+      ? ['/api/id-cards/verify/', '/api/certificates/verify/']
+      : ['/api/certificates/verify/', '/api/id-cards/verify/'];
+    let data = { found: false };
+    for (const ep of endpoints) {
+      try {
+        const r = await fetch(ep + encodeURIComponent(uid));
+        const d = await r.json();
+        if (d && d.found) { data = d; break; }
+      } catch (err) { /* пробуем следующий сервис */ }
+    }
     if (!data.found) {
       content.innerHTML = `
-        <div class="status notfound"><span class="dot"></span>УДОСТОВЕРЕНИЕ НЕ НАЙДЕНО / NOT FOUND</div>
+        <div class="status notfound"><span class="dot"></span>ДОКУМЕНТ НЕ НАЙДЕН / NOT FOUND</div>
         <div class="uid">${uid}</div>`;
       return;
     }
     const meta = STATUS_META[data.status] || STATUS_META.VALID;
     content.innerHTML = `
       <div class="status ${meta.cls}"><span class="dot"></span>${meta.text}</div>
+      <div class="row"><span class="label">Тип документа</span><span class="value">${data.document_type === 'id_card' ? 'Удостоверение' : 'Сертификат'}</span></div>
       <div class="row"><span class="label">ФИО / Name</span><span class="value">${data.full_name || '—'}</span></div>
-      <div class="row"><span class="label">№ удостоверения</span><span class="value">${data.certificate_number || '—'}</span></div>
+      <div class="row"><span class="label">Номер документа</span><span class="value">${data.certificate_number || '—'}</span></div>
       <div class="row"><span class="label">Курс / Course</span><span class="value">${data.course_title_ru || data.course_title_kz || '—'}</span></div>
       <div class="row"><span class="label">№ протокола</span><span class="value">${data.protocol_number || '—'}</span></div>
       <div class="row"><span class="label">Дата выдачи</span><span class="value">${fmtDate(data.issue_date)}</span></div>

@@ -197,7 +197,7 @@ function buildProtocolPdfDrawn({ protocol, members, signatures, companyName }) {
 // Путь к бинарнику можно переопределить переменной окружения SOFFICE_PATH (например,
 // если в проде soffice лежит не в PATH). Бросает исключение, если конвертация не удалась —
 // вызывающий код (buildProtocolPdf) ловит её и уходит на запасной pdfkit-вариант.
-function convertDocxToPdf(docxBuffer) {
+function convertDocxToPdf(docxBuffer, sofficeBin) {
   return new Promise((resolve, reject) => {
     let tmpDir;
     try {
@@ -213,7 +213,7 @@ function convertDocxToPdf(docxBuffer) {
       cleanup();
       return reject(e);
     }
-    const soffice = process.env.SOFFICE_PATH || 'soffice';
+    const soffice = sofficeBin || process.env.SOFFICE_PATH || 'soffice';
     execFile(
       soffice,
       ['--headless', '--norestore', '--convert-to', 'pdf', '--outdir', tmpDir, docxPath],
@@ -238,21 +238,52 @@ function convertDocxToPdf(docxBuffer) {
 }
 
 // Точка входа, которую вызывает routes/protocols.js (GET /:id/pdf, POST /:id/sign).
-// Отдаёт один лист — тот же бланк, что и .docx, с уже вписанными подписями тех ролей,
-// которые успели подписать (buildProtocolDocx → embedSignaturesIntoXml).
+//
+// ВАЖНО (исправление): PDF-протокол ВСЕГДА получается конвертацией того же самого
+// .docx-бланка, что скачивается кнопкой «Word». Раньше при недоступном LibreOffice
+// молча включался запасной pdfkit-вариант с другой вёрсткой — из-за этого PDF и Word
+// выглядели по-разному. Теперь запасной вариант по умолчанию ВЫКЛЮЧЕН: если конвертация
+// невозможна, роут вернёт понятную ошибку («скачайте Word-версию / установите
+// LibreOffice»), но никогда не отдаст документ с чужой вёрсткой.
+// Включить старое поведение можно переменной окружения PROTOCOL_PDF_FALLBACK=1.
+const SOFFICE_CANDIDATES = [
+  process.env.SOFFICE_PATH,
+  'soffice',
+  'libreoffice',
+  '/usr/bin/soffice',
+  '/usr/bin/libreoffice',
+  '/usr/lib/libreoffice/program/soffice',
+  '/Applications/LibreOffice.app/Contents/MacOS/soffice',
+  'C:\\Program Files\\LibreOffice\\program\\soffice.exe'
+].filter(Boolean);
+
 async function buildProtocolPdf({ protocol, members, signatures, companyName }) {
-  try {
-    const { buffer: docxBuffer } = await buildProtocolDocx({
-      protocolNumber: protocol.protocol_number,
-      openDate: protocol.open_date,
-      members,
-      signatures
-    });
-    return await convertDocxToPdf(docxBuffer);
-  } catch (e) {
-    console.error('[protocolPdf] LibreOffice-конвертация недоступна, используется запасной вариант (pdfkit):', e.message);
+  const { buffer: docxBuffer } = await buildProtocolDocx({
+    protocolNumber: protocol.protocol_number,
+    openDate: protocol.open_date,
+    members,
+    signatures
+  });
+
+  let lastError = null;
+  for (const bin of SOFFICE_CANDIDATES) {
+    try {
+      return await convertDocxToPdf(docxBuffer, bin);
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  if (process.env.PROTOCOL_PDF_FALLBACK === '1') {
+    console.error('[protocolPdf] LibreOffice недоступен, включён запасной вариант (вёрстка отличается от Word):', lastError && lastError.message);
     return buildProtocolPdfDrawn({ protocol, members, signatures, companyName });
   }
+
+  throw new Error(
+    'PDF формируется из того же Word-бланка через LibreOffice, но конвертер недоступен на сервере. '
+    + 'Скачайте Word-версию протокола или установите LibreOffice (переменная SOFFICE_PATH). '
+    + 'Подробности: ' + (lastError ? lastError.message : 'неизвестная ошибка')
+  );
 }
 
 module.exports = { buildProtocolPdf, buildProtocolPdfDrawn };

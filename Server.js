@@ -35,6 +35,8 @@ app.use('/api/protocols', require('./routes/protocols'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/export', require('./routes/export'));
 app.use('/api/certificates', require('./routes/certificate'));
+// Удостоверения — отдельный документ, не сертификат (см. idCardService.js)
+app.use('/api/id-cards', require('./routes/idCards'));
 app.use('/api/signatures', require('./routes/signatures'));
 
 // Публичная страница проверки подлинности удостоверения (QR-код на удостоверении

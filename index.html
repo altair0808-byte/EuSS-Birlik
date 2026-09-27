@@ -130,6 +130,8 @@ const I18N = {
     no: 'Нет',
     allow_retake: 'Разрешить пересдачу',
     download_cert: 'Скачать сертификат',
+    download_id_card: 'Скачать удостоверение',
+    id_card_number: 'Номер удостоверения',
     score: 'Балл',
     test_date: 'Дата прохождения',
     next_test_date: 'Следующее прохождение',
@@ -287,6 +289,8 @@ const I18N = {
     no: 'Жоқ',
     allow_retake: 'Қайта тапсыруға рұқсат беру',
     download_cert: 'Сертификатты жүктеу',
+    download_id_card: 'Куәлікті жүктеу',
+    id_card_number: 'Куәлік нөмірі',
     score: 'Балл',
     test_date: 'Өту күні',
     next_test_date: 'Келесі өту күні',
@@ -523,6 +527,8 @@ const api = {
   getCertificates(filter = {}) { return this.req('/api/assignments/certificates' + qs(filter)); },
   // Удостоверения БиОТ сотрудника (вкладка «Удостоверение БиОТ», ЭТАП 1)
   getMyCertificates() { return this.req('/api/certificates/mine'); },
+  // Удостоверения — отдельный документ, не сертификат
+  getMyIdCards() { return this.req('/api/id-cards/mine'); },
   // Материалы/видео курса отдельно RU/KZ (п.3)
   uploadMaterial(courseId, lang, file) {
     const fd = new FormData(); fd.append('file', file);
@@ -3919,7 +3925,8 @@ async function loadAssignmentsList() {
         </td>
         <td class="px-4 py-3 font-bold">${a.score_percent !== null ? a.score_percent + '%' : '—'}</td>
         <td class="px-4 py-3 text-right space-x-2">
-          ${a.status === 'passed' && a.certificate_number ? `<a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="text-blue-600 hover:underline text-xs font-semibold">Сертификат</a>` : ''}
+          ${a.status === 'passed' && a.certificate_number ? `<a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="text-blue-600 hover:underline text-xs font-semibold">Сертификат</a>
+          <a href="#" onclick="downloadAuthed('/api/id-cards/${a.id}');return false;" class="text-indigo-600 hover:underline text-xs font-semibold">Удостоверение</a>` : ''}
           ${a.status === 'failed' ? `<button onclick="allowRetake(${a.id})" class="text-amber-600 hover:underline text-xs">Пересдача</button>` : ''}
           ${state.user && state.user.role === 'superadmin' ? `<button onclick="delAssign(${a.id})" class="text-red-600 hover:underline text-xs">Удалить</button>` : ''}
         </td>
@@ -4241,6 +4248,7 @@ async function loadCertificatesList() {
         <td class="px-4 py-3 text-xs text-slate-600">№ ${esc(a.protocol_number || '—')}</td>
         <td class="px-4 py-3 text-right">
           <a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="text-blue-600 hover:underline text-xs font-semibold">${t('download_cert')}</a>
+          <a href="#" onclick="downloadAuthed('/api/id-cards/${a.id}');return false;" class="text-indigo-600 hover:underline text-xs font-semibold ml-3">${t('download_id_card')}</a>
         </td>
       </tr>
     `).join('');
@@ -4838,7 +4846,8 @@ async function loadUserProfile(userId) {
                   <td class="px-4 py-3 text-xs text-slate-600">${a.next_test_date ? new Date(a.next_test_date).toLocaleDateString('ru-RU') : (a.no_expiry && a.status === 'passed' ? (CURRENT_LANG === 'kz' ? 'Мерзімсіз' : 'Бессрочно') : '—')}</td>
                   <td class="px-4 py-3 text-right whitespace-nowrap space-x-2">
                     ${a.user_answers ? `<button onclick="openAnswersModal(${a.id})" class="text-slate-600 hover:underline text-xs font-semibold">Подробнее</button>` : ''}
-                    ${a.status === 'passed' && a.certificate_number ? `<a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="text-blue-600 hover:underline text-xs font-semibold">${t('download_cert')}</a>` : ''}
+                    ${a.status === 'passed' && a.certificate_number ? `<a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="text-blue-600 hover:underline text-xs font-semibold">${t('download_cert')}</a>
+                    <a href="#" onclick="downloadAuthed('/api/id-cards/${a.id}');return false;" class="text-indigo-600 hover:underline text-xs font-semibold ml-2">${t('download_id_card')}</a>` : ''}
                     ${state.user && state.user.role === 'superadmin' ? `<button onclick="delAssign(${a.id}, ${user.id})" class="text-red-600 hover:underline text-xs font-semibold">Удалить</button>` : ''}
                   </td>
                 </tr>
@@ -5042,7 +5051,8 @@ async function loadMyCertificate() {
             </div>
           </div>
           <div class="flex gap-2 shrink-0">
-            <a href="#" onclick="downloadAuthed('/api/certificates/uid/${encodeURIComponent(c.certificate_uid)}/pdf');return false;" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg">${_L('Скачать PDF', 'PDF жүктеу')}</a>
+            <a href="#" onclick="downloadAuthed('/api/certificates/uid/${encodeURIComponent(c.certificate_uid)}/pdf');return false;" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg">${_L('Сертификат PDF', 'Сертификат PDF')}</a>
+            <a href="#" onclick="downloadAuthed('/api/id-cards/${c.assignment_id}');return false;" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg">${_L('Удостоверение PDF', 'Куәлік PDF')}</a>
             <a href="/verify/${encodeURIComponent(c.certificate_uid)}" target="_blank" rel="noopener" class="px-3 py-1.5 border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-semibold rounded-lg">${_L('Проверить подлинность', 'Түпнұсқалығын тексеру')}</a>
           </div>
         </div>
@@ -5186,6 +5196,7 @@ function myPassedRowHtml(a) {
         ${materialPath ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(materialPath)}', '${jsAttrEsc(title)}')" class="text-blue-600 hover:underline">📄 ${_L('Материалы', 'Материалдар')}</button>` : ''}
         ${videoSrc ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(videoSrc)}', '${jsAttrEsc(title)}')" class="text-blue-600 hover:underline">🎬 ${_L('Видео', 'Бейне')}</button>` : ''}
         <a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg">${t('download_cert')}</a>
+        <a href="#" onclick="downloadAuthed('/api/id-cards/${a.id}');return false;" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg">${t('download_id_card')}</a>
       </div>
     </div>`;
 }
