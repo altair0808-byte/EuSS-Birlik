@@ -21,6 +21,7 @@
 const fs = require('fs');
 const path = require('path');
 const JSZip = require('jszip');
+const { widthOfText } = require('./lib/textWidth');
 
 const TEMPLATE_PATH = path.join(__dirname, 'templates', 'protocol_template.docx');
 
@@ -209,6 +210,59 @@ function buildPaddedNameRun(rPrXml, blankLen, label) {
   return `<w:r>${nameRPr}<w:t xml:space="preserve"> ${xmlEscape(label)}${pad}</w:t></w:r>`;
 }
 
+// ---------- Верхний блок комиссии: центрирование по pt-ширине + автоподбор кегля ----------
+// (в отличие от buildPaddedNameRun выше, который просто дополняет пробелами ПО ЧИСЛУ
+// СИМВОЛОВ — в пропорциональном шрифте это не даёт ни фиксированной визуальной ширины
+// линии, ни центрирования, и при длинном ФИО текст может вылезти за пределы поля и
+// сдвинуть остальной текст строки; см. ТЗ п. «не смещая текст», «центрировать»,
+// «автоматически уменьшать размер шрифта»).
+//
+// Идея: у каждой из трёх строк шапки в исходном шаблоне уже есть подчёркивание фиксированной
+// pt-ширины (собрано из подчёркиваний/пробелов конкретного кегля). Меряем эту ширину реальным
+// шрифтом (Liberation Serif — шрифт по умолчанию в самом .docx, см. lib/textWidth.js), она и
+// становится «фиксированной зоной» для данной строки. Внутри зоны текст центрируется пробелами
+// слева/справа (тоже подчёркнутыми — так линия остаётся сплошной и видимой), а кегль
+// уменьшается шагом 0.5pt, только если при исходном кегле строка реально не помещается.
+const MIN_FIT_FONT_PT = 6;
+const FIT_MARGIN_PT = 3; // небольшой запас с каждой стороны, чтобы буквы не касались краёв зоны
+
+function fitFontSizePt(text, zoneWidthPt, startSizePt) {
+  let size = startSizePt;
+  while (size > MIN_FIT_FONT_PT && widthOfText(text, size) > zoneWidthPt - FIT_MARGIN_PT) {
+    size -= 0.5;
+  }
+  return Math.max(size, MIN_FIT_FONT_PT);
+}
+
+// Меняет/добавляет <w:sz>/<w:szCs> (значения в полупунктах) в rPr, не трогая остальные
+// свойства рана (курсив/жирность и т.п.) — нужно только когда автоподбор реально уменьшил кегль.
+function setFontSizeHalfPt(rPrXml, halfPt) {
+  let out = rPrXml;
+  out = /<w:sz\b/.test(out)
+    ? out.replace(/<w:sz w:val="\d+"\/>/, `<w:sz w:val="${halfPt}"/>`)
+    : out.replace(/<\/w:rPr>$/, `<w:sz w:val="${halfPt}"/></w:rPr>`);
+  out = /<w:szCs\b/.test(out)
+    ? out.replace(/<w:szCs w:val="\d+"\/>/, `<w:szCs w:val="${halfPt}"/>`)
+    : out.replace(/<\/w:rPr>$/, `<w:szCs w:val="${halfPt}"/></w:rPr>`);
+  return out;
+}
+
+// zoneWidthPt — фиксированная pt-ширина строки (не меняется от длины ФИО — меняется только
+// то, сколько пробелов уходит слева/справа для центрирования и, при необходимости, кегль).
+function buildFittedCenteredRun(rPrXml, zoneWidthPt, originalSizePt, label) {
+  const size = fitFontSizePt(label, zoneWidthPt, originalSizePt);
+  const nameRPr = setFontSizeHalfPt(injectUnderline(rPrXml), Math.round(size * 2));
+
+  const labelWidth = widthOfText(label, size);
+  const spaceWidth = widthOfText(' ', size) || 1;
+  const freeWidth = Math.max(0, zoneWidthPt - labelWidth);
+  const leadSpaces = Math.max(1, Math.round(freeWidth / 2 / spaceWidth));
+  const trailSpaces = Math.max(1, Math.round(freeWidth / 2 / spaceWidth));
+
+  const text = `${' '.repeat(leadSpaces)}${label}${' '.repeat(trailSpaces)}`;
+  return `<w:r>${nameRPr}<w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r>`;
+}
+
 // Подставляет в xml шаблона реальные подписи членов комиссии, которые уже подписали
 // (signaturesByRole: { chairman: {...}, biot_engineer: {...}, member: {...} }), и, если
 // передана, печать организации (только у председателя, только один раз на документ).
@@ -303,14 +357,26 @@ async function embedSignaturesIntoXml(zip, xml, signaturesByRole, companyStamp) 
   return xml;
 }
 
-// Заполняет верхние справочные строки шапки («Председателя ___», «Инженер по БиОТ»,
-// «Представитель работников») — но только для тех ролей, кто уже реально подписал
-// (signaturesByRole), т.к. на роли "инженер"/"представитель" в комиссии может быть
-// назначено несколько человек, и заранее неизвестно, кто из них в итоге подпишет именно
-// этот протокол. Не трогает медиа/rels — тут только текст, картинки нет.
-// Председатель в шапке — только ФИО (без должности), инженер/член — «должность, ФИО»,
-// как и в примерах ТЗ. Строка укорачивается/дополняется пробелами до исходной длины
-// подчёркивания, чтобы не сдвинуть остальной текст документа.
+// Заполняет три верхние строки шапки — Председатель / Инженер по ТБ / Представитель
+// работников, СТРОГО в этом порядке (порядок задан самим HEADER_LINE_TARGETS и порядком
+// строк в шаблоне — мы никогда не меняем, какая роль в какую строку идёт). Заполняется
+// только для тех ролей, кто уже реально подписал протокол (signaturesByRole), т.к. на
+// роли "инженер"/"представитель" может быть назначено несколько человек, и заранее
+// неизвестно, кто из них в итоге подпишет именно этот протокол; роль без подписи остаётся
+// пустой линией, как в шаблоне. Не трогает медиа/rels — тут только текст, картинки нет.
+//
+// Формат единый для всех трёх строк — «должность, ФИО» (см. ТЗ):
+//   Председатель комиссии, Бекешов Азамат
+//   Инженер по ТБ, Утяшев Алтаир
+//   Представитель рабочих, Иванов Иван
+// Для председателя «должность» — это фиксированная роль в комиссии (CHAIRMAN_ROLE_LABEL),
+// а не его личная должность из БД — так же, как в нижнем блоке подписи. Для инженера/члена —
+// их фактическая должность из БД (у Утяшева она и есть «Инженер по ТБ» и т.п.).
+//
+// Каждая строка вписывается в СВОЮ фиксированную pt-зону (ширина линии подчёркивания из
+// самого шаблона, измеренная реальным шрифтом — см. buildFittedCenteredRun), центрируется
+// внутри неё и, если ФИО слишком длинное, кегль автоматически уменьшается — сама зона
+// (и, соответственно, остальной текст бланка) при этом не сдвигается.
 function embedHeaderNamesIntoXml(xml, signaturesByRole) {
   if (!signaturesByRole || !Object.keys(signaturesByRole).length) return xml;
 
@@ -320,14 +386,22 @@ function embedHeaderNamesIntoXml(xml, signaturesByRole) {
 
     const rPrMatch = target.runXml.match(/^<w:r>(<w:rPr>.*?<\/w:rPr>)<w:t/);
     const textMatch = target.runXml.match(/<w:t[^>]*>(.*)<\/w:t>/);
+    const szMatch = target.runXml.match(/<w:sz w:val="(\d+)"\/>/);
     if (!rPrMatch || !textMatch) continue;
-    const originalLen = textMatch[1].length;
+    // Кегль исходной линии — если в run он не задан явно, наследуется дефолт документа (24
+    // полупункта = 12pt, см. word/styles.xml → w:docDefaults).
+    const originalSizePt = (szMatch ? parseInt(szMatch[1], 10) : 24) / 2;
+    // Фиксированная pt-ширина зоны = ширина исходной линии подчёркивания в шаблоне,
+    // измеренная тем же шрифтом/кеглем — не зависит от того, что мы туда впишем.
+    const zoneWidthPt = widthOfText(textMatch[1], originalSizePt);
 
     const fio = fullNameCyr(sig.last_name, sig.first_name);
-    const position = toCyrillic(cleanText(sig.position), false);
-    const nameLabel = target.role === 'chairman' ? fio : buildLabel(position, fio);
-    const nameRun = buildPaddedNameRun(rPrMatch[1], originalLen, nameLabel);
+    const roleLabel = target.role === 'chairman'
+      ? CHAIRMAN_ROLE_LABEL
+      : toCyrillic(cleanText(sig.position), false);
+    const nameLabel = buildLabel(roleLabel, fio);
 
+    const nameRun = buildFittedCenteredRun(rPrMatch[1], zoneWidthPt, originalSizePt, nameLabel);
     xml = xml.replace(target.runXml, nameRun);
   }
 
