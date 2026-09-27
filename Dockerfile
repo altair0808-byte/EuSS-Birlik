@@ -6,9 +6,15 @@ FROM node:20-bookworm-slim
 
 # libreoffice-writer — достаточно (только конвертация .docx -> .pdf, не нужен
 # полный офисный пакет с Calc/Impress — это ощутимо экономит время сборки и
-# размер образа). Шрифты — чтобы кириллица в PDF не превращалась в кракозябры.
+# размер образа). unoconv/python3-uno — клиент, который подключается к уже
+# ЗАПУЩЕННОМУ LibreOffice (см. start.sh) вместо того, чтобы поднимать его заново
+# на каждый запрос (иначе каждое «Скачать PDF» — это заново запустить весь
+# LibreOffice, 10-40+ секунд на слабом сервере). Шрифты — чтобы кириллица в PDF
+# не превращалась в кракозябры.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libreoffice-writer \
+      unoconv \
+      python3-uno \
       fonts-dejavu \
       fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
@@ -21,9 +27,10 @@ COPY package*.json ./
 RUN npm install --omit=dev
 
 COPY . .
+RUN chmod +x start.sh
 
 ENV NODE_ENV=production
 # Render сам передаёт правильный PORT через переменную окружения — Server.js
 # уже её читает (process.env.PORT), ничего дополнительно указывать не нужно.
 
-CMD ["node", "Server.js"]
+CMD ["./start.sh"]

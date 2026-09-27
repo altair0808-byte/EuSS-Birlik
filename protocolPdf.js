@@ -193,48 +193,84 @@ function buildProtocolPdfDrawn({ protocol, members, signatures, companyName }) {
   });
 }
 
-// Конвертирует буфер .docx в буфер .pdf через `soffice --headless --convert-to pdf`.
-// Путь к бинарнику можно переопределить переменной окружения SOFFICE_PATH (например,
-// если в проде soffice лежит не в PATH). Бросает исключение, если конвертация не удалась —
-// вызывающий код (buildProtocolPdf) ловит её и уходит на запасной pdfkit-вариант.
-function convertDocxToPdf(docxBuffer, sofficeBin) {
+// Конвертирует буфер .docx в буфер .pdf.
+// Два пути:
+//   1) unoconv — подключается к уже ЗАПУЩЕННОМУ фоновому LibreOffice-слушателю
+//      (см. start.sh: soffice поднят один раз при старте контейнера и слушает
+//      сокет 127.0.0.1:2002). Конвертация занимает секунды, т.к. не тратится
+//      время на повторный запуск самого LibreOffice на каждый клик «Скачать PDF».
+//   2) soffice --convert-to — старый способ, поднимает LibreOffice с нуля на
+//      каждый вызов (медленно, 5-40+ сек в зависимости от мощности сервера), но
+//      не требует фонового слушателя — работает и без start.sh (например, при
+//      установке LibreOffice напрямую на VPS без Docker).
+// Путь к бинарнику soffice можно переопределить переменной окружения SOFFICE_PATH.
+function writeTmpDocx(docxBuffer) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'protocol-pdf-'));
+  const docxPath = path.join(tmpDir, 'protocol.docx');
+  fs.writeFileSync(docxPath, docxBuffer);
+  return {
+    tmpDir,
+    docxPath,
+    pdfPath: path.join(tmpDir, 'protocol.pdf'),
+    cleanup: () => { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* ignore */ } }
+  };
+}
+
+function convertViaUnoconv(docxPath, tmpDir) {
   return new Promise((resolve, reject) => {
-    let tmpDir;
-    try {
-      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'protocol-pdf-'));
-    } catch (e) {
-      return reject(e);
-    }
-    const docxPath = path.join(tmpDir, 'protocol.docx');
-    const cleanup = () => { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* ignore */ } };
-    try {
-      fs.writeFileSync(docxPath, docxBuffer);
-    } catch (e) {
-      cleanup();
-      return reject(e);
-    }
+    execFile(
+      'unoconv',
+      ['-f', 'pdf', '-o', tmpDir, docxPath],
+      { timeout: 30000 },
+      (err, stdout, stderr) => {
+        if (err) return reject(new Error('unoconv: ' + (stderr || err.message)));
+        resolve();
+      }
+    );
+  });
+}
+
+function convertViaSofficeDirect(docxPath, tmpDir, sofficeBin) {
+  return new Promise((resolve, reject) => {
     const soffice = sofficeBin || process.env.SOFFICE_PATH || 'soffice';
     execFile(
       soffice,
       ['--headless', '--norestore', '--convert-to', 'pdf', '--outdir', tmpDir, docxPath],
       { timeout: 60000 },
       (err, stdout, stderr) => {
-        if (err) {
-          cleanup();
-          return reject(new Error('Конвертация LibreOffice не удалась: ' + (stderr || err.message)));
-        }
-        const pdfPath = path.join(tmpDir, 'protocol.pdf');
-        try {
-          const buf = fs.readFileSync(pdfPath);
-          cleanup();
-          resolve(buf);
-        } catch (e) {
-          cleanup();
-          reject(e);
-        }
+        if (err) return reject(new Error('Конвертация LibreOffice не удалась: ' + (stderr || err.message)));
+        resolve();
       }
     );
   });
+}
+
+async function convertDocxToPdf(docxBuffer, sofficeBin) {
+  const { tmpDir, docxPath, pdfPath, cleanup } = writeTmpDocx(docxBuffer);
+  try {
+    await convertViaSofficeDirect(docxPath, tmpDir, sofficeBin);
+    const buf = fs.readFileSync(pdfPath);
+    cleanup();
+    return buf;
+  } catch (e) {
+    cleanup();
+    throw e;
+  }
+}
+
+// Быстрый путь через фоновый слушатель (unoconv). Отдельная функция — вызывается
+// ОДИН раз в buildProtocolPdf, до перебора SOFFICE_CANDIDATES.
+async function convertDocxToPdfViaListener(docxBuffer) {
+  const { tmpDir, docxPath, pdfPath, cleanup } = writeTmpDocx(docxBuffer);
+  try {
+    await convertViaUnoconv(docxPath, tmpDir);
+    const buf = fs.readFileSync(pdfPath);
+    cleanup();
+    return buf;
+  } catch (e) {
+    cleanup();
+    throw e;
+  }
 }
 
 // Точка входа, которую вызывает routes/protocols.js (GET /:id/pdf, POST /:id/sign).
@@ -258,6 +294,7 @@ const SOFFICE_CANDIDATES = [
 ].filter(Boolean);
 
 async function buildProtocolPdf({ protocol, members, signatures, companyName }) {
+
   const { buffer: docxBuffer } = await buildProtocolDocx({
     protocolNumber: protocol.protocol_number,
     openDate: protocol.open_date,
@@ -266,6 +303,18 @@ async function buildProtocolPdf({ protocol, members, signatures, companyName }) 
   });
 
   let lastError = null;
+
+  // 1) Быстрый путь: уже запущенный фоновый LibreOffice-слушатель (start.sh в
+  // Docker-образе). Обычно 1-3 секунды вместо десятков секунд холодного старта.
+  try {
+    return await convertDocxToPdfViaListener(docxBuffer);
+  } catch (e) {
+    lastError = e;
+  }
+
+  // 2) Запасной путь — как раньше: спавним soffice с нуля на каждый вызов.
+  // Срабатывает, если слушателя нет (например, старый образ без start.sh,
+  // или обычный VPS без Docker).
   for (const bin of SOFFICE_CANDIDATES) {
     try {
       return await convertDocxToPdf(docxBuffer, bin);
