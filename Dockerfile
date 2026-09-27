@@ -16,7 +16,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --omit=dev
+# npm ci требует package-lock.json (его в проекте нет — используется bun.lock),
+# поэтому ставим через обычный npm install.
+RUN npm install --omit=dev
 
 COPY . .
 
