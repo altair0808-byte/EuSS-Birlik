@@ -37,6 +37,14 @@ app.use('/api/export', require('./routes/export'));
 app.use('/api/certificates', require('./routes/certificate'));
 app.use('/api/signatures', require('./routes/signatures'));
 
+// Публичная страница проверки подлинности удостоверения (QR-код на удостоверении
+// ведёт сюда) — отдельная лёгкая статическая страница, без авторизации и без
+// загрузки всего SPA (index.html). Данные подтягивает сама через
+// GET /api/certificates/verify/:uid (см. routes/certificate.js).
+app.get('/verify/:uid', (req, res) => {
+  res.sendFile(path.join(__dirname, 'verify.html'));
+});
+
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });

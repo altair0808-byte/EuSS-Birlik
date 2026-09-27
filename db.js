@@ -181,7 +181,7 @@ async function initDb() {
       protocol_number TEXT NOT NULL,
       open_date DATE NOT NULL,
       close_date DATE NOT NULL,
-      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed')),
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed','revoked')),
       created_by BIGINT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
@@ -369,6 +369,56 @@ async function initDb() {
       user_agent TEXT,
       UNIQUE (protocol_id, committee_role)
     );
+  `);
+
+  // ===================== ЭТАП 2: Аннулирование протокола → удостоверение =====================
+  // Протокол — источник истины: если он аннулирован (администратором вручную) или удалён,
+  // все удостоверения, выданные на его основании, должны автоматически получить статус
+  // REVOKED (см. certificateService.js:revokeCertificatesForProtocol() и
+  // routes/protocols.js: POST /:id/revoke, DELETE /:id). Раньше status мог быть только
+  // 'open'/'closed' — расширяем чек-констрейнт существующих баз до 'revoked' (в CREATE TABLE
+  // выше это уже учтено для новых баз, ALTER нужен для уже развёрнутых).
+  await pool.query(`
+    ALTER TABLE protocols DROP CONSTRAINT IF EXISTS protocols_status_check;
+    ALTER TABLE protocols ADD CONSTRAINT protocols_status_check CHECK (status IN ('open','closed','revoked'));
+    ALTER TABLE protocols ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
+    ALTER TABLE protocols ADD COLUMN IF NOT EXISTS revoked_by BIGINT;
+    ALTER TABLE protocols ADD COLUMN IF NOT EXISTS revoke_reason TEXT;
+  `);
+
+  // ===================== ЭТАП 1: Фундамент удостоверений БиОТ =====================
+  // Отдельная таблица удостоверений — не путать с "сертификатом" (assignments.certificate_number),
+  // это следующий уровень: у каждого пройденного назначения (assignment) с проверкой знаний
+  // появляется ровно одно удостоверение (см. certificateService.js:ensureCertificateForAssignment()).
+  //   certificate_number — НЕ генерируется отдельно, всегда равен логину сотрудника (users.login);
+  //   certificate_uid    — внутренний уникальный идентификатор вида BIOT-2026-AB12CD (QR/API/проверка);
+  //   protocol_id        — подтягивается из assignments.protocol_id (может быть NULL для исторических
+  //                        записей, внесённых без привязки к строке в таблице protocols); именно отсюда
+  //                        на следующем этапе будут наследоваться подписи комиссии — отдельной таблицы
+  //                        подписей удостоверений не создаём;
+  //   verification_token — резерв под ЭТАП 2 (строгая проверка подлинности через API), сейчас страница
+  //                        /verify/:uid ищет удостоверение только по certificate_uid;
+  //   assignment_id/course_id — сверх исходного списка полей, нужны технически: сотрудник может иметь
+  //                        несколько удостоверений (по одному на каждый пройденный курс БиОТ).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS certificates (
+      id BIGSERIAL PRIMARY KEY,
+      employee_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      assignment_id BIGINT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+      protocol_id BIGINT REFERENCES protocols(id) ON DELETE SET NULL,
+      course_id BIGINT REFERENCES courses(id) ON DELETE SET NULL,
+      certificate_number TEXT NOT NULL,
+      certificate_uid TEXT NOT NULL UNIQUE,
+      issue_date DATE,
+      expiry_date DATE,
+      status TEXT NOT NULL DEFAULT 'VALID' CHECK (status IN ('VALID','EXPIRED','REVOKED')),
+      verification_token TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (assignment_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_certificates_employee ON certificates(employee_id);
+    CREATE INDEX IF NOT EXISTS idx_certificates_uid ON certificates(certificate_uid);
   `);
 
   // Разовое заполнение full_name_normalized/full_name_translit для сотрудников,

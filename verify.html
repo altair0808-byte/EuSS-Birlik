@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Проверка удостоверения / Куәлікті тексеру / Verify certificate</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+    padding: 24px;
+  }
+  .card {
+    background: #fff; border-radius: 16px; box-shadow: 0 10px 30px rgba(15,59,108,0.12);
+    max-width: 480px; width: 100%; padding: 28px 24px; border-top: 6px solid #0f3b6c;
+  }
+  .status { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-radius: 12px; font-weight: 700; margin-bottom: 20px; }
+  .status.valid { background: #e8f8ee; color: #0f7a3c; }
+  .status.expired { background: #fff7e6; color: #b45309; }
+  .status.revoked { background: #fdeaea; color: #b91c1c; }
+  .status.notfound { background: #f1f5f9; color: #64748b; }
+  .status .dot { width: 12px; height: 12px; border-radius: 999px; background: currentColor; flex-shrink: 0; }
+  h1 { font-size: 15px; color: #0f3b6c; margin: 0 0 4px; }
+  .sub { font-size: 12px; color: #64748b; margin: 0 0 18px; }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid #eef2f7; font-size: 14px; }
+  .row:last-child { border-bottom: none; }
+  .row .label { color: #64748b; }
+  .row .value { font-weight: 600; color: #1e293b; text-align: right; }
+  .uid { font-family: monospace; font-size: 12px; color: #94a3b8; text-align: center; margin-top: 18px; }
+  .loading { text-align: center; color: #94a3b8; padding: 30px 0; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Удостоверение о проверке знаний по БиОТ</h1>
+    <p class="sub">Білімді тексеру куәлігі / Safety knowledge certificate</p>
+    <div id="content" class="loading">Проверка... / Тексерілуде... / Checking...</div>
+  </div>
+
+<script>
+function fmtDate(s) {
+  if (!s) return '—';
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('ru-RU');
+}
+
+const STATUS_META = {
+  VALID:   { cls: 'valid',   text: 'ДЕЙСТВИТЕЛЬНО / ЖАРАМДЫ / VALID' },
+  EXPIRED: { cls: 'expired', text: 'СРОК ИСТЁК / МЕРЗІМІ АЯҚТАЛДЫ / EXPIRED' },
+  REVOKED: { cls: 'revoked', text: 'АННУЛИРОВАНО / ЖОЙЫЛДЫ / REVOKED' }
+};
+
+async function run() {
+  const uid = decodeURIComponent(location.pathname.split('/').pop());
+  const content = document.getElementById('content');
+  try {
+    const resp = await fetch('/api/certificates/verify/' + encodeURIComponent(uid));
+    const data = await resp.json();
+    if (!data.found) {
+      content.innerHTML = `
+        <div class="status notfound"><span class="dot"></span>УДОСТОВЕРЕНИЕ НЕ НАЙДЕНО / NOT FOUND</div>
+        <div class="uid">${uid}</div>`;
+      return;
+    }
+    const meta = STATUS_META[data.status] || STATUS_META.VALID;
+    content.innerHTML = `
+      <div class="status ${meta.cls}"><span class="dot"></span>${meta.text}</div>
+      <div class="row"><span class="label">ФИО / Name</span><span class="value">${data.full_name || '—'}</span></div>
+      <div class="row"><span class="label">№ удостоверения</span><span class="value">${data.certificate_number || '—'}</span></div>
+      <div class="row"><span class="label">Курс / Course</span><span class="value">${data.course_title_ru || data.course_title_kz || '—'}</span></div>
+      <div class="row"><span class="label">№ протокола</span><span class="value">${data.protocol_number || '—'}</span></div>
+      <div class="row"><span class="label">Дата выдачи</span><span class="value">${fmtDate(data.issue_date)}</span></div>
+      <div class="row"><span class="label">Действителен до</span><span class="value">${data.expiry_date ? fmtDate(data.expiry_date) : 'Бессрочно'}</span></div>
+      <div class="uid">${data.certificate_uid || uid}</div>
+    `;
+  } catch (e) {
+    content.innerHTML = `<div class="status notfound"><span class="dot"></span>ОШИБКА ПРОВЕРКИ / ERROR</div>`;
+  }
+}
+run();
+</script>
+</body>
+</html>
