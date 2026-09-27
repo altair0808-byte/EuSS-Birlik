@@ -11,6 +11,8 @@ const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 // удостоверение (см. certificateService.js). Ошибка здесь не должна ломать сдачу
 // теста/сохранение записи, поэтому вызовы обёрнуты в try/catch с логированием.
 const { ensureCertificateForAssignment } = require('../certificateService');
+// Удостоверение — ВТОРОЙ, отдельный документ на то же назначение (idCardService.js).
+const { ensureIdCardForAssignment } = require('../idCardService');
 
 const uploadImport = makeUploader('imports');
 
@@ -162,6 +164,8 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
       `, [user_id, course_id, protocol_number, protocol_date, req.user.id,
           h.status, h.score_percent, h.test_date, h.next_test_date, h.certificate_number]);
       try { await ensureCertificateForAssignment(result.rows[0].id); }
+      catch (e) { console.error('Не удалось создать сертификат (историческая запись)', result.rows[0].id, e.message); }
+      try { await ensureIdCardForAssignment(result.rows[0].id); }
       catch (e) { console.error('Не удалось создать удостоверение (историческая запись)', result.rows[0].id, e.message); }
       return res.json({ id: result.rows[0].id });
     }
@@ -239,6 +243,8 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (re
 
     for (const assignmentId of pendingCertAssignmentIds) {
       try { await ensureCertificateForAssignment(assignmentId); }
+      catch (e) { console.error('Не удалось создать сертификат (массовая историческая запись)', assignmentId, e.message); }
+      try { await ensureIdCardForAssignment(assignmentId); }
       catch (e) { console.error('Не удалось создать удостоверение (массовая историческая запись)', assignmentId, e.message); }
     }
 
@@ -505,6 +511,8 @@ router.post('/:id/submit', authRequired, async (req, res) => {
 
     if (passed) {
       try { await ensureCertificateForAssignment(a.id); }
+      catch (e) { console.error('Не удалось создать сертификат для назначения', a.id, e.message); }
+      try { await ensureIdCardForAssignment(a.id); }
       catch (e) { console.error('Не удалось создать удостоверение для назначения', a.id, e.message); }
     }
 

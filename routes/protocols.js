@@ -9,6 +9,7 @@ const { buildProtocolPdf } = require('../protocolPdf');
 const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 const { COMMITTEE_ROLES, COMMITTEE_ROLE_LABELS } = require('../lib/committeeRoles');
 const { revokeCertificatesForProtocol } = require('../certificateService');
+const { revokeIdCardsForProtocol } = require('../idCardService');
 
 // Протоколы комиссии по проверке знаний.
 // Администратор «открывает» протокол — указывает его номер и диапазон дат
@@ -371,17 +372,32 @@ router.post('/:id/sign', authRequired, requireRole('admin', 'assistant', 'supera
       const data = await loadProtocolWithMembers(p.id);
       const sigs = await loadProtocolSignatures(p.id);
       const settingsRes = await query('SELECT company_name FROM settings WHERE id = 1');
-      const pdfBuffer = await buildProtocolPdf({
-        protocol: data.protocol,
-        members: data.members,
-        signatures: sigs,
-        companyName: (settingsRes.rows[0] || {}).company_name
-      });
-      const hash = crypto.createHash('sha256').update(pdfBuffer).digest('hex');
-      await query(
-        `UPDATE protocols SET locked = TRUE, fully_signed_at = NOW(), pdf_hash = $1, signed_pdf_data = $2 WHERE id = $3`,
-        [hash, pdfBuffer.toString('base64'), p.id]
-      );
+      // PDF всегда делается из Word-бланка (protocolPdf.js). Если конвертер недоступен —
+      // протокол всё равно запечатывается, просто без сохранённого PDF: его можно будет
+      // скачать позже, а Word-версия доступна всегда.
+      let pdfBuffer = null;
+      try {
+        pdfBuffer = await buildProtocolPdf({
+          protocol: data.protocol,
+          members: data.members,
+          signatures: sigs,
+          companyName: (settingsRes.rows[0] || {}).company_name
+        });
+      } catch (pdfErr) {
+        console.error('[protocols] Не удалось сформировать PDF при запечатывании:', pdfErr.message);
+      }
+      if (pdfBuffer) {
+        const hash = crypto.createHash('sha256').update(pdfBuffer).digest('hex');
+        await query(
+          `UPDATE protocols SET locked = TRUE, fully_signed_at = NOW(), pdf_hash = $1, signed_pdf_data = $2 WHERE id = $3`,
+          [hash, pdfBuffer.toString('base64'), p.id]
+        );
+      } else {
+        await query(
+          `UPDATE protocols SET locked = TRUE, fully_signed_at = NOW() WHERE id = $1`,
+          [p.id]
+        );
+      }
     }
 
     res.json({ ok: true, fully_signed: fullySigned });
@@ -415,6 +431,7 @@ router.post('/:id/revoke', authRequired, requireRole('superadmin'), async (req, 
       [req.user.id, reason, p.id]
     );
     const revokedCount = await revokeCertificatesForProtocol(p.id);
+    await revokeIdCardsForProtocol(p.id);
     res.json({ ok: true, revoked_certificates: revokedCount });
   } catch (e) {
     console.error('Protocol revoke error:', e);
@@ -583,6 +600,7 @@ router.delete('/:id', authRequired, requireRole('superadmin'), async (req, res) 
   try {
     if (!(await checkDeletable(req.params.id, res))) return;
     await revokeCertificatesForProtocol(req.params.id);
+    await revokeIdCardsForProtocol(req.params.id);
     await query('UPDATE assignments SET protocol_id = NULL WHERE protocol_id = $1', [req.params.id]);
     await query('DELETE FROM protocols WHERE id = $1', [req.params.id]);
     res.json({ ok: true });
