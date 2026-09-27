@@ -10,6 +10,39 @@ const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 const { COMMITTEE_ROLES, COMMITTEE_ROLE_LABELS } = require('../lib/committeeRoles');
 const { revokeCertificatesForProtocol } = require('../certificateService');
 const { revokeIdCardsForProtocol } = require('../idCardService');
+const path = require('path');
+const fs = require('fs');
+const https = require('https');
+const http = require('http');
+
+// Печать организации хранится в settings.stamp_data (data:image/...;base64,...) или
+// settings.stamp_path (URL/локальный путь) — тот же приём, что и в routes/certificate.js,
+// приводим к готовому Buffer для protocolDocx.js.
+async function fetchRemoteBuffer(url) {
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith('https') ? https : http;
+    lib.get(url, (resp) => {
+      if (resp.statusCode && resp.statusCode >= 400) { resp.resume(); return reject(new Error('HTTP ' + resp.statusCode)); }
+      const chunks = [];
+      resp.on('data', (c) => chunks.push(c));
+      resp.on('end', () => resolve(Buffer.concat(chunks)));
+      resp.on('error', reject);
+    }).on('error', reject);
+  });
+}
+async function resolveImageBuffer(imgVal) {
+  if (!imgVal) return null;
+  try {
+    if (imgVal.startsWith('data:image')) {
+      const idx = imgVal.indexOf('base64,');
+      if (idx !== -1) return Buffer.from(imgVal.slice(idx + 7), 'base64');
+    }
+    if (/^https?:\/\//i.test(imgVal)) return await fetchRemoteBuffer(imgVal);
+    const localPath = path.join(__dirname, '..', imgVal.replace(/^\//, ''));
+    if (fs.existsSync(localPath)) return fs.readFileSync(localPath);
+  } catch (e) { console.error('Error resolving stamp image buffer:', e); }
+  return null;
+}
 
 // Протоколы комиссии по проверке знаний.
 // Администратор «открывает» протокол — указывает его номер и диапазон дат
@@ -256,10 +289,19 @@ router.get('/:id/download', authRequired, requireRole('admin', 'assistant', 'sup
     if (!data) return res.status(404).json({ error: 'not_found', message: 'Протокол не найден' });
     const { protocol: p, members } = data;
 
+    const [signatures, settingsRes] = await Promise.all([
+      loadProtocolSignatures(p.id),
+      query('SELECT stamp_data, stamp_path FROM settings WHERE id = 1')
+    ]);
+    const settings = settingsRes.rows[0] || {};
+    const companyStamp = await resolveImageBuffer(settings.stamp_data || settings.stamp_path);
+
     const { buffer, fileName } = await buildProtocolDocx({
       protocolNumber: p.protocol_number,
       openDate: p.open_date,
-      members
+      members,
+      signatures,
+      companyStamp
     });
 
     const asciiName = `protocol_${p.open_date}_${String(p.protocol_number).replace(/[^A-Za-z0-9_-]/g, '')}.docx`;
