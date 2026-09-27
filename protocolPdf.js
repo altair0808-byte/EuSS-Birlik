@@ -216,27 +216,26 @@ function writeTmpDocx(docxBuffer) {
   };
 }
 
-function convertViaUnoconv(docxPath, tmpDir) {
-  return new Promise((resolve, reject) => {
-    execFile(
-      'unoconv',
-      ['-f', 'pdf', '-o', tmpDir, docxPath],
-      { timeout: 30000 },
-      (err, stdout, stderr) => {
-        if (err) return reject(new Error('unoconv: ' + (stderr || err.message)));
-        resolve();
-      }
-    );
-  });
-}
-
 function convertViaSofficeDirect(docxPath, tmpDir, sofficeBin) {
   return new Promise((resolve, reject) => {
     const soffice = sofficeBin || process.env.SOFFICE_PATH || 'soffice';
+    // Отдельный профиль LibreOffice на КАЖДЫЙ вызов (в той же tmpDir, что и сам
+    // docx/pdf): без общего фонового демона (start.sh больше его не поднимает,
+    // см. вариант А по OOM) несколько запросов на PDF могут прийти почти
+    // одновременно, а soffice с общим профилем в этом случае падает с "another
+    // instance is already running" / зависает на lock-файле. Изолированный
+    // -env:UserInstallation исключает это полностью, ценой чуть большего
+    // времени на холодный старт каждого вызова (обычно 3-10 сек).
+    const profileDir = path.join(tmpDir, 'lo-profile');
     execFile(
       soffice,
-      ['--headless', '--norestore', '--convert-to', 'pdf', '--outdir', tmpDir, docxPath],
-      { timeout: 60000 },
+      [
+        '--headless', '--invisible', '--nocrashreport', '--nodefault', '--nologo',
+        '--nofirststartwizard', '--norestore',
+        `-env:UserInstallation=file://${profileDir}`,
+        '--convert-to', 'pdf', '--outdir', tmpDir, docxPath
+      ],
+      { timeout: 45000 },
       (err, stdout, stderr) => {
         if (err) return reject(new Error('Конвертация LibreOffice не удалась: ' + (stderr || err.message)));
         resolve();
@@ -249,21 +248,6 @@ async function convertDocxToPdf(docxBuffer, sofficeBin) {
   const { tmpDir, docxPath, pdfPath, cleanup } = writeTmpDocx(docxBuffer);
   try {
     await convertViaSofficeDirect(docxPath, tmpDir, sofficeBin);
-    const buf = fs.readFileSync(pdfPath);
-    cleanup();
-    return buf;
-  } catch (e) {
-    cleanup();
-    throw e;
-  }
-}
-
-// Быстрый путь через фоновый слушатель (unoconv). Отдельная функция — вызывается
-// ОДИН раз в buildProtocolPdf, до перебора SOFFICE_CANDIDATES.
-async function convertDocxToPdfViaListener(docxBuffer) {
-  const { tmpDir, docxPath, pdfPath, cleanup } = writeTmpDocx(docxBuffer);
-  try {
-    await convertViaUnoconv(docxPath, tmpDir);
     const buf = fs.readFileSync(pdfPath);
     cleanup();
     return buf;
@@ -304,17 +288,12 @@ async function buildProtocolPdf({ protocol, members, signatures, companyName }) 
 
   let lastError = null;
 
-  // 1) Быстрый путь: уже запущенный фоновый LibreOffice-слушатель (start.sh в
-  // Docker-образе). Обычно 1-3 секунды вместо десятков секунд холодного старта.
-  try {
-    return await convertDocxToPdfViaListener(docxBuffer);
-  } catch (e) {
-    lastError = e;
-  }
-
-  // 2) Запасной путь — как раньше: спавним soffice с нуля на каждый вызов.
-  // Срабатывает, если слушателя нет (например, старый образ без start.sh,
-  // или обычный VPS без Docker).
+  // Спавним soffice с нуля на каждый вызов, с изолированным профилем
+  // (см. convertViaSofficeDirect) — без общего фонового демона (вариант А по
+  // OOM, start.sh больше его не поднимает) это единственный надёжный путь.
+  // Перебор нескольких кандидатов бинарника нужен только на случай разных
+  // окружений (Docker/VPS/локально) — на самом Render обычно срабатывает
+  // первый же (soffice из libreoffice-writer).
   for (const bin of SOFFICE_CANDIDATES) {
     try {
       return await convertDocxToPdf(docxBuffer, bin);
