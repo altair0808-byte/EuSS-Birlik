@@ -5,6 +5,19 @@
 //   {{NUMBER}}                  — номер протокола («№ 027»)
 //   строку таблицы с {{N}} {{CERT}} {{FIO}} {{BADGE}} {{POS}} {{DEPT}} {{MARK}} {{COMMENT}}
 //                               — размножается по числу сотрудников протокола.
+//
+// ПОДХОД К СОСТАВУ КОМИССИИ И ПОДПИСЯМ (важно для дальнейшей поддержки):
+// В самом .docx НЕТ текстовых плейсхолдеров вида {{HEADER_CHAIRMAN}} — верхняя шапка
+// «Мына құрамдағы комиссия / Комиссия в составе» и нижний блок подписей в шаблоне
+// оформлены как обычный статичный текст с линиями подчёркивания. Вместо того чтобы
+// просить дизайнера переразметить бланк под новые плейсхолдеры (риск сломать вёрстку
+// и рассинхронизироваться с «эталонным» образцом «Протокол по БиОТ № 027», под который
+// уже сверстан шаблон), мы находим эти строки ПО ТОЧНОМУ XML СОВПАДЕНИЮ конкретного
+// <w:r> (runXml) и подменяем его целиком. Это менее «декларативно», чем {{PLACEHOLDER}},
+// но не требует трогать сам .docx и проверено рендером реального шаблона (см. ниже про
+// печать) — если кто-то отредактирует шаблон в Word и хоть немного изменит форматирование
+// этих строк (например, снимет курсив), совпадение перестанет находиться и соответствующая
+// строка просто останется пустой, как в шаблоне (мягкий отказ, а не падение с ошибкой).
 const fs = require('fs');
 const path = require('path');
 const JSZip = require('jszip');
@@ -16,16 +29,23 @@ const MONTHS_RU = ['Январь', 'Февраль', 'Март', 'Апрель',
 const MARK_PASSED = 'Прошел';
 const MARK_FAILED = 'Подлежит повторной проверке знаний';
 
+// Фиксированная подпись роли для НИЖНЕГО блока подписи председателя (там, в отличие от
+// инженера/члена комиссии, слева печатается не его должность из БД, а именно роль в
+// комиссии — см. ТЗ: «Председатель комиссии, Иванов Иван Иванович»).
+const CHAIRMAN_ROLE_LABEL = 'Председатель комиссии';
+
 // ---------- Электронные подписи в самом бланке (без отдельной страницы) ----------
 // Задача: скачанный «подписанный» протокол должен выглядеть РОВНО как присланный
 // образец (templates/protocol_template.docx / «Протокол по БиОТ № 027»), а не как этот
 // же бланк плюс отдельно дорисованная страница со статусом подписания.
 // Решение: в самом бланке три строки для подписи комиссии — каждая это ОДИН <w:r> с
 // текстом вида «___(ФИО)___    ___(подпись)___» (два подчёркнутых участка через пробел).
-// Когда роль подписала — заменяем этот один run на три: (1) ФИО+должность подписанта
+// Когда роль подписала — заменяем этот один run на несколько: (1) ФИО+должность подписанта
 // подчёркнутым текстом на месте первого участка, (2) исходный отступ, (3) картинка
 // подписи (JSZip просто добавляет файл в word/media/ и связь в document.xml.rels —
-// сам подписанный документ.xml ссылается на неё как на обычную вставленную картинку).
+// сам подписанный документ.xml ссылается на неё как на обычную вставленную картинку),
+// и — только для председателя, только если передана печать организации — (4) печать
+// поверх подписи (см. embedStampRun).
 // Роль, которая ещё не подписала — её строка остаётся как в шаблоне (пустая линия).
 const SIGNATURE_LINE_TARGETS = [
   {
@@ -51,7 +71,51 @@ const SIGNATURE_LINE_TARGETS = [
   }
 ];
 
+// Верхние строки шапки протокола («Председателя ____», и две строки под «комиссия
+// мүшелері / и членов комиссии / Members» — Инженер по БиОТ и Представитель работников).
+// Это просто справочная строка «кто в комиссии», без картинки подписи — ФИО (и, для
+// инженера/члена, должность) подставляются как обычный подчёркнутый текст в ТОТ ЖЕ run,
+// поэтому структура документа не меняется (не добавляются/не сдвигаются строки).
+// Заполняется по той же логике, что и подписи внизу: как только человек с этой
+// ролью реально подписал протокол — здесь появляется его ФИО (т.к. ролей
+// "инженер"/"представитель" в комиссии может быть несколько человек, а нужен именно
+// тот, кто подписал).
+const HEADER_LINE_TARGETS = [
+  {
+    role: 'chairman',
+    runXml: '<w:r><w:rPr><w:sz w:val="22"/></w:rPr><w:t xml:space="preserve"> ________________________________________________________________</w:t></w:r>'
+  },
+  {
+    role: 'biot_engineer',
+    runXml: '<w:r><w:rPr><w:sz w:val="16"/></w:rPr><w:t>__________________________________________________________________________________________________</w:t></w:r>'
+  },
+  {
+    role: 'member',
+    runXml: '<w:r><w:rPr><w:sz w:val="16"/></w:rPr><w:t>_________________________________________________________________________________________________</w:t></w:r>'
+  }
+];
+
 const EMU_PER_PT = 12700;
+
+// ---------- Печать организации ----------
+// Печать ставится РОВНО ОДИН раз на весь документ, привязана к блоку подписи
+// председателя (т.к. это единственная роль в SIGNATURE_LINE_TARGETS, для которой мы
+// её обрабатываем) и появляется, только когда передана И председатель подписал.
+// Вставляется как «плавающая» картинка (DrawingML <wp:anchor>, а не <wp:inline>), потому
+// что только якорь позволяет перекрыть уже вставленную инлайн-картинку подписи —
+// инлайн-картинки в Word всегда идут строго одна за другой по тексту и накладываться
+// друг на друга не могут.
+//
+// Смещения ниже — НЕ «на глаз»: они подобраны рендером реального шаблона
+// (LibreOffice --convert-to pdf → pdftoppm, 150 DPI) с последующим измерением
+// пикселей подписи/печати. При таком калибре печать перекрывает ~20% площади подписи
+// (ТЗ п.3–4), не задевает ни текст ФИО/должности председателя, ни соседние заголовки
+// «Chairman:» сверху и «Члены комиссии / Members:» снизу (ТЗ п.7–8).
+// Если шаблон протокола поменяется (другой шрифт/интервалы в этой строке), эти три
+// константы нужно перекалибровать тем же способом — см. STAMP_CALIBRATION.md.
+const STAMP_DIAMETER_PT = 80;         // ~28 мм в печати — умещается между соседними строками этого бланка
+const STAMP_OFFSET_X_PT = 504;        // от левого края страницы (positionH relativeFrom="page")
+const STAMP_OFFSET_Y_PT = -12;        // от верха абзаца со строкой подписи председателя (relativeFrom="paragraph")
 
 // Ширина/высота PNG из заголовка (IHDR), без внешних зависимостей.
 function pngDimensions(buffer) {
@@ -60,15 +124,22 @@ function pngDimensions(buffer) {
   return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
 }
 
-// Подпись приходит с фронтенда как data:image/png;base64,... (canvas.toDataURL())
-function decodeSignatureImage(dataUrl) {
-  if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image')) return null;
-  const idx = dataUrl.indexOf('base64,');
+// Подпись приходит с фронтенда и хранится в users.signature_data как
+// data:image/png;base64,... (canvas.toDataURL()). Печать организации в этом проекте
+// хранится в settings.stamp_data/stamp_path и уже приводится к Buffer в routes через
+// общий для проекта resolveImageBuffer() (см. routes/certificate.js, certificatePdf.js) —
+// поэтому companyStamp принимаем и как готовый Buffer, и как data:image-строку, чтобы
+// не плодить ещё один вариант декодирования того же самого.
+function decodePngImage(value) {
+  if (!value) return null;
+  if (Buffer.isBuffer(value)) return value;
+  if (typeof value !== 'string' || !value.startsWith('data:image')) return null;
+  const idx = value.indexOf('base64,');
   if (idx === -1) return null;
-  try { return Buffer.from(dataUrl.slice(idx + 7), 'base64'); } catch (e) { return null; }
+  try { return Buffer.from(value.slice(idx + 7), 'base64'); } catch (e) { return null; }
 }
 
-let sigDocPrCounter = 900001; // произвольный диапазон id, не пересекающийся с шаблоном
+let sigDocPrCounter = 900001; // произвольный диапазон id/z-order, не пересекающийся с шаблоном
 
 function buildInlineImageXml({ relId, cx, cy }) {
   const id = sigDocPrCounter++;
@@ -85,6 +156,29 @@ function buildInlineImageXml({ relId, cx, cy }) {
     + '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>';
 }
 
+// Плавающая картинка печати. behindDoc="0" — печать поверх подписи (как в жизни, штамп
+// кладут поверх уже расписанного листа); allowOverlap="1" — разрешаем перекрытие с
+// инлайн-картинкой подписи, иначе Word может попытаться «оттолкнуть» соседний контент.
+function buildStampAnchorXml({ relId, cx, cy, offsetXEmu, offsetYEmu }) {
+  const id = sigDocPrCounter++;
+  return '<w:r><w:rPr><w:noProof/></w:rPr><w:drawing>'
+    + `<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="${id}" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">`
+    + '<wp:simplePos x="0" y="0"/>'
+    + `<wp:positionH relativeFrom="page"><wp:posOffset>${offsetXEmu}</wp:posOffset></wp:positionH>`
+    + `<wp:positionV relativeFrom="paragraph"><wp:posOffset>${offsetYEmu}</wp:posOffset></wp:positionV>`
+    + `<wp:extent cx="${cx}" cy="${cy}"/>`
+    + '<wp:effectExtent l="0" t="0" r="0" b="0"/>'
+    + '<wp:wrapNone/>'
+    + `<wp:docPr id="${id}" name="CompanyStamp"/>`
+    + '<wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr>'
+    + '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+    + '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+    + `<pic:nvPicPr><pic:cNvPr id="${id}" name="CompanyStamp.png"/><pic:cNvPicPr/></pic:nvPicPr>`
+    + `<pic:blipFill><a:blip r:embed="${relId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>`
+    + `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom></pic:spPr>`
+    + '</pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>';
+}
+
 function injectUnderline(rPrXml) {
   if (/<w:u\b/.test(rPrXml)) return rPrXml;
   return rPrXml.replace(/<\/w:rPr>$/, '<w:u w:val="single"/></w:rPr>');
@@ -97,11 +191,30 @@ function splitSignatureLine(text) {
   return { nameBlank: m[1], gap: m[2], sigBlank: m[3] };
 }
 
+// Подпись всегда «ФИО, должность» — единый формат для верхней шапки (инженер/член) и
+// нижнего блока (все три роли), см. примеры в ТЗ:
+//   «Инженер по БиОТ, Петров Петр Петрович» — на самом деле в ТЗ порядок «должность, ФИО»
+// В коде это buildLabel(label, fio) => "label, fio".
+function buildLabel(label, fio) {
+  const clean = cleanText(label);
+  return cleanText(clean ? `${clean}, ${fio}` : fio);
+}
+
+// Подставляет в один run из *_LINE_TARGETS готовый ФИО-текст (подчёркнутый), сохраняя
+// исходную длину линии подчёркивания (дополняем пробелами) — чтобы не сдвинуть
+// остальной текст документа и не менять структуру абзаца.
+function buildPaddedNameRun(rPrXml, blankLen, label) {
+  const nameRPr = injectUnderline(rPrXml);
+  const pad = ' '.repeat(Math.max(1, blankLen - label.length - 1));
+  return `<w:r>${nameRPr}<w:t xml:space="preserve"> ${xmlEscape(label)}${pad}</w:t></w:r>`;
+}
+
 // Подставляет в xml шаблона реальные подписи членов комиссии, которые уже подписали
-// (signaturesByRole: { chairman: {...}, biot_engineer: {...}, member: {...} }).
-// Мутирует zip (добавляет word/media/sig-*.png и связи в document.xml.rels).
+// (signaturesByRole: { chairman: {...}, biot_engineer: {...}, member: {...} }), и, если
+// передана, печать организации (только у председателя, только один раз на документ).
+// Мутирует zip (добавляет word/media/*.png и связи в document.xml.rels).
 // Роли без подписи — соответствующая строка остаётся как в шаблоне (пустая).
-async function embedSignaturesIntoXml(zip, xml, signaturesByRole) {
+async function embedSignaturesIntoXml(zip, xml, signaturesByRole, companyStamp) {
   if (!signaturesByRole || !Object.keys(signaturesByRole).length) return xml;
 
   let relsXml = null;
@@ -112,6 +225,16 @@ async function embedSignaturesIntoXml(zip, xml, signaturesByRole) {
       const ids = [...relsXml.matchAll(/Id="rId(\d+)"/g)].map((m2) => parseInt(m2[1], 10));
       nextRelId = (ids.length ? Math.max(...ids) : 0) + 1;
     }
+  };
+  const addMedia = async (buf, name) => {
+    await ensureRels();
+    const relId = `rId${nextRelId++}`;
+    zip.file(`word/${name}`, buf);
+    relsXml = relsXml.replace(
+      '</Relationships>',
+      `<Relationship Id="${relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${name}"/></Relationships>`
+    );
+    return relId;
   };
 
   for (const target of SIGNATURE_LINE_TARGETS) {
@@ -126,25 +249,21 @@ async function embedSignaturesIntoXml(zip, xml, signaturesByRole) {
 
     const fio = fullNameCyr(sig.last_name, sig.first_name);
     const position = toCyrillic(cleanText(sig.position), false);
-    const nameLabel = cleanText(`${fio}${position ? ', ' + position : ''}`);
-    const nameRPr = injectUnderline(rPrMatch[1]);
-    // Дополняем пробелами до исходной длины линии — подчёркнутая линия визуально продолжается.
-    const pad = ' '.repeat(Math.max(1, parts.nameBlank.length - nameLabel.length - 1));
-    const nameRun = `<w:r>${nameRPr}<w:t xml:space="preserve"> ${xmlEscape(nameLabel)}${pad}</w:t></w:r>`;
+    // Нижний блок подписи председателя подписывается ролью в комиссии («Председатель
+    // комиссии»), а не его личной должностью из БД — см. ТЗ и CHAIRMAN_ROLE_LABEL выше.
+    // Для инженера/члена комиссии внизу — их фактическая должность, как у председателя
+    // была бы, если б её отображали: «должность, ФИО».
+    const nameLabel = target.role === 'chairman'
+      ? buildLabel(CHAIRMAN_ROLE_LABEL, fio)
+      : buildLabel(position, fio);
+    const nameRun = buildPaddedNameRun(rPrMatch[1], parts.nameBlank.length, nameLabel);
     const gapRun = `<w:r>${rPrMatch[1]}<w:t xml:space="preserve">${xmlEscape(parts.gap)}</w:t></w:r>`;
 
     let sigRun;
-    const imgBuf = decodeSignatureImage(sig.signature_data);
+    const imgBuf = decodePngImage(sig.signature_data);
     const dims = imgBuf ? pngDimensions(imgBuf) : null;
     if (imgBuf && dims && dims.width && dims.height) {
-      await ensureRels();
-      const relId = `rId${nextRelId++}`;
-      const mediaName = `media/sig-${target.role}-${Date.now()}-${Math.floor(Math.random() * 1e6)}.png`;
-      zip.file(`word/${mediaName}`, imgBuf);
-      relsXml = relsXml.replace(
-        '</Relationships>',
-        `<Relationship Id="${relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${mediaName}"/></Relationships>`
-      );
+      const relId = await addMedia(imgBuf, `media/sig-${target.role}-${Date.now()}-${Math.floor(Math.random() * 1e6)}.png`);
       const wPtFull = dims.width * 72 / 96;
       const hPtFull = dims.height * 72 / 96;
       const scale = Math.min(target.maxWidthPt / wPtFull, target.maxHeightPt / hPtFull, 1);
@@ -157,10 +276,61 @@ async function embedSignaturesIntoXml(zip, xml, signaturesByRole) {
       sigRun = `<w:r>${rPrMatch[1]}<w:t xml:space="preserve">${xmlEscape(parts.sigBlank)}</w:t></w:r>`;
     }
 
-    xml = xml.replace(target.runXml, nameRun + gapRun + sigRun);
+    let stampRun = '';
+    if (target.role === 'chairman' && companyStamp) {
+      const stampBuf = decodePngImage(companyStamp);
+      const stampDims = stampBuf ? pngDimensions(stampBuf) : null;
+      if (stampBuf && stampDims && stampDims.width && stampDims.height) {
+        const relId = await addMedia(stampBuf, `media/company-stamp-${Date.now()}.png`);
+        const wPtFull = stampDims.width * 72 / 96;
+        const scale = STAMP_DIAMETER_PT / wPtFull;
+        const cx = Math.round(wPtFull * scale * EMU_PER_PT);
+        const cy = Math.round(stampDims.height * 72 / 96 * scale * EMU_PER_PT);
+        stampRun = buildStampAnchorXml({
+          relId, cx, cy,
+          offsetXEmu: Math.round(STAMP_OFFSET_X_PT * EMU_PER_PT),
+          offsetYEmu: Math.round(STAMP_OFFSET_Y_PT * EMU_PER_PT)
+        });
+      }
+      // Печать передана, но файл битый/не PNG — молча пропускаем, как и с подписью выше:
+      // отсутствие печати не должно ронять генерацию всего протокола.
+    }
+
+    xml = xml.replace(target.runXml, nameRun + gapRun + sigRun + stampRun);
   }
 
   if (relsXml !== null) zip.file('word/_rels/document.xml.rels', relsXml);
+  return xml;
+}
+
+// Заполняет верхние справочные строки шапки («Председателя ___», «Инженер по БиОТ»,
+// «Представитель работников») — но только для тех ролей, кто уже реально подписал
+// (signaturesByRole), т.к. на роли "инженер"/"представитель" в комиссии может быть
+// назначено несколько человек, и заранее неизвестно, кто из них в итоге подпишет именно
+// этот протокол. Не трогает медиа/rels — тут только текст, картинки нет.
+// Председатель в шапке — только ФИО (без должности), инженер/член — «должность, ФИО»,
+// как и в примерах ТЗ. Строка укорачивается/дополняется пробелами до исходной длины
+// подчёркивания, чтобы не сдвинуть остальной текст документа.
+function embedHeaderNamesIntoXml(xml, signaturesByRole) {
+  if (!signaturesByRole || !Object.keys(signaturesByRole).length) return xml;
+
+  for (const target of HEADER_LINE_TARGETS) {
+    const sig = signaturesByRole[target.role];
+    if (!sig || !xml.includes(target.runXml)) continue;
+
+    const rPrMatch = target.runXml.match(/^<w:r>(<w:rPr>.*?<\/w:rPr>)<w:t/);
+    const textMatch = target.runXml.match(/<w:t[^>]*>(.*)<\/w:t>/);
+    if (!rPrMatch || !textMatch) continue;
+    const originalLen = textMatch[1].length;
+
+    const fio = fullNameCyr(sig.last_name, sig.first_name);
+    const position = toCyrillic(cleanText(sig.position), false);
+    const nameLabel = target.role === 'chairman' ? fio : buildLabel(position, fio);
+    const nameRun = buildPaddedNameRun(rPrMatch[1], originalLen, nameLabel);
+
+    xml = xml.replace(target.runXml, nameRun);
+  }
+
   return xml;
 }
 
@@ -264,7 +434,9 @@ function protocolFileName(dateStr, number) {
 // signatures — необязательный массив, как отдаёт loadProtocolSignatures() в routes/protocols.js:
 // [{ committee_role, last_name, first_name, position, signature_data }, ...]. Роли, которых нет
 // в массиве (ещё не подписали), остаются в бланке пустыми линиями — как в исходном шаблоне.
-async function buildProtocolDocx({ protocolNumber, openDate, members, signatures }) {
+// companyStamp — необязательный data:image/png;base64,... с прозрачным фоном; печать
+// появляется только если председатель есть среди signatures И передан companyStamp.
+async function buildProtocolDocx({ protocolNumber, openDate, members, signatures, companyStamp }) {
   const zip = await JSZip.loadAsync(fs.readFileSync(TEMPLATE_PATH));
   let xml = await zip.file('word/document.xml').async('string');
 
@@ -296,7 +468,8 @@ async function buildProtocolDocx({ protocolNumber, openDate, members, signatures
 
   if (Array.isArray(signatures) && signatures.length) {
     const byRole = Object.fromEntries(signatures.map((s) => [s.committee_role, s]));
-    xml = await embedSignaturesIntoXml(zip, xml, byRole);
+    xml = await embedSignaturesIntoXml(zip, xml, byRole, companyStamp);
+    xml = embedHeaderNamesIntoXml(xml, byRole);
   }
 
   zip.file('word/document.xml', xml);
