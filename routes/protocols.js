@@ -8,6 +8,7 @@ const { buildProtocolDocx } = require('../protocolDocx');
 const { buildProtocolPdf } = require('../protocolPdf');
 const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 const { COMMITTEE_ROLES, COMMITTEE_ROLE_LABELS } = require('../lib/committeeRoles');
+const { revokeCertificatesForProtocol } = require('../certificateService');
 
 // Протоколы комиссии по проверке знаний.
 // Администратор «открывает» протокол — указывает его номер и диапазон дат
@@ -28,7 +29,9 @@ const PROTOCOL_COLS = `
   to_char(p.open_date, 'YYYY-MM-DD') AS open_date,
   to_char(p.close_date, 'YYYY-MM-DD') AS close_date,
   p.locked, p.pdf_hash, p.pdf_version,
-  to_char(p.fully_signed_at, 'YYYY-MM-DD"T"HH24:MI:SS') AS fully_signed_at
+  to_char(p.fully_signed_at, 'YYYY-MM-DD"T"HH24:MI:SS') AS fully_signed_at,
+  p.revoke_reason,
+  to_char(p.revoked_at, 'YYYY-MM-DD"T"HH24:MI:SS') AS revoked_at
 `;
 
 // Кто входит в протокол: назначения, привязанные к нему при сдаче теста (protocol_id), а также
@@ -213,10 +216,29 @@ async function loadProtocolSignatures(protocolId) {
 }
 
 async function checkNotLocked(protocolId, res) {
-  const r = await query('SELECT locked FROM protocols WHERE id = $1', [protocolId]);
+  const r = await query('SELECT locked, status FROM protocols WHERE id = $1', [protocolId]);
   if (!r.rows[0]) { res.status(404).json({ error: 'not_found' }); return false; }
+  if (r.rows[0].status === 'revoked') {
+    res.status(409).json({ error: 'revoked', message: 'Протокол аннулирован — изменения запрещены' });
+    return false;
+  }
   if (r.rows[0].locked) {
     res.status(409).json({ error: 'locked', message: 'Протокол полностью подписан всеми членами комиссии — изменения запрещены' });
+    return false;
+  }
+  return true;
+}
+
+// Для удаления протокола другое правило: полностью подписанный (locked), но ещё НЕ
+// аннулированный протокол удалять нельзя (как и раньше) — сначала его нужно явно
+// аннулировать (см. POST /:id/revoke). Уже аннулированный протокол удалить можно
+// в любом состоянии locked — это лишь чистка истории, статус REVOKED у выданных по
+// нему удостоверений уже зафиксирован и переживёт удаление строки протокола.
+async function checkDeletable(protocolId, res) {
+  const r = await query('SELECT locked, status FROM protocols WHERE id = $1', [protocolId]);
+  if (!r.rows[0]) { res.status(404).json({ error: 'not_found' }); return false; }
+  if (r.rows[0].locked && r.rows[0].status !== 'revoked') {
+    res.status(409).json({ error: 'locked', message: 'Протокол полностью подписан всеми членами комиссии — сначала аннулируйте его, затем можно удалить' });
     return false;
   }
   return true;
@@ -366,6 +388,37 @@ router.post('/:id/sign', authRequired, requireRole('admin', 'assistant', 'supera
   } catch (e) {
     console.error('Protocol sign error:', e);
     res.status(500).json({ error: 'sign_error', message: 'Не удалось подписать протокол: ' + e.message });
+  }
+});
+
+// ЭТАП 2. Аннулировать протокол (§ «Автоматическое аннулирование» ТЗ): «Протокол
+// аннулирован → удостоверение автоматически получает статус REVOKED». Разрешено
+// суперадминистратору в любом состоянии протокола (открыт/закрыт/подписан) — это
+// финальное, юридически значимое действие, поэтому пароль не запрашивается отдельно
+// (сессия суперадмина уже аутентифицирована), но причина аннулирования обязательна
+// для журнала. Повторное аннулирование уже аннулированного протокола — не ошибка,
+// просто ничего не меняет.
+router.post('/:id/revoke', authRequired, requireRole('superadmin'), async (req, res) => {
+  const reason = String((req.body && req.body.reason) || '').trim();
+  if (!reason) {
+    return res.status(400).json({ error: 'reason_required', message: 'Укажите причину аннулирования протокола' });
+  }
+  try {
+    const pRes = await query('SELECT id, status FROM protocols WHERE id = $1', [req.params.id]);
+    const p = pRes.rows[0];
+    if (!p) return res.status(404).json({ error: 'not_found', message: 'Протокол не найден' });
+    if (p.status === 'revoked') {
+      return res.json({ ok: true, already_revoked: true });
+    }
+    await query(
+      `UPDATE protocols SET status = 'revoked', revoked_at = NOW(), revoked_by = $1, revoke_reason = $2 WHERE id = $3`,
+      [req.user.id, reason, p.id]
+    );
+    const revokedCount = await revokeCertificatesForProtocol(p.id);
+    res.json({ ok: true, revoked_certificates: revokedCount });
+  } catch (e) {
+    console.error('Protocol revoke error:', e);
+    res.status(500).json({ error: 'revoke_error', message: 'Не удалось аннулировать протокол: ' + e.message });
   }
 });
 
@@ -521,9 +574,16 @@ router.post('/:id/reopen', authRequired, requireRole('admin', 'superadmin'), asy
 });
 
 // Удалить протокол — ТЗ §3, §9: только суперадмин.
+// ЭТАП 2: «Удалён протокол → удостоверение автоматически аннулировано» — прежде чем
+// удалить строку протокола (certificates.protocol_id имеет ON DELETE SET NULL и связь
+// потеряется), явно помечаем REVOKED все удостоверения, которые на него ссылались.
+// Заодно отвязываем assignments.protocol_id (у него нет FK-констрейнта, поэтому сам
+// по себе не очищается) — чтобы не оставалось ссылок на несуществующий протокол.
 router.delete('/:id', authRequired, requireRole('superadmin'), async (req, res) => {
   try {
-    if (!(await checkNotLocked(req.params.id, res))) return;
+    if (!(await checkDeletable(req.params.id, res))) return;
+    await revokeCertificatesForProtocol(req.params.id);
+    await query('UPDATE assignments SET protocol_id = NULL WHERE protocol_id = $1', [req.params.id]);
     await query('DELETE FROM protocols WHERE id = $1', [req.params.id]);
     res.json({ ok: true });
   } catch (e) {

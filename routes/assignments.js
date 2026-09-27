@@ -6,6 +6,11 @@ const { authRequired, requireRole } = require('./auth');
 const { makeUploader } = require('../upload');
 const { findActiveProtocol, nextProtocolNumber } = require('./protocols');
 const { splitMulti, scopedFilter } = require('../lib/multiFilter');
+// ЭТАП 1 (удостоверения БиОТ): как только назначение получает статус 'passed' — при
+// сдаче теста ниже, либо при внесении исторической записи — автоматически заводим
+// удостоверение (см. certificateService.js). Ошибка здесь не должна ломать сдачу
+// теста/сохранение записи, поэтому вызовы обёрнуты в try/catch с логированием.
+const { ensureCertificateForAssignment } = require('../certificateService');
 
 const uploadImport = makeUploader('imports');
 
@@ -156,6 +161,8 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id
       `, [user_id, course_id, protocol_number, protocol_date, req.user.id,
           h.status, h.score_percent, h.test_date, h.next_test_date, h.certificate_number]);
+      try { await ensureCertificateForAssignment(result.rows[0].id); }
+      catch (e) { console.error('Не удалось создать удостоверение (историческая запись)', result.rows[0].id, e.message); }
       return res.json({ id: result.rows[0].id });
     }
 
@@ -204,6 +211,7 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (re
     const skippedIds = uniqueUserIds.filter(id => !validIds.has(id));
 
     const createdIds = [];
+    const pendingCertAssignmentIds = [];
     for (const userId of uniqueUserIds) {
       if (!validIds.has(userId)) continue;
       if (historical) {
@@ -217,6 +225,7 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (re
         `, [userId, course_id, protocol_number, protocol_date, req.user.id,
             h.status, h.score_percent, h.test_date, h.next_test_date, h.certificate_number]);
         createdIds.push(result.rows[0].id);
+        pendingCertAssignmentIds.push(result.rows[0].id);
         continue;
       }
       const result = await client.query(`
@@ -227,6 +236,12 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (re
     }
 
     await client.query('COMMIT');
+
+    for (const assignmentId of pendingCertAssignmentIds) {
+      try { await ensureCertificateForAssignment(assignmentId); }
+      catch (e) { console.error('Не удалось создать удостоверение (массовая историческая запись)', assignmentId, e.message); }
+    }
+
     res.json({ created: createdIds.length, ids: createdIds, skipped: skippedIds.length });
   } catch (e) {
     await client.query('ROLLBACK');
@@ -487,6 +502,11 @@ router.post('/:id/submit', authRequired, async (req, res) => {
       WHERE id = $11
     `, [passed ? 'passed' : 'failed', scorePercent, focus_violations || 0, certNum, testDate, nextDate,
         protocolNumber, protocolDate, protocolId, answersJson, a.id]);
+
+    if (passed) {
+      try { await ensureCertificateForAssignment(a.id); }
+      catch (e) { console.error('Не удалось создать удостоверение для назначения', a.id, e.message); }
+    }
 
     res.json({ passed, scorePercent, certificate_number: certNum, protocol_number: protocolNumber });
   } catch (e) {
