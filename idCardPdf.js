@@ -1,46 +1,50 @@
-// PDF УДОСТОВЕРЕНИЯ (не сертификата!).
+// PDF УДОСТОВЕРЕНИЯ по виду обучения (не сертификата!). Бланк A4 альбомный по макету заказчика.
 //
-// ВРЕМЕННЫЙ БЛАНК. Заказчик пришлёт образец удостоверения — тогда меняется только
-// вёрстка внутри buildIdCardPdfBuffer(); данные, роуты и таблица id_cards остаются
-// прежними.
+// Одно удостоверение = один вид обучения. Что откуда берётся:
+//   • цвет рамки, боковой полосы, заголовков и плашки курса — courses.card_color;
+//   • логотип, название компании (если нет логотипа), слоган — «Настройки» (settings);
+//   • печать — «Настройки» (settings.stamp_data / stamp_path);
+//   • председатель (ФИО и подпись) — из ПРОТОКОЛА, по которому сотрудник сдавал курс
+//     (committeeSignatures = getCommitteeSignaturesForProtocol). Нет протокола — из «Настроек»;
+//   • QR — общий на сотрудника: /p/<public_uid> (список всех его обучений). verifyUrl — эта ссылка.
 //
-// Отличия от сертификата (осознанно, чтобы документы не путали):
-//   • формат A5 альбомный (карточка-разворот), а не A4;
-//   • заголовок «УДОСТОВЕРЕНИЕ / КУӘЛІК»;
-//   • крупно номер удостоверения = логин сотрудника;
-//   • подписи комиссии берутся из протокола (как и в сертификате).
+// Вёрстка ведётся в «макетных пикселях» 1280×905 (как на образце) и пересчитывается в pt
+// вручную (K), а не через doc.scale: при scale pdfkit сравнивает y с высотой страницы в
+// НЕмасштабированных единицах и на нижних строках открывает лишнюю страницу.
 const PDFDocument = require('pdfkit');
 const path = require('path');
 const fs = require('fs');
 const QRCode = require('qrcode');
+const { resolveImageBuffer, resolveCleanImage } = require('./lib/imageAssets');
+const { cardPalette, fmtDate, todayKz, STATUS, resolveChairman, mix } = require('./lib/cardLayout');
 
 const FONT_REG = path.join(__dirname, 'assets', 'fonts', 'DejaVuSans.ttf');
 const FONT_BOLD = path.join(__dirname, 'assets', 'fonts', 'DejaVuSans-Bold.ttf');
 
-function fmtDate(d) {
-  if (!d) return '—';
-  const dt = new Date(d);
-  if (Number.isNaN(dt.getTime())) return '—';
-  return dt.toLocaleDateString('ru-RU');
-}
+const PX_W = 1280;
+const PX_H = 905;
+const INK = '#12233A';      // основной тёмный текст
+const MUTED = '#5B6B80';    // подписи полей
+const FAINT = '#7C8A9C';    // мелкий текст
 
-function sigBuffer(dataUrl) {
-  if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image')) return null;
-  const idx = dataUrl.indexOf('base64,');
-  if (idx === -1) return null;
-  try { return Buffer.from(dataUrl.slice(idx + 7), 'base64'); } catch (e) { return null; }
-}
-
-// card — строка из getIdCardFullByUid(), settings — settings(id=1),
-// verifyUrl — публичная ссылка проверки, committeeSignatures — из протокола.
+// card — из getIdCardFullByUid() (idCardService.js); settings — settings(id=1);
+// verifyUrl — общая ссылка сотрудника /p/<public_uid>; committeeSignatures — из протокола.
 async function buildIdCardPdfBuffer(card, settings, verifyUrl, committeeSignatures) {
-  const qrBuf = verifyUrl
-    ? await QRCode.toBuffer(verifyUrl, { type: 'png', margin: 1, width: 220 }).catch(() => null)
-    : null;
+  const s = settings || {};
+  const pal = cardPalette(card.card_color);
+  const chairman = resolveChairman(s, committeeSignatures); // бросает protocol_not_signed
+  const st = STATUS[card.status] || STATUS.VALID;
+
+  const [logoBuf, stampBuf, sigBuf, qrBuf] = await Promise.all([
+    resolveImageBuffer(s.logo_data || s.logo_path),
+    resolveCleanImage(s.stamp_data || s.stamp_path),
+    resolveCleanImage(chairman.signature_data),
+    verifyUrl ? QRCode.toBuffer(verifyUrl, { type: 'png', margin: 0, width: 360, errorCorrectionLevel: 'M', color: { dark: pal.dark, light: '#FFFFFF' } }).catch(() => null) : null
+  ]);
 
   return new Promise((resolve, reject) => {
     try {
-      const doc = new PDFDocument({ size: 'A5', layout: 'landscape', margins: { top: 26, bottom: 24, left: 30, right: 30 } });
+      const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 0, info: { Title: `Удостоверение № ${card.card_number || ''}` } });
       const chunks = [];
       doc.on('data', (c) => chunks.push(c));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -50,84 +54,178 @@ async function buildIdCardPdfBuffer(card, settings, verifyUrl, committeeSignatur
       const hasBold = fs.existsSync(FONT_BOLD);
       if (hasReg) doc.registerFont('DejaVu', FONT_REG);
       if (hasBold) doc.registerFont('DejaVu-Bold', FONT_BOLD);
-      const fReg = (s = 9) => { if (hasReg) doc.font('DejaVu'); doc.fontSize(s); };
-      const fBold = (s = 9) => { if (hasBold) doc.font('DejaVu-Bold'); else if (hasReg) doc.font('DejaVu'); doc.fontSize(s); };
 
-      const W = 595.28; // A5 альбомный = 595.28 x 419.53
-      const H = 419.53;
-      const L = 30;
-      const CW = W - 60;
+      const K = doc.page.width / PX_W;
+      const X = (v) => v * K;
 
-      // Рамка
-      doc.lineWidth(1.6).strokeColor('#0f3b6c').rect(16, 14, W - 32, H - 28).stroke();
-      doc.lineWidth(0.6).strokeColor('#8ea6c4').rect(22, 20, W - 44, H - 40).stroke();
+      const setFont = (bold, size) => {
+        if (bold && hasBold) doc.font('DejaVu-Bold'); else if (hasReg) doc.font('DejaVu');
+        doc.fontSize(size * K);
+      };
+      const wPx = (str, bold, size) => { setFont(bold, size); return doc.widthOfString(String(str)) / K; };
 
-      // Шапка
-      fBold(11); doc.fillColor('#0f3b6c');
-      doc.text(String(settings.company_name || ''), L, 34, { width: CW, align: 'center', height: 16, ellipsis: true });
+      // Однострочный текст. align: left | center | right относительно x (для center/right — x это
+      // соответственно центр и правая граница). Если не влезает в maxW — кегль уменьшается до 60%.
+      function text(str, x, y, { size = 14, bold = false, color = INK, align = 'left', maxW = null } = {}) {
+        let sz = size;
+        const value = String(str == null ? '' : str);
+        if (maxW) { while (sz > size * 0.6 && wPx(value, bold, sz) > maxW) sz -= 0.5; }
+        const w = wPx(value, bold, sz);
+        const px = align === 'center' ? x - w / 2 : align === 'right' ? x - w : x;
+        setFont(bold, sz);
+        doc.fillColor(color).text(value, X(px), X(y), { lineBreak: false });
+      }
+      const rrect = (x, y, w, h, r) => doc.roundedRect(X(x), X(y), X(w), X(h), X(r));
+      const line = (x1, y1, x2, y2, color, wd = 1) => {
+        doc.lineWidth(X(wd)).strokeColor(color).moveTo(X(x1), X(y1)).lineTo(X(x2), X(y2)).stroke();
+      };
 
-      fBold(20); doc.fillColor('#12305a');
-      doc.text('УДОСТОВЕРЕНИЕ', L, 56, { width: CW, align: 'center' });
-      fReg(10); doc.fillColor('#5b6b80');
-      doc.text('КУӘЛІК  /  CERTIFICATE OF QUALIFICATION', L, 80, { width: CW, align: 'center' });
+      // ---------- Фон, рамка, боковая полоса ----------
+      doc.rect(0, 0, doc.page.width, doc.page.height).fill('#F8FBFE');
+      rrect(12, 12, PX_W - 24, PX_H - 24, 20); doc.lineWidth(X(2.4)).strokeColor(pal.base).stroke();
 
-      fBold(13); doc.fillColor('#0f3b6c');
-      doc.text(`№ ${card.card_number || '—'}`, L, 98, { width: CW, align: 'center' });
+      doc.rect(X(26), X(26), X(46), X(PX_H - 52)).fill(pal.soft);
+      line(26, 26, 26, PX_H - 26, pal.mid, 1.5);
+      line(72, 26, 72, PX_H - 26, pal.mid, 1.5);
+      for (let i = 0; i < 17; i += 1) {
+        const cy = 64 + i * 49.6;
+        doc.polygon([X(49), X(cy - 16)], [X(60), X(cy)], [X(49), X(cy + 16)], [X(38), X(cy)]).fill(pal.mid);
+        doc.circle(X(49), X(cy + 24.8), X(2.4)).fill(pal.base);
+      }
 
-      doc.moveTo(L, 120).lineTo(L + CW, 120).lineWidth(0.8).strokeColor('#c8d4e3').stroke();
+      // ---------- Шапка: логотип (или название компании) и слоган ----------
+      let logoDrawn = false;
+      if (logoBuf) {
+        try { doc.image(logoBuf, X(98), X(30), { fit: [X(300), X(112)], align: 'left', valign: 'center' }); logoDrawn = true; } catch (e) { console.error('Ошибка вставки логотипа:', e.message); }
+      }
+      if (!logoDrawn) text(s.company_name || '', 98, 62, { size: 26, bold: true, color: pal.dark, maxW: 520 });
 
-      // Поля
-      const rows = [
-        ['Ф.И.О. / Т.А.Ә.', `${card.last_name || ''} ${card.first_name || ''}`.trim() || '—'],
-        ['Должность / Лауазымы', card.user_position || '—'],
-        ['Подразделение / Бөлім', [card.department, card.object].filter(Boolean).join(' · ') || '—'],
-        ['Проверка знаний по курсу', card.title_ru || '—'],
-        ['Протокол комиссии №', card.protocol_number ? String(card.protocol_number) : '—'],
-        ['Дата выдачи / Берілген күні', fmtDate(card.issue_date)],
-        ['Действительно до / Жарамды', card.expiry_date ? fmtDate(card.expiry_date) : 'бессрочно']
+      const taglines = [s.tagline_kz, s.tagline_ru, s.tagline_en];
+      const defaults = ['ҚАУІПСІЗ ЖҰМЫС — ЖАРҚЫН БОЛАШАҚ', 'БЕЗОПАСНЫЙ ТРУД – УСТОЙЧИВОЕ РАЗВИТИЕ', 'SAFE WORK – SUSTAINABLE FUTURE'];
+      taglines.forEach((t, i) => text(t == null ? defaults[i] : t, 1250, 36 + i * 20, { size: 14.5, color: pal.dark, align: 'right', maxW: 420 }));
+
+      // ---------- Заголовки ----------
+      const CX = 670;
+      text('ҚАУІПСІЗДІК ЖӘНЕ ЕҢБЕКТІ ҚОРҒАУ САЛАСЫ БОЙЫНША', CX, 118, { size: 16, bold: true, color: pal.dark, align: 'center', maxW: 1100 });
+      text('БІЛІМДІ ТЕКСЕРУ КУӘЛІГІ', CX, 140, { size: 40, bold: true, color: pal.dark, align: 'center', maxW: 1100 });
+      text('УДОСТОВЕРЕНИЕ О ПРОВЕРКЕ ЗНАНИЙ', CX, 184, { size: 27, bold: true, color: pal.dark, align: 'center', maxW: 1100 });
+      text('ПО ВОПРОСАМ БЕЗОПАСНОСТИ И ОХРАНЫ ТРУДА', CX, 216, { size: 17, color: pal.dark, align: 'center', maxW: 1100 });
+      text('CERTIFICATE OF PASSING SAFETY TESTS', CX, 240, { size: 15, bold: true, color: pal.dark, align: 'center', maxW: 1100 });
+
+      // ---------- Поля сотрудника ----------
+      const fullName = `${card.last_name || ''} ${card.first_name || ''}`.trim() || '—';
+      const fields = [
+        ['Аты-жөні / ФИО / Name:', fullName],
+        ['Атқаратын қызметі / Должность / Job Title:', card.user_position || '—'],
+        ['Жұмыс орны / Подразделение / Department:', card.department || card.object || '—'],
+        ['Жұмыс беруші / Работодатель / Employer:', s.company_name || '—']
       ];
-
-      let y = 132;
-      const labelW = 170;
-      rows.forEach(([label, value]) => {
-        fReg(8.6); doc.fillColor('#64748b');
-        doc.text(label, L, y, { width: labelW, height: 12, ellipsis: true });
-        fBold(9.6); doc.fillColor('#12233a');
-        doc.text(String(value), L + labelW, y - 1, { width: CW - labelW - 120, height: 13, ellipsis: true });
-        y += 19;
+      fields.forEach(([label, value], i) => {
+        const y = 284 + i * 34;
+        text(label, 95, y + 3, { size: 12.5, color: MUTED, maxW: 350 });
+        text(value, 455, y - 2, { size: 20, bold: true, color: INK, maxW: 465 });
+        line(95, y + 27, 920, y + 27, pal.line, 1);
       });
 
-      // QR + UID справа
-      if (qrBuf) {
-        try { doc.image(qrBuf, L + CW - 92, 132, { fit: [86, 86] }); } catch (e) { /* ignore */ }
+      // ---------- Номер и статус ----------
+      text('Тұрақты нөмір / Постоянный номер / Permanent No.', 1098, 277, { size: 11, color: MUTED, align: 'center', maxW: 290 });
+      text(`№ ${card.card_number || '—'}`, 1100, 296, { size: 27, bold: true, color: pal.dark, align: 'center', maxW: 290 });
+      rrect(950, 330, 300, 80, 12); doc.fillColor(st.bg).fill();
+      rrect(950, 330, 300, 80, 12); doc.lineWidth(X(1.6)).strokeColor(st.border).stroke();
+      doc.circle(X(984), X(370), X(17)).fill(st.fg);
+      doc.lineWidth(X(3)).strokeColor('#FFFFFF').lineCap('round').lineJoin('round');
+      if (card.status === 'REVOKED') {
+        doc.moveTo(X(977), X(363)).lineTo(X(991), X(377)).stroke();
+        doc.moveTo(X(991), X(363)).lineTo(X(977), X(377)).stroke();
+      } else if (card.status === 'EXPIRED') {
+        doc.moveTo(X(984), X(361)).lineTo(X(984), X(373)).stroke();
+        doc.circle(X(984), X(379), X(1.8)).fill('#FFFFFF');
+      } else {
+        doc.moveTo(X(975), X(371)).lineTo(X(982), X(378)).lineTo(X(994), X(363)).stroke();
       }
-      fReg(6.6); doc.fillColor('#94a3b8');
-      doc.text(String(card.card_uid || ''), L + CW - 110, 222, { width: 110, align: 'center' });
+      text(st.kz, 1026, 339, { size: 19, bold: true, color: st.fg, maxW: 215 });
+      text(st.ru, 1026, 362, { size: 15, bold: true, color: st.fg, maxW: 215 });
+      text(st.en, 1026, 383, { size: 15, bold: true, color: st.fg, maxW: 215 });
 
-      // Подписи комиссии (из протокола)
-      const sigs = Array.isArray(committeeSignatures) ? committeeSignatures : [];
-      const sigTop = 286;
-      fReg(8); doc.fillColor('#64748b');
-      doc.text('Комиссия / Комиссия мүшелері', L, sigTop - 14, { width: CW });
+      // ---------- Плашка курса (цвет вида обучения) ----------
+      rrect(95, 436, 1155, 84, 12); doc.fillColor(pal.base).fill();
+      const titleRu = card.title_ru || card.title_kz || 'Курс';
+      text(titleRu, 672, 452, { size: 28, bold: true, color: '#FFFFFF', align: 'center', maxW: 1080 });
+      if (card.title_kz && card.title_kz !== titleRu) {
+        text(card.title_kz, 672, 490, { size: 15, color: mix(pal.base, '#FFFFFF', 0.85), align: 'center', maxW: 1080 });
+      }
 
-      const colW = CW / Math.max(1, sigs.length || 3);
-      (sigs.length ? sigs : [{ label: 'Председатель комиссии' }, { label: 'Инженер по БиОТ' }, { label: 'Член комиссии' }])
-        .forEach((s, i) => {
-          const x = L + i * colW;
-          const img = s.signed ? sigBuffer(s.signature_data) : null;
-          if (img) {
-            try { doc.image(img, x + colW / 2 - 40, sigTop, { fit: [80, 28] }); } catch (e) { /* ignore */ }
-          }
-          const lineY = sigTop + 32;
-          doc.moveTo(x + 8, lineY).lineTo(x + colW - 16, lineY).lineWidth(0.7).strokeColor('#9aa8ba').stroke();
-          fReg(7.6); doc.fillColor('#12233a');
-          doc.text(s.name || '—', x, lineY + 4, { width: colW - 10, align: 'center', height: 11, ellipsis: true });
-          fReg(6.8); doc.fillColor('#7a8798');
-          doc.text(s.label || '', x, lineY + 15, { width: colW - 10, align: 'center', height: 10, ellipsis: true });
-        });
+      // ---------- Таблица: дата, результат, протокол, срок, статус ----------
+      const colX = [95, 326, 557, 788, 1019, 1250];
+      const heads = [
+        ['Дата проверки', 'Тексеру күні / Test date'],
+        ['Результат', 'Нәтиже / Result'],
+        ['№ протокола', 'Хаттама № / Protocol'],
+        ['Действителен до', 'Жарамды / Valid until'],
+        ['Статус', 'Мәртебе / Status']
+      ];
+      rrect(95, 536, 1155, 44, 8); doc.fillColor(pal.soft).fill();
+      heads.forEach(([ru, kz], i) => {
+        const cx = (colX[i] + colX[i + 1]) / 2;
+        text(ru, cx, 541, { size: 13.5, bold: true, color: pal.dark, align: 'center', maxW: 210 });
+        text(kz, cx, 561, { size: 10, color: MUTED, align: 'center', maxW: 210 });
+      });
+      rrect(95, 536, 1155, 92, 8); doc.lineWidth(X(1.2)).strokeColor(pal.mid).stroke();
+      const result = card.score_percent == null ? 'ПРОЙДЕН' : `ПРОЙДЕН · ${card.score_percent}%`;
+      const cells = [
+        fmtDate(card.test_date || card.issue_date),
+        result,
+        card.protocol_number ? String(card.protocol_number) : '—',
+        card.expiry_date ? fmtDate(card.expiry_date) : 'бессрочно'
+      ];
+      cells.forEach((v, i) => text(v, (colX[i] + colX[i + 1]) / 2, 596, { size: 17, color: INK, align: 'center', maxW: 210 }));
+      // статус-пилюля
+      const pcx = (colX[4] + colX[5]) / 2;
+      rrect(pcx - 92, 590, 184, 30, 15); doc.fillColor(st.bg).fill();
+      rrect(pcx - 92, 590, 184, 30, 15); doc.lineWidth(X(1)).strokeColor(st.border).stroke();
+      text(st.pill, pcx, 597, { size: 13, bold: true, color: st.fg, align: 'center', maxW: 170 });
 
-      fReg(6.4); doc.fillColor('#9aa8ba');
-      doc.text('Подлинность документа проверяется по QR-коду', L, H - 40, { width: CW, align: 'center' });
+      // ---------- Подпись председателя и печать ----------
+      if (sigBuf) {
+        try { doc.image(sigBuf, X(105), X(690), { fit: [X(210), X(72)], align: 'center', valign: 'bottom' }); } catch (e) { console.error('Ошибка вставки подписи:', e.message); }
+      }
+      line(95, 766, 415, 766, '#8A97A8', 1);
+      text('Комиссия төрағасы / Председатель комиссии / Committee Chairman', 95, 772, { size: 11, color: MUTED, maxW: 350 });
+      text(chairman.name || '—', 95, 791, { size: 15, bold: true, color: INK, maxW: 320 });
+      text('Председатель комиссии', 95, 812, { size: 12, color: MUTED, maxW: 320 });
+      if (stampBuf) {
+        try {
+          doc.save(); doc.opacity(0.92);
+          doc.image(stampBuf, X(450), X(692), { fit: [X(146), X(146)], align: 'center', valign: 'center' });
+          doc.restore();
+        } catch (e) { console.error('Ошибка вставки печати:', e.message); }
+      }
+
+      // ---------- Середина: пояснение про QR ----------
+      text('Актуальный статус — по QR-коду', 608, 717, { size: 11.5, bold: true, color: pal.dark, maxW: 215 });
+      text('Өзекті мәртебе — QR-код бойынша', 608, 738, { size: 11.5, color: MUTED, maxW: 215 });
+      text('Current status — scan the QR code', 608, 757, { size: 11.5, color: MUTED, maxW: 215 });
+      text('Сформировано / Generated:', 608, 787, { size: 11.5, color: MUTED, maxW: 215 });
+      text(todayKz(), 608, 805, { size: 11.5, bold: true, color: MUTED, maxW: 215 });
+
+      // ---------- Справа: QR ----------
+      text('Құжаттың түпнұсқалығын тексеру', 1089, 711, { size: 12, color: MUTED, align: 'right', maxW: 262 });
+      text('Проверка подлинности удостоверения', 1089, 732, { size: 12, bold: true, color: pal.dark, align: 'right', maxW: 262 });
+      text('Verify certificate', 1089, 752, { size: 12, color: MUTED, align: 'right', maxW: 262 });
+      if (verifyUrl) text(verifyUrl, 1089, 781, { size: 11, color: pal.dark, align: 'right', maxW: 262 });
+      rrect(1105, 692, 143, 143, 14); doc.fillColor('#FFFFFF').fill();
+      rrect(1105, 692, 143, 143, 14); doc.lineWidth(X(1.2)).strokeColor(pal.mid).stroke();
+      if (qrBuf) {
+        try { doc.image(qrBuf, X(1117), X(704), { fit: [X(119), X(119)] }); } catch (e) { console.error('Ошибка вставки QR:', e.message); }
+      }
+
+      // ---------- Подвал ----------
+      const foot = [
+        'Настоящее удостоверение действительно только при наличии записи в электронном реестре. Актуальный статус и список всех обучений сотрудника — по QR-коду.',
+        'Осы куәлік тек электрондық реестрде жазба болған жағдайда ғана жарамды. Өзекті мәртебе және қызметкердің барлық оқытулар тізімі — QR-код бойынша.',
+        'This card is valid only if a record exists in the electronic register. Current status and the list of all trainings — scan the QR code.'
+      ];
+      foot.forEach((t, i) => text(t, 95, 848 + i * 13.5, { size: 10, color: FAINT, maxW: 1130 }));
 
       doc.end();
     } catch (e) {

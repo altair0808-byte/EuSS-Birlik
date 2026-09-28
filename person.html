@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Удостоверения сотрудника / Қызметкер куәліктері / Employee cards</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: #f1f5f9; color: #1e293b;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+    padding: 20px 14px 40px;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  .head { text-align: center; margin: 4px 0 16px; }
+  .head h1 { font-size: 15px; color: #0f3b6c; margin: 0 0 3px; }
+  .head p { font-size: 12px; color: #64748b; margin: 0; }
+
+  .person {
+    background: #fff; border-radius: 16px; box-shadow: 0 10px 30px rgba(15,59,108,0.10);
+    padding: 22px 20px; border-top: 6px solid #0f3b6c; margin-bottom: 14px;
+  }
+  .person .name { font-size: 22px; font-weight: 800; color: #0f172a; margin: 0 0 10px; line-height: 1.2; word-break: break-word; }
+  .kv { padding: 8px 0; border-top: 1px solid #eef2f7; }
+  .kv .k { display: block; font-size: 11px; color: #64748b; line-height: 1.3; }
+  .kv .v { display: block; font-size: 15px; font-weight: 700; margin-top: 1px; word-break: break-word; }
+
+  .banner { display: flex; align-items: center; gap: 12px; border-radius: 12px; padding: 12px 14px; margin-top: 14px; border: 1.5px solid; }
+  .banner .ic { width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: #fff; }
+  .banner .ic svg { width: 18px; height: 18px; }
+  .banner .t1 { font-weight: 800; font-size: 15px; line-height: 1.25; }
+  .banner .t2 { font-size: 12px; font-weight: 700; line-height: 1.35; opacity: .92; }
+  .st-VALID   { --fg: #0f7a3c; --bg: #e8f6ee; --bd: #7cc49a; }
+  .st-PARTIAL { --fg: #1d4ed8; --bg: #eaf1fe; --bd: #9db8f0; }
+  .st-EXPIRED { --fg: #b45309; --bg: #fff4e0; --bd: #f0c27b; }
+  .st-REVOKED { --fg: #b91c1c; --bg: #fdecec; --bd: #f0a5a5; }
+  .st-NONE    { --fg: #64748b; --bg: #f1f5f9; --bd: #cbd5e1; }
+  .banner { background: var(--bg); border-color: var(--bd); color: var(--fg); }
+  .banner .ic { background: var(--fg); }
+
+  .sec { font-size: 12px; font-weight: 700; color: #475569; margin: 18px 4px 8px; text-transform: uppercase; letter-spacing: .04em; }
+  .sec span { font-weight: 500; color: #94a3b8; text-transform: none; letter-spacing: 0; }
+
+  .course { background: #fff; border-radius: 14px; box-shadow: 0 4px 14px rgba(15,59,108,0.07); margin-bottom: 10px; border-left: 8px solid var(--cc, #1d4ed8); padding: 14px 14px 12px; }
+  .course .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+  .course .ttl { font-size: 15px; font-weight: 800; line-height: 1.3; word-break: break-word; }
+  .course .ttl small { display: block; font-size: 12px; font-weight: 500; color: #64748b; margin-top: 2px; }
+  .pill { flex-shrink: 0; font-size: 11px; font-weight: 800; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--bd); background: var(--bg); color: var(--fg); white-space: nowrap; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 12px; margin-top: 12px; }
+  .grid .lb { font-size: 11px; color: #64748b; line-height: 1.25; }
+  .grid .lb i { display: block; font-style: normal; color: #94a3b8; font-size: 10px; }
+  .grid .vl { font-size: 14px; font-weight: 700; margin-top: 1px; word-break: break-word; }
+
+  .msg { text-align: center; color: #64748b; padding: 40px 10px; }
+  .msg.err { background: #fff; border-radius: 16px; box-shadow: 0 10px 30px rgba(15,59,108,0.10); }
+  .msg .big { font-size: 16px; font-weight: 800; color: #475569; margin-bottom: 6px; }
+  .note { font-size: 11px; color: #94a3b8; text-align: center; margin: 18px 8px 0; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="head">
+      <h1>Проверка удостоверений по безопасности и охране труда</h1>
+      <p>Қауіпсіздік және еңбекті қорғау бойынша куәліктерді тексеру · Safety training cards check</p>
+    </div>
+    <div id="content" class="msg">Проверка... / Тексерілуде... / Checking...</div>
+    <div class="note">
+      Данные формируются из электронного реестра на момент открытия страницы.<br>
+      Деректер бетті ашу сәтіндегі электрондық тізілімнен алынады.<br>
+      Data is taken from the electronic register at the moment this page is opened.
+    </div>
+  </div>
+
+<script>
+(function () {
+  // Три языка на странице: основной текст — русский, ниже/рядом — казахский и английский (как на бланке).
+  var STATUS = {
+    VALID:   { ru: 'ДЕЙСТВИТЕЛЬНО', kz: 'ЖАРАМДЫ', en: 'VALID' },
+    EXPIRED: { ru: 'СРОК ИСТЁК', kz: 'МЕРЗІМІ АЯҚТАЛДЫ', en: 'EXPIRED' },
+    REVOKED: { ru: 'АННУЛИРОВАНО', kz: 'ЖОЙЫЛДЫ', en: 'REVOKED' }
+  };
+  var OVERALL = {
+    VALID:   { ru: 'ВСЕ УДОСТОВЕРЕНИЯ ДЕЙСТВУЮТ', kz: 'БАРЛЫҚ КУӘЛІКТЕР ЖАРАМДЫ', en: 'ALL CARDS ARE VALID' },
+    PARTIAL: { ru: 'ДЕЙСТВУЮТ НЕ ВСЕ', kz: 'БАРЛЫҒЫ ЖАРАМДЫ ЕМЕС', en: 'NOT ALL CARDS ARE VALID' },
+    EXPIRED: { ru: 'СРОК ВСЕХ УДОСТОВЕРЕНИЙ ИСТЁК', kz: 'БАРЛЫҚ КУӘЛІКТЕРДІҢ МЕРЗІМІ АЯҚТАЛДЫ', en: 'ALL CARDS HAVE EXPIRED' },
+    REVOKED: { ru: 'УДОСТОВЕРЕНИЯ АННУЛИРОВАНЫ', kz: 'КУӘЛІКТЕР ЖОЙЫЛДЫ', en: 'CARDS REVOKED' },
+    NONE:    { ru: 'УДОСТОВЕРЕНИЙ НЕТ', kz: 'КУӘЛІКТЕР ЖОҚ', en: 'NO CARDS' }
+  };
+  var ICON = {
+    ok:   '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>',
+    warn: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v8"/><path d="M12 18.5v.01"/></svg>',
+    bad:  '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>'
+  };
+  var ICON_BY = { VALID: 'ok', PARTIAL: 'warn', EXPIRED: 'warn', REVOKED: 'bad', NONE: 'warn' };
+
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  // 'YYYY-MM-DD' -> 'DD.MM.YYYY' без Date (чтобы часовой пояс не сдвигал день)
+  function fmtDate(s) {
+    var m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? m[3] + '.' + m[2] + '.' + m[1] : '—';
+  }
+  function safeColor(c) { return /^#[0-9A-Fa-f]{6}$/.test(String(c || '')) ? c : '#1D4ED8'; }
+  function kv(k, v) { return '<div class="kv"><span class="k">' + k + '</span><span class="v">' + esc(v || '—') + '</span></div>'; }
+
+  var content = document.getElementById('content');
+
+  function showMessage(big, small) {
+    content.className = 'msg err';
+    content.innerHTML = '<div class="big">' + big + '</div><div>' + small + '</div>';
+  }
+
+  function render(d) {
+    var ov = OVERALL[d.overall_status] ? d.overall_status : 'NONE';
+    var ovT = OVERALL[ov];
+    var courses = Array.isArray(d.courses) ? d.courses : [];
+
+    var html = '<div class="person">'
+      + '<h2 class="name">' + esc(d.full_name || '—') + '</h2>'
+      + kv('Должность / Лауазымы / Position', d.position)
+      + kv('Подразделение / Бөлім / Department', d.department)
+      + kv('Работодатель / Жұмыс беруші / Employer', d.employer)
+      + '<div class="banner st-' + ov + '"><div class="ic">' + ICON[ICON_BY[ov]] + '</div><div>'
+      + '<div class="t1">' + ovT.ru + '</div><div class="t2">' + ovT.kz + '<br>' + ovT.en + '</div></div></div>'
+      + '</div>';
+
+    html += '<div class="sec">Обучения / Оқытулар <span>/ Trainings · ' + courses.length + '</span></div>';
+
+    if (!courses.length) {
+      html += '<div class="msg">Пока нет ни одного удостоверения<br>Әзірге куәлік жоқ<br>No cards yet</div>';
+    }
+    courses.forEach(function (c) {
+      var st = STATUS[c.status] ? c.status : 'VALID';
+      var s = STATUS[st];
+      var title = c.title_ru || c.title_kz || '—';
+      var sub = (c.title_kz && c.title_kz !== title) ? '<small>' + esc(c.title_kz) + '</small>' : '';
+      var result = c.score_percent == null ? 'ПРОЙДЕН' : 'ПРОЙДЕН · ' + esc(c.score_percent) + '%';
+      html += '<div class="course st-' + st + '" style="--cc:' + safeColor(c.color) + '">'
+        + '<div class="top"><div class="ttl">' + esc(title) + sub + '</div>'
+        + '<span class="pill" title="' + esc(s.kz + ' / ' + s.en) + '">' + s.ru + '</span></div>'
+        + '<div class="grid">'
+        + '<div><div class="lb">Дата проверки<i>Тексеру күні / Test date</i></div><div class="vl">' + fmtDate(c.test_date) + '</div></div>'
+        + '<div><div class="lb">Результат<i>Нәтиже / Result</i></div><div class="vl">' + result + '</div></div>'
+        + '<div><div class="lb">№ протокола<i>Хаттама № / Protocol</i></div><div class="vl">' + esc(c.protocol_number || '—') + '</div></div>'
+        + '<div><div class="lb">Действителен до<i>Жарамды / Valid until</i></div><div class="vl">'
+        + (c.valid_until ? fmtDate(c.valid_until) : 'бессрочно / мерзімсіз') + '</div></div>'
+        + '</div></div>';
+    });
+
+    content.className = '';
+    content.innerHTML = html;
+    document.title = (d.full_name ? d.full_name + ' — ' : '') + 'Удостоверения / Куәліктер';
+  }
+
+  async function run() {
+    var uid = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
+    try {
+      var r = await fetch('/api/public/person/' + encodeURIComponent(uid), { headers: { 'Accept': 'application/json' } });
+      if (r.status === 429) {
+        showMessage('Слишком много запросов', 'Өтініштер тым көп · Too many requests.<br>Повторите через минуту / Бір минуттан соң қайталаңыз / Try again in a minute.');
+        return;
+      }
+      var d = await r.json().catch(function () { return { found: false }; });
+      if (r.status === 404 || !d || !d.found) {
+        showMessage('ДОКУМЕНТ НЕ НАЙДЕН', 'ҚҰЖАТ ТАБЫЛМАДЫ · NOT FOUND<br><br>Проверьте, что QR-код считан полностью.');
+        return;
+      }
+      if (!r.ok) throw new Error('http ' + r.status);
+      render(d);
+    } catch (e) {
+      showMessage('ОШИБКА ПРОВЕРКИ', 'ТЕКСЕРУ ҚАТЕСІ · ERROR<br>Попробуйте позже / Кейінірек қайталаңыз / Try again later.');
+    }
+  }
+  run();
+})();
+</script>
+</body>
+</html>

@@ -7,6 +7,9 @@ require('dotenv').config();
 const { initDb } = require('./db');
 
 const app = express();
+// За прокси Render реальный IP клиента приходит в X-Forwarded-For; без этого req.ip — адрес прокси
+// и лимитер публичных роутов (lib/rateLimit.js) считал бы всех посетителей одним.
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
@@ -23,7 +26,10 @@ app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 fs.mkdirSync(path.join(__dirname, 'uploads', 'imports'), { recursive: true });
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-app.use(express.static(path.join(__dirname)));
+// ВАЖНО: корень проекта больше НЕ раздаётся как статика. Раньше `express.static(__dirname)` отдавал
+// по прямой ссылке любой файл из корня (db.js, Server.js, package.json, любые случайные файлы
+// вроде «download» с логином/паролем суперадмина и т.п.). Фронтенд ничего из корня не подгружает:
+// index.html / verify.html / person.html отдаются ниже явными роутами, остальное берётся с CDN.
 
 // Подключение роутов
 const { router: authRouter } = require('./routes/auth');
@@ -37,6 +43,8 @@ app.use('/api/export', require('./routes/export'));
 app.use('/api/certificates', require('./routes/certificate'));
 // Удостоверения — отдельный документ, не сертификат (см. idCardService.js)
 app.use('/api/id-cards', require('./routes/idCards'));
+// Публичные данные сотрудника по общему QR (без авторизации, с лимитом запросов)
+app.use('/api/public', require('./routes/public'));
 app.use('/api/signatures', require('./routes/signatures'));
 
 // Публичная страница проверки подлинности удостоверения (QR-код на удостоверении
@@ -45,6 +53,17 @@ app.use('/api/signatures', require('./routes/signatures'));
 // GET /api/certificates/verify/:uid (см. routes/certificate.js).
 app.get('/verify/:uid', (req, res) => {
   res.sendFile(path.join(__dirname, 'verify.html'));
+});
+
+// Публичная страница сотрудника — сюда ведёт ОБЩИЙ QR на всех его удостоверениях
+// (public_uid вида P-XXXXXXXXXX, см. lib/publicUid.js). Как и /verify/:uid — лёгкая статическая
+// страница без авторизации и без загрузки всего SPA; данные она берёт сама через
+// GET /api/public/person/:uid (routes/public.js: лимит запросов с IP, только публичные поля).
+// Пока этот файл лежит в корне проекта, routes/idCards.js кладёт в QR именно /p/<public_uid>.
+app.get('/p/:uid', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  res.sendFile(path.join(__dirname, 'person.html'));
 });
 
 app.get('*', (req, res) => {

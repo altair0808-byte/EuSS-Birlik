@@ -7,6 +7,8 @@ const { Pool, types } = require('pg');
 types.setTypeParser(20, v => (v === null ? null : parseInt(v, 10)));
 const bcrypt = require('bcryptjs');
 const { computeFioFields } = require('./lib/fio');
+const { generatePublicUid } = require('./lib/publicUid');
+const { CARD_COLOR_PALETTE } = require('./lib/cardColors');
 
 // Список должностей объекта Dome 6 (файл "Dome 6 MT position - 19.09.2025.xlsx",
 // присланный 25.09.2026) — сеется в справочник positions_list один раз, только если
@@ -446,6 +448,65 @@ async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_id_cards_employee ON id_cards(employee_id);
     CREATE INDEX IF NOT EXISTS idx_id_cards_uid ON id_cards(card_uid);
   `);
+
+  // ===================== Единое удостоверение сотрудника =====================
+  // Один бланк на сотрудника со списком всех его курсов и ОДНИМ постоянным QR на
+  // /p/<public_uid>. public_uid не зависит ни от логина, ни от курсов и не меняется.
+  // DEFAULT задаёт формат для новых сотрудников на стороне БД (чтобы не править каждый
+  // INSERT в routes/users.js); существующим значения раздаём ниже (lib/publicUid.js).
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS public_uid TEXT;
+    ALTER TABLE users ALTER COLUMN public_uid
+      SET DEFAULT ('P-' || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 10)));
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_public_uid ON users(public_uid);
+
+    -- Слоган в шапке бланка (3 языка) — редактируется в «Настройках», а не зашит в бланк.
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS tagline_kz TEXT DEFAULT 'ҚАУІПСІЗ ЖҰМЫС — ЖАРҚЫН БОЛАШАҚ';
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS tagline_ru TEXT DEFAULT 'БЕЗОПАСНЫЙ ТРУД – УСТОЙЧИВОЕ РАЗВИТИЕ';
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS tagline_en TEXT DEFAULT 'SAFE WORK – SUSTAINABLE FUTURE';
+  `);
+
+  // Цвет удостоверения по виду обучения: у каждого курса свой (см. lib/cardColors.js).
+  await pool.query(`ALTER TABLE courses ADD COLUMN IF NOT EXISTS card_color TEXT;`);
+  // Разовая раздача цветов существующим курсам — по порядку создания, разные, пока хватает палитры.
+  try {
+    const noColor = await pool.query('SELECT id FROM courses WHERE card_color IS NULL ORDER BY id');
+    if (noColor.rows.length) {
+      const used = (await pool.query('SELECT card_color FROM courses WHERE card_color IS NOT NULL')).rows.map((r) => r.card_color);
+      const usedSet = new Set(used.map((c) => c.toUpperCase()));
+      let n = usedSet.size;
+      for (const c of noColor.rows) {
+        const free = CARD_COLOR_PALETTE.find((x) => !usedSet.has(x.hex.toUpperCase()));
+        const hex = free ? free.hex : CARD_COLOR_PALETTE[n % CARD_COLOR_PALETTE.length].hex;
+        usedSet.add(hex.toUpperCase());
+        n += 1;
+        await pool.query('UPDATE courses SET card_color = $1 WHERE id = $2 AND card_color IS NULL', [hex, c.id]);
+      }
+      console.log(`[migrate] Заданы цвета удостоверений для ${noColor.rows.length} курсов`);
+    }
+  } catch (e) {
+    console.error('Ошибка выдачи card_color:', e.message);
+  }
+
+  // Разовая раздача public_uid сотрудникам, созданным до этого обновления.
+  try {
+    const noUid = await pool.query('SELECT id FROM users WHERE public_uid IS NULL');
+    let filled = 0;
+    for (const u of noUid.rows) {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        try {
+          await pool.query('UPDATE users SET public_uid = $1 WHERE id = $2 AND public_uid IS NULL', [generatePublicUid(), u.id]);
+          filled += 1;
+          break;
+        } catch (e) {
+          if (e.code !== '23505') throw e; // 23505 = коллизия уникального индекса, пробуем другой uid
+        }
+      }
+    }
+    if (filled) console.log(`[migrate] Выданы public_uid для ${filled} сотрудников`);
+  } catch (e) {
+    console.error('Ошибка выдачи public_uid:', e.message);
+  }
 
   // Разовое заполнение full_name_normalized/full_name_translit для сотрудников,
   // созданных до этого обновления (новые записи заполняются сразу в routes/users.js).

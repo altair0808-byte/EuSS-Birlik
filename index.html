@@ -10,6 +10,7 @@
   body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+  .idqr svg { width: 100%; height: auto; display: block; }
   .fade-in { animation: fadeIn .2s ease-out; }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
   .test-scroll {
@@ -529,6 +530,8 @@ const api = {
   getMyCertificates() { return this.req('/api/certificates/mine'); },
   // Удостоверения — отдельный документ, не сертификат
   getMyIdCards() { return this.req('/api/id-cards/mine'); },
+  // Единое удостоверение: общий QR + список всех обучений сотрудника (вкладка «Мои удостоверения»)
+  getMyIdCardsOverview() { return this.req('/api/id-cards/me'); },
   // Материалы/видео курса отдельно RU/KZ (п.3)
   uploadMaterial(courseId, lang, file) {
     const fd = new FormData(); fd.append('file', file);
@@ -946,7 +949,7 @@ function renderMain(app) {
   // увидеть админский раздел (например, если вкладка осталась в состоянии
   // 'dashboard'/'users'/... после перезагрузки страницы или входа под другой
   // ролью в этом же браузере).
-  if (isEmployee && state.tab !== 'my_tests' && state.tab !== 'my_certificate') {
+  if (isEmployee && state.tab !== 'my_tests' && state.tab !== 'my_id_cards' && state.tab !== 'my_certificate') {
     state.tab = 'my_tests';
   }
   // Аналогично для наблюдателя: у него нет доступа к 'dashboard', 'archive',
@@ -981,7 +984,8 @@ function renderMain(app) {
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-1 sm:space-x-4 overflow-x-auto py-2">
           ${isEmployee ? `
             <button onclick="setTab('my_tests')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'my_tests' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_my_tests')}</button>
-            <button onclick="setTab('my_certificate')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'my_certificate' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Удостоверение БиОТ', 'БиОТ куәлігі')}</button>
+            <button onclick="setTab('my_id_cards')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'my_id_cards' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Мои удостоверения', 'Менің куәліктерім')}</button>
+            <button onclick="setTab('my_certificate')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'my_certificate' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Сертификаты БиОТ', 'БиОТ сертификаттары')}</button>
           ` : isObserver ? `
             <button onclick="setTab('users')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_users')}</button>
             <button onclick="setTab('protocols')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'protocols' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_protocols')}</button>
@@ -1350,6 +1354,12 @@ async function loadTabContent() {
               <input type="checkbox" id="cMandatory" class="mt-0.5 rounded text-blue-600">
               <span><b>Обязательный курс для всех сотрудников</b> — сотрудники, которых добавили в систему, но ещё не прошедшие этот курс, будут отдельно показаны на карточке курса и в общей статистике на главной странице.</span>
             </label>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Цвет удостоверения по этому курсу</label>
+              <input type="hidden" id="cCardColor" value="">
+              <div id="cCardColorPicker" class="flex flex-wrap gap-2 mt-1"></div>
+              <p class="text-xs text-slate-500 mt-1">Рамка и шапка удостоверения по этому виду обучения будут этого цвета.</p>
+            </div>
             <div class="border-t pt-3">
               <label class="text-xs font-semibold text-slate-600">Материалы курса (презентация PPT/PPTX или PDF) — отдельно на русском и казахском</label>
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-1">
@@ -1721,10 +1731,20 @@ async function loadTabContent() {
     loadMyTests();
   }
 
+  if (state.tab === 'my_id_cards') {
+    container.innerHTML = `
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <h2 class="text-lg font-bold text-slate-900 mb-6">${_L('Мои удостоверения', 'Менің куәліктерім')}</h2>
+        <div id="myIdCards"><div class="text-slate-400">${_L('Загрузка...', 'Жүктелуде...')}</div></div>
+      </div>
+    `;
+    loadMyIdCards();
+  }
+
   if (state.tab === 'my_certificate') {
     container.innerHTML = `
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-        <h2 class="text-lg font-bold text-slate-900 mb-6">${_L('Удостоверение БиОТ', 'БиОТ куәлігі')}</h2>
+        <h2 class="text-lg font-bold text-slate-900 mb-6">${_L('Сертификаты БиОТ', 'БиОТ сертификаттары')}</h2>
         <div id="myCertList" class="space-y-4"><div class="text-slate-400">Загрузка...</div></div>
       </div>
     `;
@@ -1794,6 +1814,25 @@ async function loadTabContent() {
                 </div>
               </div>
               <p class="text-[11px] text-slate-500 mt-2">Измените "Следующий номер", чтобы продолжить нумерацию с номера из уже существующего бумажного/Excel-реестра. Дальше номера будут присваиваться автоматически.</p>
+            </div>
+            <div class="border-t pt-4">
+              <h3 class="text-sm font-bold text-slate-900 mb-2">Слоган на удостоверении</h3>
+              <p class="text-[11px] text-slate-500 mb-2">Три строки в правом верхнем углу бланка удостоверения (PDF и Word). Пустое поле — эта строка на бланке не печатается.</p>
+              <div class="space-y-2">
+                <div>
+                  <label class="text-xs font-semibold text-slate-600">Қазақша</label>
+                  <input id="setTaglineKz" maxlength="120" class="w-full border p-2.5 rounded-lg text-sm">
+                </div>
+                <div>
+                  <label class="text-xs font-semibold text-slate-600">Русский</label>
+                  <input id="setTaglineRu" maxlength="120" class="w-full border p-2.5 rounded-lg text-sm">
+                </div>
+                <div>
+                  <label class="text-xs font-semibold text-slate-600">English</label>
+                  <input id="setTaglineEn" maxlength="120" class="w-full border p-2.5 rounded-lg text-sm">
+                </div>
+              </div>
+              <button type="button" onclick="resetTaglinesToDefault()" class="mt-2 text-xs font-semibold text-blue-600 hover:underline">Вернуть стандартный слоган</button>
             </div>
             <button type="submit" class="px-5 py-2.5 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить настройки</button>
           </form>
@@ -3287,6 +3326,28 @@ function renderCoursesList() {
 }
 
 // Бессрочный курс: поле «Срок (мес)» не нужно
+const CARD_COLOR_PALETTE = [
+  ['#1D4ED8', 'Синий'], ['#15803D', 'Зелёный'], ['#C2410C', 'Оранжевый'], ['#B91C1C', 'Красный'],
+  ['#6D28D9', 'Фиолетовый'], ['#0F766E', 'Бирюзовый'], ['#A16207', 'Золотистый'], ['#BE185D', 'Розовый'],
+  ['#334155', 'Графитовый'], ['#0369A1', 'Голубой'], ['#4D7C0F', 'Оливковый'], ['#7C2D12', 'Коричневый']
+];
+// Пустой hex = «цвет не выбран»: для нового курса сервер сам подберёт свободный из палитры.
+function setCourseCardColor(hex) {
+  const input = document.getElementById('cCardColor');
+  if (!input) return;
+  input.value = hex || '';
+  const box = document.getElementById('cCardColorPicker');
+  const cur = String(hex || '').toUpperCase();
+  box.innerHTML = CARD_COLOR_PALETTE.map(([h, name]) => `
+    <button type="button" title="${name}" onclick="setCourseCardColor('${h}')"
+      class="w-7 h-7 rounded-full border-2 ${h === cur ? 'border-slate-900 ring-2 ring-offset-1 ring-slate-400' : 'border-white shadow'}"
+      style="background:${h}"></button>`).join('')
+    + `<label class="w-7 h-7 rounded-full border border-slate-300 overflow-hidden cursor-pointer relative" title="Свой цвет">
+         <input type="color" value="${cur || '#1D4ED8'}" oninput="setCourseCardColor(this.value)" class="absolute -inset-2 w-12 h-12 cursor-pointer opacity-0">
+         <span class="flex items-center justify-center w-full h-full text-xs text-slate-500">+</span>
+       </label>`;
+}
+
 function onCourseNoExpiryToggle() {
   const on = document.getElementById('cNoExpiry').checked;
   const v = document.getElementById('cValid');
@@ -3339,6 +3400,7 @@ async function openCourseModal(id) {
     document.getElementById('cValid').value = course.validity_months;
     document.getElementById('cNoExpiry').checked = !!course.no_expiry;
     document.getElementById('cMandatory').checked = !!course.is_mandatory;
+    setCourseCardColor(course.card_color || '');
     onCourseNoExpiryToggle();
     // video_url_ru/kz — новые поля; video_url — старое поле для курсов, созданных до этого обновления
     document.getElementById('cVideoRu').value = course.video_url_ru || course.video_url || '';
@@ -3364,6 +3426,7 @@ async function openCourseModal(id) {
     document.getElementById('cValid').value = 12;
     document.getElementById('cNoExpiry').checked = false;
     document.getElementById('cMandatory').checked = false;
+    setCourseCardColor('');
     onCourseNoExpiryToggle();
     document.getElementById('cVideoRu').value = '';
     document.getElementById('cVideoKz').value = '';
@@ -3407,6 +3470,7 @@ async function saveCourseForm(e) {
     validity_months: parseInt(document.getElementById('cValid').value) || 12,
     no_expiry: document.getElementById('cNoExpiry').checked,
     is_mandatory: document.getElementById('cMandatory').checked,
+    card_color: document.getElementById('cCardColor').value || undefined,
     video_url_ru: document.getElementById('cVideoRu').value.trim(),
     video_url_kz: document.getElementById('cVideoKz').value.trim()
   };
@@ -5063,6 +5127,91 @@ async function loadMyCertificate() {
   }
 }
 
+const ID_OVERALL_LABEL = {
+  VALID:   { ru: 'Все действуют', kz: 'Барлығы жарамды', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  PARTIAL: { ru: 'Действуют не все', kz: 'Барлығы жарамды емес', cls: 'bg-blue-50 text-blue-700 border-blue-200' },
+  EXPIRED: { ru: 'Срок истёк', kz: 'Мерзімі аяқталды', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+  REVOKED: { ru: 'Аннулированы', kz: 'Жойылды', cls: 'bg-red-50 text-red-700 border-red-200' },
+  NONE:    { ru: 'Удостоверений нет', kz: 'Куәліктер жоқ', cls: 'bg-slate-50 text-slate-600 border-slate-200' }
+};
+
+// Вкладка «Мои удостоверения»: ОДИН общий QR на всех удостоверениях сотрудника (ведёт на страницу /p/<uid>
+// со списком всех его обучений) + карточки по каждому виду обучения с кнопками PDF / Word.
+async function loadMyIdCards() {
+  const div = document.getElementById('myIdCards');
+  if (!div) return;
+  try {
+    const d = await api.getMyIdCardsOverview();
+    const isKz = CURRENT_LANG === 'kz';
+    const ov = ID_OVERALL_LABEL[d.overall_status] || ID_OVERALL_LABEL.NONE;
+    const safeColor = (c) => (/^#[0-9A-Fa-f]{6}$/.test(String(c || '')) ? c : '#1D4ED8');
+
+    const header = `
+      <div class="flex flex-col sm:flex-row gap-5 items-center sm:items-start border border-slate-200 rounded-xl p-4 mb-5">
+        <div class="idqr w-40 h-40 shrink-0 border border-slate-200 rounded-lg p-2 bg-white">${d.qr_svg || ''}</div>
+        <div class="min-w-0 w-full">
+          <div class="flex flex-wrap items-center gap-2 mb-1">
+            <span class="font-bold text-slate-900">${_L('Ваш общий QR-код', 'Сіздің ортақ QR-кодыңыз')}</span>
+            <span class="text-xs font-semibold px-2 py-0.5 rounded-full border ${ov.cls}">${isKz ? ov.kz : ov.ru}</span>
+          </div>
+          <p class="text-xs text-slate-500 mb-3">${_L(
+            'Один и тот же QR напечатан на всех ваших удостоверениях. По нему открывается страница со списком всех ваших обучений и их актуальным статусом.',
+            'Осы QR-код барлық куәліктеріңізде басылған. Ол арқылы барлық оқытуларыңыздың тізімі мен өзекті мәртебесі бар бет ашылады.')}</p>
+          <div class="flex flex-wrap gap-2 items-center">
+            <a href="${esc(d.url)}" target="_blank" rel="noopener" class="px-3 py-1.5 border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-semibold rounded-lg">${_L('Открыть страницу', 'Бетті ашу')}</a>
+            <button type="button" onclick="copyPersonLink(this)" data-url="${esc(d.url)}" class="px-3 py-1.5 border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-semibold rounded-lg">${_L('Копировать ссылку', 'Сілтемені көшіру')}</button>
+          </div>
+          <div class="text-[11px] text-slate-400 mt-2 break-all font-mono">${esc(d.url)}</div>
+        </div>
+      </div>`;
+
+    const courses = Array.isArray(d.courses) ? d.courses : [];
+    if (!courses.length) {
+      div.innerHTML = header + `<div class="text-slate-400">${_L('Пока нет ни одного удостоверения — оно появится автоматически после успешной сдачи теста.', 'Әзірге куәлік жоқ — тестті сәтті тапсырғаннан кейін автоматты түрде пайда болады.')}</div>`;
+      return;
+    }
+    div.innerHTML = header + `<div class="space-y-3">` + courses.map((c) => {
+      const st = CERT_STATUS_LABEL[c.status] || CERT_STATUS_LABEL.VALID;
+      const title = isKz ? (c.title_kz || c.title_ru) : (c.title_ru || c.title_kz);
+      const uid = encodeURIComponent(c.card_uid || '');
+      const result = c.score_percent == null ? _L('Пройден', 'Тапсырылды') : `${_L('Пройден', 'Тапсырылды')} · ${esc(c.score_percent)}%`;
+      return `
+        <div class="border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3" style="border-left: 8px solid ${safeColor(c.color)}">
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2 mb-1">
+              <span class="text-sm font-bold text-slate-900">${esc(title || '')}</span>
+              <span class="text-xs font-semibold px-2 py-0.5 rounded-full border ${st.cls}">${isKz ? st.kz : st.text}</span>
+            </div>
+            <div class="text-xs text-slate-500">
+              ${_L('Дата проверки', 'Тексеру күні')}: ${fmtDate(c.test_date)} &nbsp;•&nbsp; ${result}
+              &nbsp;•&nbsp; ${_L('Действителен до', 'Жарамдылық мерзімі')}: ${c.valid_until ? fmtDate(c.valid_until) : _L('Бессрочно', 'Мерзімсіз')}
+              ${c.protocol_number ? ` &nbsp;•&nbsp; ${_L('Протокол', 'Хаттама')} № ${esc(c.protocol_number)}` : ''}
+            </div>
+          </div>
+          <div class="flex gap-2 shrink-0">
+            <a href="#" onclick="downloadAuthed('/api/id-cards/uid/${uid}/pdf');return false;" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg">PDF</a>
+            <a href="#" onclick="downloadAuthed('/api/id-cards/uid/${uid}/docx', 'id_card_${uid}.docx');return false;" class="px-3 py-1.5 border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-semibold rounded-lg">Word</a>
+          </div>
+        </div>`;
+    }).join('') + `</div>`;
+  } catch (e) {
+    div.innerHTML = `<div class="text-red-500 text-sm">${_L('Не удалось загрузить удостоверения', 'Куәліктерді жүктеу мүмкін болмады')}</div>`;
+  }
+}
+
+async function copyPersonLink(btn) {
+  const url = btn && btn.dataset ? btn.dataset.url : '';
+  if (!url) return;
+  try {
+    await navigator.clipboard.writeText(url);
+    const old = btn.textContent;
+    btn.textContent = _L('Скопировано', 'Көшірілді');
+    setTimeout(() => { btn.textContent = old; }, 1500);
+  } catch (e) {
+    window.prompt(_L('Скопируйте ссылку:', 'Сілтемені көшіріңіз:'), url);
+  }
+}
+
 function setMyTestsTab(tab) {
   myTestsTab = tab;
   renderMyTests();
@@ -5470,6 +5619,18 @@ async function finishTest(auto) {
 }
 
 // --- SETTINGS LOGIC ---
+// Те же строки, что печатаются на бланке удостоверения, пока слоган не задан (idCardPdf.js / idCardDocx.js, db.js)
+const DEFAULT_TAGLINES = {
+  kz: 'ҚАУІПСІЗ ЖҰМЫС — ЖАРҚЫН БОЛАШАҚ',
+  ru: 'БЕЗОПАСНЫЙ ТРУД – УСТОЙЧИВОЕ РАЗВИТИЕ',
+  en: 'SAFE WORK – SUSTAINABLE FUTURE'
+};
+function resetTaglinesToDefault() {
+  document.getElementById('setTaglineKz').value = DEFAULT_TAGLINES.kz;
+  document.getElementById('setTaglineRu').value = DEFAULT_TAGLINES.ru;
+  document.getElementById('setTaglineEn').value = DEFAULT_TAGLINES.en;
+}
+
 async function loadSettingsData() {
   const data = await api.getSettings();
   document.getElementById('setComp').value = data.company_name || '';
@@ -5483,6 +5644,11 @@ async function loadSettingsData() {
   document.getElementById('setCertPrefix').value = data.certificate_prefix || '';
   document.getElementById('setCertDigits').value = data.certificate_digits || 4;
   document.getElementById('setCertNext').value = data.certificate_next_number || 1;
+  // Если слоган в базе ещё не задан (null), на бланке печатается стандартный — показываем его же,
+  // чтобы при сохранении формы он не превратился в «пустой» (пустое поле = не печатать).
+  document.getElementById('setTaglineKz').value = data.tagline_kz == null ? DEFAULT_TAGLINES.kz : data.tagline_kz;
+  document.getElementById('setTaglineRu').value = data.tagline_ru == null ? DEFAULT_TAGLINES.ru : data.tagline_ru;
+  document.getElementById('setTaglineEn').value = data.tagline_en == null ? DEFAULT_TAGLINES.en : data.tagline_en;
   const pathField = { logo: 'logo_path', stamp: 'stamp_path' };
   ['logo', 'stamp'].forEach(kind => {
     const el = document.getElementById('set_' + kind + '_status');
@@ -5510,7 +5676,10 @@ async function saveSettingsForm(e) {
     active_chairman: (document.querySelector('input[name="activeChairman"]:checked') || {}).value || '1',
     certificate_prefix: document.getElementById('setCertPrefix').value.trim(),
     certificate_digits: document.getElementById('setCertDigits').value,
-    certificate_next_number: document.getElementById('setCertNext').value
+    certificate_next_number: document.getElementById('setCertNext').value,
+    tagline_kz: document.getElementById('setTaglineKz').value,
+    tagline_ru: document.getElementById('setTaglineRu').value,
+    tagline_en: document.getElementById('setTaglineEn').value
   });
   // Обновляем название компании в шапке/логине сразу, без перезагрузки страницы
   PUBLIC_SETTINGS.company_name = document.getElementById('setComp').value.trim();
