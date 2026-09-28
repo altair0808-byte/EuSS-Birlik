@@ -352,6 +352,7 @@ async function initDb() {
     -- редактирование блокируется, а итоговый PDF с подписями сохраняется тут же (signed_pdf_data),
     -- чтобы при повторном скачивании отдавался ровно тот же файл и та же контрольная сумма (pdf_hash).
     ALTER TABLE protocols ADD COLUMN IF NOT EXISTS locked BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE protocols ADD COLUMN IF NOT EXISTS signed_docx_data TEXT;
     ALTER TABLE protocols ADD COLUMN IF NOT EXISTS fully_signed_at TIMESTAMPTZ;
     ALTER TABLE protocols ADD COLUMN IF NOT EXISTS pdf_hash TEXT;
     ALTER TABLE protocols ADD COLUMN IF NOT EXISTS signed_pdf_data TEXT;

@@ -136,6 +136,37 @@ function decodePngImage(value) {
   try { return Buffer.from(value.slice(idx + 7), 'base64'); } catch (e) { return null; }
 }
 
+// Печать из настроек может быть JPG или PNG с белым фоном (скан/фото). Раньше такая печать
+// молча пропускалась (читаем только PNG), а непрозрачный белый квадрат закрыл бы подпись.
+// Приводим к PNG и, если у изображения нет прозрачности, «вымываем» белый фон в прозрачность
+// (color-to-alpha: чем темнее пиксель, тем он непрозрачнее). Печать с готовой прозрачностью
+// не трогаем. sharp — уже зависимость проекта; если его нет, остаётся прежнее поведение.
+async function normalizeStampToPng(value) {
+  const buf = decodePngImage(value);
+  if (!buf) return null;
+  let sharp;
+  try { sharp = require('sharp'); } catch (e) { return pngDimensions(buf) ? buf : null; }
+  try {
+    const meta = await sharp(buf).metadata();
+    if (meta.hasAlpha && pngDimensions(buf)) return buf;
+    const { data, info } = await sharp(buf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    if (!meta.hasAlpha) {
+      for (let i = 0; i < data.length; i += 4) {
+        const a = 255 - Math.min(data[i], data[i + 1], data[i + 2]);
+        if (a === 0) { data[i] = data[i + 1] = data[i + 2] = 0; data[i + 3] = 0; continue; }
+        data[i] = Math.round((data[i] - (255 - a)) * 255 / a);
+        data[i + 1] = Math.round((data[i + 1] - (255 - a)) * 255 / a);
+        data[i + 2] = Math.round((data[i + 2] - (255 - a)) * 255 / a);
+        data[i + 3] = a;
+      }
+    }
+    return await sharp(data, { raw: { width: info.width, height: info.height, channels: 4 } }).png().toBuffer();
+  } catch (e) {
+    console.warn('[protocolDocx] Не удалось обработать печать, пропускаем:', e.message);
+    return pngDimensions(buf) ? buf : null;
+  }
+}
+
 let sigDocPrCounter = 900001; // произвольный диапазон id/z-order, не пересекающийся с шаблоном
 
 function buildInlineImageXml({ relId, cx, cy }) {
@@ -558,7 +589,7 @@ async function buildProtocolDocx({ protocolNumber, openDate, members, signatures
 
   if (Array.isArray(signatures) && signatures.length) {
     const byRole = Object.fromEntries(signatures.map((s) => [s.committee_role, s]));
-    xml = await embedSignaturesIntoXml(zip, xml, byRole, companyStamp);
+    xml = await embedSignaturesIntoXml(zip, xml, byRole, byRole.chairman ? await normalizeStampToPng(companyStamp) : null);
     xml = embedHeaderNamesIntoXml(xml, byRole);
   }
 

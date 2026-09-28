@@ -277,14 +277,18 @@ const SOFFICE_CANDIDATES = [
   'C:\\Program Files\\LibreOffice\\program\\soffice.exe'
 ].filter(Boolean);
 
-async function buildProtocolPdf({ protocol, members, signatures, companyName }) {
+// companyStamp — печать организации (Buffer/data:image), без неё печать в PDF не появляется.
+// docxBuffer — необязательно: уже собранный Word-бланк (при запечатывании PDF конвертируется
+// из ТОГО ЖЕ .docx, что сохраняется для скачивания, — чтобы Word и PDF не расходились).
+async function buildProtocolPdf({ protocol, members, signatures, companyName, companyStamp, docxBuffer: readyDocx }) {
 
-  const { buffer: docxBuffer } = await buildProtocolDocx({
+  const docxBuffer = readyDocx || (await buildProtocolDocx({
     protocolNumber: protocol.protocol_number,
     openDate: protocol.open_date,
     members,
-    signatures
-  });
+    signatures,
+    companyStamp
+  })).buffer;
 
   let lastError = null;
 
