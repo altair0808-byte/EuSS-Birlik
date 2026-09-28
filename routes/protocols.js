@@ -4,7 +4,7 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { query } = require('../db');
 const { authRequired, requireRole } = require('./auth');
-const { buildProtocolDocx } = require('../protocolDocx');
+const { buildProtocolDocx, protocolFileName } = require('../protocolDocx');
 const { buildProtocolPdf } = require('../protocolPdf');
 const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 const { COMMITTEE_ROLES, COMMITTEE_ROLE_LABELS } = require('../lib/committeeRoles');
@@ -42,6 +42,19 @@ async function resolveImageBuffer(imgVal) {
     if (fs.existsSync(localPath)) return fs.readFileSync(localPath);
   } catch (e) { console.error('Error resolving stamp image buffer:', e); }
   return null;
+}
+
+// Печать организации из настроек → Buffer (или null). Общая для Word, PDF-предпросмотра и
+// PDF при запечатывании: раньше печать доходила только до Word-скачивания, а в PDF (и в
+// сохранённый при полном подписании PDF) не передавалась совсем.
+async function loadCompanyStamp() {
+  const r = await query('SELECT stamp_data, stamp_path FROM settings WHERE id = 1');
+  const s = r.rows[0] || {};
+  const val = s.stamp_data || s.stamp_path;
+  if (!val) return null;
+  const buf = await resolveImageBuffer(val);
+  if (!buf) console.warn('[protocols] Печать указана в настройках, но файл не удалось прочитать:', String(val).slice(0, 120));
+  return buf;
 }
 
 // Протоколы комиссии по проверке знаний.
@@ -289,20 +302,29 @@ router.get('/:id/download', authRequired, requireRole('admin', 'assistant', 'sup
     if (!data) return res.status(404).json({ error: 'not_found', message: 'Протокол не найден' });
     const { protocol: p, members } = data;
 
-    const [signatures, settingsRes] = await Promise.all([
-      loadProtocolSignatures(p.id),
-      query('SELECT stamp_data, stamp_path FROM settings WHERE id = 1')
-    ]);
-    const settings = settingsRes.rows[0] || {};
-    const companyStamp = await resolveImageBuffer(settings.stamp_data || settings.stamp_path);
-
-    const { buffer, fileName } = await buildProtocolDocx({
-      protocolNumber: p.protocol_number,
-      openDate: p.open_date,
-      members,
-      signatures,
-      companyStamp
-    });
+    // Полностью подписанный (запечатанный) протокол — отдаём ровно тот Word, что был сохранён
+    // при запечатывании (как и PDF): правки ФИО/должностей/подписей сотрудников после этого
+    // на готовый документ не влияют. У протоколов, запечатанных до этого обновления, сохранённого
+    // Word нет — они, как раньше, собираются из БД.
+    let buffer, fileName;
+    const sealedRes = await query('SELECT locked, signed_docx_data FROM protocols WHERE id = $1', [p.id]);
+    const sealed = sealedRes.rows[0];
+    if (sealed && sealed.locked && sealed.signed_docx_data) {
+      buffer = Buffer.from(sealed.signed_docx_data, 'base64');
+      fileName = protocolFileName(p.open_date, p.protocol_number);
+    } else {
+      const [signatures, companyStamp] = await Promise.all([
+        loadProtocolSignatures(p.id),
+        loadCompanyStamp()
+      ]);
+      ({ buffer, fileName } = await buildProtocolDocx({
+        protocolNumber: p.protocol_number,
+        openDate: p.open_date,
+        members,
+        signatures,
+        companyStamp
+      }));
+    }
 
     const asciiName = `protocol_${p.open_date}_${String(p.protocol_number).replace(/[^A-Za-z0-9_-]/g, '')}.docx`;
     const encoded = encodeURIComponent(fileName).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
@@ -417,29 +439,46 @@ router.post('/:id/sign', authRequired, requireRole('admin', 'assistant', 'supera
       // PDF всегда делается из Word-бланка (protocolPdf.js). Если конвертер недоступен —
       // протокол всё равно запечатывается, просто без сохранённого PDF: его можно будет
       // скачать позже, а Word-версия доступна всегда.
+      // Word и PDF собираются ОДИН раз, с печатью организации, и сохраняются вместе:
+      // PDF конвертируется из того же .docx, который потом отдаётся на скачивание.
+      const companyStamp = await loadCompanyStamp();
+      let docxBuffer = null;
+      try {
+        docxBuffer = (await buildProtocolDocx({
+          protocolNumber: data.protocol.protocol_number,
+          openDate: data.protocol.open_date,
+          members: data.members,
+          signatures: sigs,
+          companyStamp
+        })).buffer;
+      } catch (docxErr) {
+        console.error('[protocols] Не удалось сформировать Word при запечатывании:', docxErr.message);
+      }
       let pdfBuffer = null;
       try {
         pdfBuffer = await buildProtocolPdf({
           protocol: data.protocol,
           members: data.members,
           signatures: sigs,
-          companyName: (settingsRes.rows[0] || {}).company_name
+          companyName: (settingsRes.rows[0] || {}).company_name,
+          companyStamp,
+          docxBuffer
         });
       } catch (pdfErr) {
         console.error('[protocols] Не удалось сформировать PDF при запечатывании:', pdfErr.message);
       }
-      if (pdfBuffer) {
-        const hash = crypto.createHash('sha256').update(pdfBuffer).digest('hex');
-        await query(
-          `UPDATE protocols SET locked = TRUE, fully_signed_at = NOW(), pdf_hash = $1, signed_pdf_data = $2 WHERE id = $3`,
-          [hash, pdfBuffer.toString('base64'), p.id]
-        );
-      } else {
-        await query(
-          `UPDATE protocols SET locked = TRUE, fully_signed_at = NOW() WHERE id = $1`,
-          [p.id]
-        );
-      }
+      const hash = pdfBuffer ? crypto.createHash('sha256').update(pdfBuffer).digest('hex') : null;
+      // Запечатанный протокол заодно становится закрытым: иначе, пока он «open» и сегодняшняя дата
+      // в его диапазоне, новые сдавшие тест продолжали бы добавляться в уже подписанный протокол.
+      await query(
+        `UPDATE protocols
+            SET locked = TRUE,
+                status = CASE WHEN status = 'open' THEN 'closed' ELSE status END,
+                fully_signed_at = NOW(),
+                pdf_hash = $1, signed_pdf_data = $2, signed_docx_data = $3
+          WHERE id = $4`,
+        [hash, pdfBuffer ? pdfBuffer.toString('base64') : null, docxBuffer ? docxBuffer.toString('base64') : null, p.id]
+      );
     }
 
     res.json({ ok: true, fully_signed: fullySigned });
@@ -527,7 +566,8 @@ router.get('/:id/pdf', authRequired, requireRole('admin', 'assistant', 'superadm
         protocol: data.protocol,
         members: data.members,
         signatures: sigs,
-        companyName: (settingsRes.rows[0] || {}).company_name
+        companyName: (settingsRes.rows[0] || {}).company_name,
+        companyStamp: await loadCompanyStamp()
       });
     }
 
@@ -657,7 +697,7 @@ router.delete('/:id', authRequired, requireRole('superadmin'), async (req, res) 
 async function findActiveProtocol(dateStr) {
   const result = await query(`
     SELECT ${PROTOCOL_COLS} FROM protocols p
-    WHERE p.status = 'open' AND $1::date BETWEEN p.open_date AND p.close_date
+    WHERE p.status = 'open' AND NOT p.locked AND $1::date BETWEEN p.open_date AND p.close_date
     ORDER BY p.open_date DESC
     LIMIT 1
   `, [dateStr]);
