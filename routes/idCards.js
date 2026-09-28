@@ -106,7 +106,7 @@ router.get('/uid/:uid/pdf', authRequired, async (req, res) => {
       return res.status(403).json({ error: 'forbidden' });
     }
     const settings = await loadSettings();
-    const sigs = await getCommitteeSignaturesForProtocol(card.protocol_id);
+    const sigs = card.is_external ? null : await getCommitteeSignaturesForProtocol(card.protocol_id);
     const buffer = await buildIdCardPdfBuffer(card, settings, qrUrlForCard(req, card), sigs);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="id_card_${encodeURIComponent(card.card_number || card.card_uid)}.pdf"`);
@@ -125,7 +125,7 @@ router.get('/uid/:uid/docx', authRequired, async (req, res) => {
       return res.status(403).json({ error: 'forbidden' });
     }
     const settings = await loadSettings();
-    const sigs = await getCommitteeSignaturesForProtocol(card.protocol_id);
+    const sigs = card.is_external ? null : await getCommitteeSignaturesForProtocol(card.protocol_id);
     const { buffer, fileName } = await buildIdCardDocx(card, settings, qrUrlForCard(req, card), sigs);
     const asciiName = `id_card_${String(card.card_number || card.card_uid).replace(/[^A-Za-z0-9_-]/g, '')}.docx`;
     const encoded = encodeURIComponent(fileName).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
@@ -156,6 +156,7 @@ router.get('/verify/:uid', async (req, res) => {
       course_title_ru: card.title_ru,
       course_title_kz: card.title_kz,
       protocol_number: card.protocol_number,
+      is_external: !!card.is_external,
       issue_date: card.issue_date,
       expiry_date: card.expiry_date
     });
@@ -182,7 +183,7 @@ router.get('/:id', authRequired, async (req, res) => {
     if (!card) return res.status(404).json({ error: 'not_found' });
 
     const settings = await loadSettings();
-    const sigs = await getCommitteeSignaturesForProtocol(card.protocol_id);
+    const sigs = card.is_external ? null : await getCommitteeSignaturesForProtocol(card.protocol_id);
     const buffer = await buildIdCardPdfBuffer(card, settings, qrUrlForCard(req, card), sigs);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="id_card_${encodeURIComponent(card.card_number || card.id)}.pdf"`);

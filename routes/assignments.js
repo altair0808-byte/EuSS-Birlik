@@ -111,10 +111,22 @@ router.get('/last-numbers', authRequired, requireRole('admin', 'superadmin'), as
   }
 });
 
+// ВНЕШНИЙ курс (courses.is_external) — обучение проводила не наша компания. Для него нет теста,
+// нашего протокола, подписей комиссии, печати и сертификата: вносится только сам факт обучения —
+// дата прохождения, срок и номер протокола внешней организации (обычным текстом, он нигде у нас
+// не фиксируется и с нашими протоколами не смешивается). Нужно для простого учёта и контроля сроков.
+async function isExternalCourse(courseId) {
+  if (courseId === undefined || courseId === null || courseId === '') return false;
+  const r = await query('SELECT is_external FROM courses WHERE id = $1', [courseId]);
+  return !!(r.rows[0] && r.rows[0].is_external);
+}
+
 // Заполняет недостающие исторические поля (дату следующего прохождения, номер
 // сертификата), когда админ вносит уже пройденное ранее (до внедрения системы)
 // обучение сотрудника, а не создаёт новое назначение теста.
-async function buildHistoricalFields(course_id, hist, userId) {
+// external=true — внешний курс: сертификата нет, поэтому наш счётчик номеров сертификатов не трогаем,
+// а результат в % остаётся пустым, если его не указали (у внешнего обучения его может не быть).
+async function buildHistoricalFields(course_id, hist, userId, external = false) {
   const cRes = await query('SELECT validity_months, no_expiry FROM courses WHERE id = $1', [course_id]);
   const validityMonths = cRes.rows[0]?.validity_months || 12;
   const noExpiry = !!cRes.rows[0]?.no_expiry;
@@ -127,12 +139,13 @@ async function buildHistoricalFields(course_id, hist, userId) {
     nextTestDate = d.toISOString();
   }
   let certNumber = hist.certificate_number;
-  if (!certNumber) certNumber = userId ? await getCertNumberForUser(userId) : await getNextCertNumber();
+  if (external) certNumber = null;
+  else if (!certNumber) certNumber = userId ? await getCertNumberForUser(userId) : await getNextCertNumber();
 
+  const hasScore = hist.score_percent !== undefined && hist.score_percent !== null && hist.score_percent !== '';
   return {
     status: 'passed',
-    score_percent: hist.score_percent !== undefined && hist.score_percent !== null && hist.score_percent !== ''
-      ? Number(hist.score_percent) : 100,
+    score_percent: hasScore ? Number(hist.score_percent) : (external ? null : 100),
     test_date: testDate,
     next_test_date: nextTestDate,
     certificate_number: certNumber
@@ -141,7 +154,15 @@ async function buildHistoricalFields(course_id, hist, userId) {
 
 // Create assignment
 router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { user_id, course_id, protocol_number, protocol_date, historical, test_date, next_test_date, certificate_number, score_percent } = req.body;
+  let { user_id, course_id, protocol_number, protocol_date, historical, test_date, next_test_date, certificate_number, score_percent } = req.body;
+  let external = false;
+  try { external = await isExternalCourse(course_id); } catch (e) { external = false; }
+  if (external) {
+    // Внешний курс: всегда «уже пройденное» обучение, дата протокола не нужна (берём дату прохождения)
+    historical = true;
+    certificate_number = undefined;
+    if (test_date) protocol_date = String(test_date).slice(0, 10);
+  }
   if (!user_id || !course_id || !protocol_number || !protocol_date) {
     return res.status(400).json({ error: 'missing_fields' });
   }
@@ -156,15 +177,17 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
       return res.status(400).json({ error: 'not_employee', message: 'Курсы можно назначать только сотрудникам' });
     }
     if (historical) {
-      const h = await buildHistoricalFields(course_id, { test_date, next_test_date, certificate_number, score_percent }, user_id);
+      const h = await buildHistoricalFields(course_id, { test_date, next_test_date, certificate_number, score_percent }, user_id, external);
       const result = await query(`
         INSERT INTO assignments (user_id, course_id, protocol_number, protocol_date, assigned_by,
           status, score_percent, test_date, next_test_date, certificate_number)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id
       `, [user_id, course_id, protocol_number, protocol_date, req.user.id,
           h.status, h.score_percent, h.test_date, h.next_test_date, h.certificate_number]);
-      try { await ensureCertificateForAssignment(result.rows[0].id); }
-      catch (e) { console.error('Не удалось создать сертификат (историческая запись)', result.rows[0].id, e.message); }
+      if (!external) {
+        try { await ensureCertificateForAssignment(result.rows[0].id); }
+        catch (e) { console.error('Не удалось создать сертификат (историческая запись)', result.rows[0].id, e.message); }
+      }
       try { await ensureIdCardForAssignment(result.rows[0].id); }
       catch (e) { console.error('Не удалось создать удостоверение (историческая запись)', result.rows[0].id, e.message); }
       return res.json({ id: result.rows[0].id });
@@ -186,7 +209,14 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
 // historical=true — внесение уже пройденного ранее обучения (старые данные сотрудников),
 // без прохождения теста в системе: сразу проставляется статус "passed".
 router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { user_ids, course_id, protocol_number, protocol_date, historical, test_date, next_test_date, score_percent } = req.body;
+  let { user_ids, course_id, protocol_number, protocol_date, historical, test_date, next_test_date, score_percent } = req.body;
+  let external = false;
+  try { external = await isExternalCourse(course_id); } catch (e) { external = false; }
+  if (external) {
+    // Внешний курс: всегда «уже пройденное» обучение, дата протокола не нужна (берём дату прохождения)
+    historical = true;
+    if (test_date) protocol_date = String(test_date).slice(0, 10);
+  }
 
   if (!Array.isArray(user_ids) || user_ids.length === 0 || !course_id || !protocol_number || !protocol_date) {
     return res.status(400).json({ error: 'missing_fields' });
@@ -221,7 +251,7 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (re
       if (historical) {
         // Каждому сотруднику отдельный номер сертификата (getNextCertNumber читает
         // максимум из БД на каждый вызов — работает корректно и в цикле).
-        const h = await buildHistoricalFields(course_id, { test_date, next_test_date, score_percent }, userId);
+        const h = await buildHistoricalFields(course_id, { test_date, next_test_date, score_percent }, userId, external);
         const result = await client.query(`
           INSERT INTO assignments (user_id, course_id, protocol_number, protocol_date, assigned_by,
             status, score_percent, test_date, next_test_date, certificate_number)
@@ -242,8 +272,10 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (re
     await client.query('COMMIT');
 
     for (const assignmentId of pendingCertAssignmentIds) {
-      try { await ensureCertificateForAssignment(assignmentId); }
-      catch (e) { console.error('Не удалось создать сертификат (массовая историческая запись)', assignmentId, e.message); }
+      if (!external) {
+        try { await ensureCertificateForAssignment(assignmentId); }
+        catch (e) { console.error('Не удалось создать сертификат (массовая историческая запись)', assignmentId, e.message); }
+      }
       try { await ensureIdCardForAssignment(assignmentId); }
       catch (e) { console.error('Не удалось создать удостоверение (массовая историческая запись)', assignmentId, e.message); }
     }
@@ -264,7 +296,7 @@ router.get('/mine', authRequired, async (req, res) => {
       SELECT a.*, c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.no_expiry, c.time_limit_minutes, c.pass_score_percent,
              c.material_pdf_path, c.video_url, c.video_path, c.description_ru, c.description_kz,
              c.material_pdf_path_ru, c.material_pdf_path_kz,
-             c.video_path_ru, c.video_path_kz, c.video_url_ru, c.video_url_kz
+             c.video_path_ru, c.video_path_kz, c.video_url_ru, c.video_url_kz, c.is_external
       FROM assignments a
       JOIN courses c ON c.id = a.course_id
       WHERE a.user_id = $1
@@ -283,7 +315,7 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), a
     const { status, user_id, course_id, object, department, q, date_from, date_to, active_only } = req.query;
     let sql = `
       SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position,
-             c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.no_expiry, c.pass_score_percent
+             c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.no_expiry, c.pass_score_percent, c.is_external
       FROM assignments a
       JOIN users u ON u.id = a.user_id
       JOIN courses c ON c.id = a.course_id
@@ -332,7 +364,7 @@ router.get('/expiring', authRequired, requireRole('admin', 'superadmin'), async 
     if (departments.length) { params.push(departments); orgSql += ` AND u.department = ANY($${params.length}::text[])`; }
     const result = await query(`
       SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position, u.login,
-             c.title_ru, c.title_kz, c.category_ru, c.category_kz
+             c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.is_external
       FROM assignments a
       JOIN users u ON u.id = a.user_id
       JOIN courses c ON c.id = a.course_id

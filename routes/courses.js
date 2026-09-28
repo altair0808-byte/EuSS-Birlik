@@ -243,7 +243,7 @@ router.get('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
 
 // Create course
 router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry, is_mandatory, card_color } = req.body;
+  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry, is_mandatory, card_color, is_external } = req.body;
   if (!title_ru || !title_kz) return res.status(400).json({ error: 'missing_title' });
 
   try {
@@ -254,15 +254,16 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
       cardColor = pickFreeColor(used);
     }
     const result = await query(`
-      INSERT INTO courses (title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, created_by, category_ru, category_kz, no_expiry, is_mandatory, card_color)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id
+      INSERT INTO courses (title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, created_by, category_ru, category_kz, no_expiry, is_mandatory, card_color, is_external)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id
     `, [
       title_ru, title_kz, description_ru || '', description_kz || '', video_url || '',
       video_url_ru || '', video_url_kz || '',
       time_limit_minutes || 20, pass_score_percent || 80, validity_months || 12, req.user.id,
       cleanCategory(category_ru), cleanCategory(category_kz), no_expiry === true || no_expiry === 'true',
       is_mandatory === true || is_mandatory === 'true',
-      cardColor
+      cardColor,
+      is_external === true || is_external === 'true'
     ]);
     res.json({ id: result.rows[0].id });
   } catch (e) {
@@ -272,9 +273,19 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
 
 // Update course
 router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry, is_mandatory, card_color } = req.body;
+  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry, is_mandatory, card_color, is_external } = req.body;
   try {
-    const prev = (await query('SELECT no_expiry FROM courses WHERE id = $1', [req.params.id])).rows[0];
+    const prev = (await query('SELECT no_expiry, is_external FROM courses WHERE id = $1', [req.params.id])).rows[0];
+    // is_external не пришёл (старый клиент) -> null -> COALESCE оставляет прежнее значение
+    const external = (is_external === undefined || is_external === null) ? null : (is_external === true || is_external === 'true');
+    // Тип курса (наш / внешний) нельзя переключать, когда по нему уже есть назначения: наши записи
+    // имеют протокол, подпись и сертификат, внешние — нет, и «на лету» их не превратить друг в друга.
+    if (prev && external !== null && external !== !!prev.is_external) {
+      const used = await query('SELECT 1 FROM assignments WHERE course_id = $1 LIMIT 1', [req.params.id]);
+      if (used.rows.length) {
+        return res.status(409).json({ error: 'external_locked', message: 'Тип курса (внешний / наш) нельзя изменить, пока по нему есть назначения или записи. Создайте отдельный курс.' });
+      }
+    }
     // no_expiry не пришёл (старый клиент) -> null -> COALESCE оставляет прежнее значение
     const noExpiry = (no_expiry === undefined || no_expiry === null) ? null : (no_expiry === true || no_expiry === 'true');
     // is_mandatory не пришёл (старый клиент) -> null -> COALESCE оставляет прежнее значение
@@ -287,7 +298,8 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
           category_ru=COALESCE($12, category_ru), category_kz=COALESCE($13, category_kz),
           no_expiry=COALESCE($14, no_expiry),
           is_mandatory=COALESCE($15, is_mandatory),
-          card_color=COALESCE($16, card_color)
+          card_color=COALESCE($16, card_color),
+          is_external=COALESCE($17, is_external)
       WHERE id=$11
     `, [
       title_ru, title_kz, description_ru, description_kz, video_url,
@@ -297,7 +309,8 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
       noExpiry,
       mandatory,
       // не пришёл/некорректный -> null -> COALESCE оставляет прежний цвет
-      normalizeCardColor(card_color)
+      normalizeCardColor(card_color),
+      external
     ]);
 
     // Переключили «бессрочный»: приводим уже сданные тесты этого курса в соответствие.

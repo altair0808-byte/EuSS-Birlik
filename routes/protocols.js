@@ -84,8 +84,12 @@ const PROTOCOL_COLS = `
 // Кто входит в протокол: назначения, привязанные к нему при сдаче теста (protocol_id), а также
 // внесённые вручную/импортом с тем же номером и датой протокола. Только сданные / несданные —
 // «ожидающие» назначения в протокол не попадают.
+// Записи по ВНЕШНИМ курсам (courses.is_external) сюда не попадают никогда: их «номер протокола» чужой,
+// и совпади он с нашим номером и датой — запись всё равно не должна смешиваться с нашими протоколами.
 const MEMBER_JOIN = `
-  a.status IN ('passed', 'failed') AND (
+  a.status IN ('passed', 'failed')
+  AND NOT EXISTS (SELECT 1 FROM courses xc WHERE xc.id = a.course_id AND xc.is_external)
+  AND (
     a.protocol_id = p.id
     OR (a.protocol_id IS NULL AND a.protocol_number = p.protocol_number
         AND LEFT(a.protocol_date, 10) = to_char(p.open_date, 'YYYY-MM-DD'))
