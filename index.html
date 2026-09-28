@@ -1332,6 +1332,10 @@ async function loadTabContent() {
             <input type="hidden" id="courseId">
             <div><label class="text-xs font-semibold text-slate-600">Название (RU)</label><input id="cTitleRu" required class="w-full border p-2 rounded text-sm"></div>
             <div><label class="text-xs font-semibold text-slate-600">Название (KZ)</label><input id="cTitleKz" required class="w-full border p-2 rounded text-sm"></div>
+            <label class="flex items-start gap-2 text-sm text-violet-900 cursor-pointer bg-violet-50 border-2 border-violet-300 rounded-lg p-3">
+              <input type="checkbox" id="cExternal" onchange="onCourseExternalToggle()" class="mt-0.5 rounded text-violet-600">
+              <span><b>🏷 Внешнее обучение</b> — обучение проводила не наша компания. Сертификат не выдаётся, только удостоверение: без теста, нашего протокола, подписи и печати — с пометкой «Обучение пройдено во внешней организации». Сотруднику вносятся только дата прохождения, срок и номер протокола внешней организации.</span>
+            </label>
             <div><label class="text-xs font-semibold text-slate-600">Описание (RU)</label><textarea id="cDescRu" rows="2" class="w-full border p-2 rounded text-sm"></textarea></div>
             <div><label class="text-xs font-semibold text-slate-600">Описание (KZ)</label><textarea id="cDescKz" rows="2" class="w-full border p-2 rounded text-sm"></textarea></div>
             <div class="border rounded-lg p-3 bg-slate-50">
@@ -1353,10 +1357,6 @@ async function loadTabContent() {
             <label class="flex items-start gap-2 text-xs text-slate-700 cursor-pointer -mt-1">
               <input type="checkbox" id="cMandatory" class="mt-0.5 rounded text-blue-600">
               <span><b>Обязательный курс для всех сотрудников</b> — сотрудники, которых добавили в систему, но ещё не прошедшие этот курс, будут отдельно показаны на карточке курса и в общей статистике на главной странице.</span>
-            </label>
-            <label class="flex items-start gap-2 text-xs text-slate-700 cursor-pointer -mt-1 bg-violet-50 border border-violet-200 rounded-lg p-2">
-              <input type="checkbox" id="cExternal" onchange="onCourseExternalToggle()" class="mt-0.5 rounded text-violet-600">
-              <span><b>Внешний курс</b> — обучение проводила не наша компания. Теста, нашего протокола, подписей и печати не будет: сотруднику вносится только удостоверение с датами прохождения и номером внешнего протокола. Этот номер нигде у нас не фиксируется и не смешивается с нашими протоколами — запись нужна для учёта и отслеживания сроков. Тип курса нельзя поменять, когда по нему уже есть записи.</span>
             </label>
             <div>
               <label class="text-xs font-semibold text-slate-600">Цвет удостоверения по этому курсу</label>
@@ -3252,7 +3252,7 @@ function courseCardHtml(c, color) {
       <div>
         <div class="flex justify-between items-start gap-2">
           <h4 class="font-bold text-slate-900 text-base">${esc(courseTitleOf(c))}</h4>
-          <span class="text-xs font-semibold px-2 py-0.5 rounded whitespace-nowrap" style="background:${color.bg};color:${color.fg}">${c.is_external ? 'Внешний | ' : c.time_limit_minutes + ' мин | ' + c.pass_score_percent + '% | '}${c.no_expiry ? '∞ бессрочно' : c.validity_months + ' мес'}</span>
+          <span class="text-xs font-semibold px-2 py-0.5 rounded whitespace-nowrap" style="background:${color.bg};color:${color.fg}">${c.is_external ? 'Внешнее обучение | ' : c.time_limit_minutes + ' мин | ' + c.pass_score_percent + '% | '}${c.no_expiry ? '∞ бессрочно' : c.validity_months + ' мес'}</span>
         </div>
         ${c.is_external
           ? '<p class="text-xs mt-2 text-violet-700 font-semibold">🏷 Внешний курс — без теста, протокола, подписи и печати; вносится только удостоверение для учёта</p>'
