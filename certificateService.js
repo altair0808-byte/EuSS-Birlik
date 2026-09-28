@@ -71,7 +71,7 @@ function computeLiveStatus(storedStatus, expiryDate) {
 async function ensureCertificateForAssignment(assignmentId) {
   const aRes = await query(
     `SELECT a.*, u.login AS user_login, u.permanent_certificate_number AS user_perm_cert,
-            c.validity_months, c.no_expiry
+            c.validity_months, c.no_expiry, c.is_external
      FROM assignments a
      JOIN users u ON u.id = a.user_id
      JOIN courses c ON c.id = a.course_id
@@ -80,6 +80,7 @@ async function ensureCertificateForAssignment(assignmentId) {
   );
   const a = aRes.rows[0];
   if (!a || a.status !== 'passed') return null;
+  if (a.is_external) return null; // внешний курс: сертификата нет, только удостоверение
 
   const certificateNumber = a.user_login || a.user_perm_cert || a.certificate_number || `A${a.id}`;
   const issueDate = toDateOnly(a.test_date) || new Date().toISOString().slice(0, 10);

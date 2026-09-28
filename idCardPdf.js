@@ -16,7 +16,7 @@ const path = require('path');
 const fs = require('fs');
 const QRCode = require('qrcode');
 const { resolveImageBuffer, resolveCleanImage } = require('./lib/imageAssets');
-const { cardPalette, fmtDate, todayKz, STATUS, resolveChairman, mix } = require('./lib/cardLayout');
+const { CARD_STAMP, cardPalette, fmtDate, todayKz, STATUS, resolveChairman, mix } = require('./lib/cardLayout');
 
 const FONT_REG = path.join(__dirname, 'assets', 'fonts', 'DejaVuSans.ttf');
 const FONT_BOLD = path.join(__dirname, 'assets', 'fonts', 'DejaVuSans-Bold.ttf');
@@ -32,13 +32,15 @@ const FAINT = '#7C8A9C';    // мелкий текст
 async function buildIdCardPdfBuffer(card, settings, verifyUrl, committeeSignatures) {
   const s = settings || {};
   const pal = cardPalette(card.card_color);
-  const chairman = resolveChairman(s, committeeSignatures); // бросает protocol_not_signed
+  // Внешний курс (courses.is_external): без протокола, подписи и печати — только данные обучения.
+  const external = !!card.is_external;
+  const chairman = external ? { name: '', signature_data: null } : resolveChairman(s, committeeSignatures); // бросает protocol_not_signed
   const st = STATUS[card.status] || STATUS.VALID;
 
   const [logoBuf, stampBuf, sigBuf, qrBuf] = await Promise.all([
     resolveImageBuffer(s.logo_data || s.logo_path),
-    resolveCleanImage(s.stamp_data || s.stamp_path),
-    resolveCleanImage(chairman.signature_data),
+    external ? null : resolveCleanImage(s.stamp_data || s.stamp_path),
+    external ? null : resolveCleanImage(chairman.signature_data),
     verifyUrl ? QRCode.toBuffer(verifyUrl, { type: 'png', margin: 0, width: 360, errorCorrectionLevel: 'M', color: { dark: pal.dark, light: '#FFFFFF' } }).catch(() => null) : null
   ]);
 
@@ -186,6 +188,14 @@ async function buildIdCardPdfBuffer(card, settings, verifyUrl, committeeSignatur
       text(st.pill, pcx, 597, { size: 13, bold: true, color: st.fg, align: 'center', maxW: 170 });
 
       // ---------- Подпись председателя и печать ----------
+      if (external) {
+        // ВНЕШНИЙ курс: обучение проходило не у нас — ни подписи председателя, ни печати организации нет.
+        text('Обучение пройдено во внешней организации', 95, 704, { size: 14, bold: true, color: pal.dark, maxW: 480 });
+        text('Оқыту сыртқы ұйымда өтті', 95, 726, { size: 12, color: MUTED, maxW: 480 });
+        text('Training completed at an external organization', 95, 746, { size: 12, color: MUTED, maxW: 480 });
+        text('Внесено для учёта. № протокола — внешний, в нашем реестре протоколов не ведётся.', 95, 776, { size: 11, color: FAINT, maxW: 500 });
+        text('Подпись и печать организации не проставляются.', 95, 793, { size: 11, color: FAINT, maxW: 500 });
+      } else {
       if (sigBuf) {
         try { doc.image(sigBuf, X(105), X(690), { fit: [X(210), X(72)], align: 'center', valign: 'bottom' }); } catch (e) { console.error('Ошибка вставки подписи:', e.message); }
       }
@@ -196,9 +206,10 @@ async function buildIdCardPdfBuffer(card, settings, verifyUrl, committeeSignatur
       if (stampBuf) {
         try {
           doc.save(); doc.opacity(0.92);
-          doc.image(stampBuf, X(450), X(692), { fit: [X(146), X(146)], align: 'center', valign: 'center' });
+          doc.image(stampBuf, X(CARD_STAMP.x), X(CARD_STAMP.y), { fit: [X(CARD_STAMP.size), X(CARD_STAMP.size)], align: 'center', valign: 'center' });
           doc.restore();
         } catch (e) { console.error('Ошибка вставки печати:', e.message); }
+      }
       }
 
       // ---------- Середина: пояснение про QR ----------

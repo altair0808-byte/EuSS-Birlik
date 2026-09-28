@@ -21,7 +21,7 @@
 const JSZip = require('jszip');
 const QRCode = require('qrcode');
 const { resolveImageBuffer, resolveCleanImage } = require('./lib/imageAssets');
-const { cardPalette, fmtDate, todayKz, STATUS, resolveChairman, mix } = require('./lib/cardLayout');
+const { CARD_STAMP, cardPalette, fmtDate, todayKz, STATUS, resolveChairman, mix } = require('./lib/cardLayout');
 const { measureSansPt } = require('./lib/textWidthSans');
 
 let sharp = null;
@@ -206,15 +206,17 @@ function createCanvas() {
 async function buildIdCardDocx(card, settings, verifyUrl, committeeSignatures) {
   const s = settings || {};
   const pal = cardPalette(card.card_color);
-  const chairman = resolveChairman(s, committeeSignatures);
+  // Внешний курс (courses.is_external): без протокола, подписи и печати — только данные обучения.
+  const external = !!card.is_external;
+  const chairman = external ? { name: '', signature_data: null } : resolveChairman(s, committeeSignatures);
   const st = STATUS[card.status] || STATUS.VALID;
   const c = createCanvas();
   const { shape, line, polyline, text } = c;
 
   const [logoRaw, stampRaw, sigRaw, qrRaw] = await Promise.all([
     resolveImageBuffer(s.logo_data || s.logo_path),
-    resolveCleanImage(s.stamp_data || s.stamp_path),
-    resolveCleanImage(chairman.signature_data),
+    external ? null : resolveCleanImage(s.stamp_data || s.stamp_path),
+    external ? null : resolveCleanImage(chairman.signature_data),
     verifyUrl
       ? QRCode.toBuffer(verifyUrl, { type: 'png', margin: 0, width: 360, errorCorrectionLevel: 'M', color: { dark: pal.dark, light: '#FFFFFF' } }).catch(() => null)
       : null
@@ -321,12 +323,21 @@ async function buildIdCardDocx(card, settings, verifyUrl, committeeSignatures) {
   text(st.pill, pcx, 597, { size: 13, bold: true, color: st.fg, align: 'center', maxW: 170 });
 
   // ---------- Подпись председателя и печать ----------
+  if (external) {
+    // ВНЕШНИЙ курс: обучение проходило не у нас — ни подписи председателя, ни печати организации нет.
+    text('Обучение пройдено во внешней организации', 95, 704, { size: 14, bold: true, color: pal.dark, maxW: 480 });
+    text('Оқыту сыртқы ұйымда өтті', 95, 726, { size: 12, color: MUTED, maxW: 480 });
+    text('Training completed at an external organization', 95, 746, { size: 12, color: MUTED, maxW: 480 });
+    text('Внесено для учёта. № протокола — внешний, в нашем реестре протоколов не ведётся.', 95, 776, { size: 11, color: FAINT, maxW: 500 });
+    text('Подпись и печать организации не проставляются.', 95, 793, { size: 11, color: FAINT, maxW: 500 });
+  } else {
   c.image(sig, 105, 690, 210, 72, { align: 'center', valign: 'bottom', name: 'Подпись председателя' });
   line(95, 766, 415, 766, '#8A97A8', 1);
   text('Комиссия төрағасы / Председатель комиссии / Committee Chairman', 95, 772, { size: 11, color: MUTED, maxW: 350 });
   text(chairman.name || '—', 95, 791, { size: 15, bold: true, color: INK, maxW: 320 });
   text('Председатель комиссии', 95, 812, { size: 12, color: MUTED, maxW: 320 });
-  c.image(stamp, 450, 692, 146, 146, { align: 'center', valign: 'center', alpha: 0.92, name: 'Печать' });
+  c.image(stamp, CARD_STAMP.x, CARD_STAMP.y, CARD_STAMP.size, CARD_STAMP.size, { align: 'center', valign: 'center', alpha: 0.92, name: 'Печать' });
+  }
 
   // ---------- Середина: пояснение про QR ----------
   text('Актуальный статус — по QR-коду', 608, 717, { size: 11.5, bold: true, color: pal.dark, maxW: 215 });

@@ -149,6 +149,7 @@
         + '<div><div class="lb">№ протокола<i>Хаттама № / Protocol</i></div><div class="vl">' + esc(c.protocol_number || '—') + '</div></div>'
         + '<div><div class="lb">Действителен до<i>Жарамды / Valid until</i></div><div class="vl">'
         + (c.valid_until ? fmtDate(c.valid_until) : 'бессрочно / мерзімсіз') + '</div></div>'
+        + (c.external ? '<div class="vl" style="margin-top:8px;font-size:12px;color:#6d28d9;font-weight:600">Внешнее обучение / Сыртқы оқыту / External training</div>' : '')
         + '</div></div>';
     });
 

@@ -124,7 +124,7 @@ async function getIdCardFullByUid(uid) {
     `SELECT card.*,
             u.last_name, u.first_name, u.position AS user_position, u.department, u.object,
             u.iin, u.login AS user_login, u.public_uid,
-            c.title_ru, c.title_kz, c.card_color,
+            c.title_ru, c.title_kz, c.card_color, c.is_external,
             p.protocol_number, p.open_date AS protocol_open_date,
             a.protocol_number AS assignment_protocol_number, a.protocol_date AS assignment_protocol_date,
             a.score_percent, a.test_date
@@ -154,7 +154,7 @@ async function listMyIdCards(userId) {
   const res = await query(
     `SELECT card.id, card.card_uid, card.card_number, card.status,
             card.issue_date, card.expiry_date, card.assignment_id,
-            c.title_ru, c.title_kz, c.card_color, a.score_percent, a.test_date,
+            c.title_ru, c.title_kz, c.card_color, c.is_external, a.score_percent, a.test_date,
             COALESCE(p.protocol_number, a.protocol_number) AS protocol_number
      FROM id_cards card
      LEFT JOIN courses c ON c.id = card.course_id

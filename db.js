@@ -468,6 +468,12 @@ async function initDb() {
 
   // Цвет удостоверения по виду обучения: у каждого курса свой (см. lib/cardColors.js).
   await pool.query(`ALTER TABLE courses ADD COLUMN IF NOT EXISTS card_color TEXT;`);
+
+  // ВНЕШНИЙ курс: обучение проводила НЕ наша компания. По такому курсу нет теста, нашего протокола,
+  // подписей комиссии, печати и сертификата — только удостоверение с датами и номером внешнего
+  // протокола (assignments.protocol_number хранит его как обычный текст, в таблицу protocols он
+  // не попадает и с нашими протоколами не смешивается). Нужен для учёта и отслеживания сроков.
+  await pool.query(`ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_external BOOLEAN NOT NULL DEFAULT FALSE;`);
   // Разовая раздача цветов существующим курсам — по порядку создания, разные, пока хватает палитры.
   try {
     const noColor = await pool.query('SELECT id FROM courses WHERE card_color IS NULL ORDER BY id');

@@ -27,7 +27,7 @@ async function loadLatestCards(userId) {
   const res = await query(
     `SELECT card.id, card.card_uid, card.card_number, card.status, card.issue_date, card.expiry_date,
             card.assignment_id, card.course_id,
-            c.title_ru, c.title_kz, c.card_color,
+            c.title_ru, c.title_kz, c.card_color, c.is_external,
             a.score_percent, a.test_date,
             COALESCE(p.protocol_number, a.protocol_number) AS protocol_number
      FROM id_cards card
@@ -112,6 +112,7 @@ function toPublicPayload(person, employer) {
       title_ru: c.title_ru || '',
       title_kz: c.title_kz || '',
       color: c.card_color || null,
+      external: !!c.is_external, // внешний курс: без нашего протокола/подписи/печати (для пометки на странице)
       test_date: toDateOnly(c.test_date) || toDateOnly(c.issue_date),
       score_percent: c.score_percent == null ? null : c.score_percent,
       protocol_number: c.protocol_number ? String(c.protocol_number) : '',
