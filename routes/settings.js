@@ -27,6 +27,8 @@ async function uploadToStorage(folder, file) {
   return url;
 }
 
+const TAGLINE_MAX = 120;
+
 router.get('/', authRequired, async (req, res) => {
   try {
     const result = await query('SELECT * FROM settings WHERE id = 1');
@@ -45,7 +47,7 @@ router.get('/public', async (req, res) => {
   }
 });
 
-// Настройки комиссии и нумерации сертификатов (нумерация протоколов живёт во вкладке «Протоколы»). Комиссия — два председателя (без "членов
+// Настройки комиссии, нумерации сертификатов и слогана на удостоверении (нумерация протоколов живёт во вкладке «Протоколы»). Комиссия — два председателя (без "членов
 // комиссии"): у каждого своё ФИО, должность и подпись. На сертификате
 // используется только ОДИН из них — тот, что выбран переключателем
 // active_chairman (1 или 2) — его данные и печать; второй не показывается.
@@ -55,8 +57,15 @@ router.put('/', authRequired, requireRole('superadmin'), async (req, res) => {
     chairman1_name, chairman1_position,
     chairman2_name, chairman2_position,
     active_chairman,
-    certificate_prefix, certificate_digits, certificate_next_number
+    certificate_prefix, certificate_digits, certificate_next_number,
+    tagline_kz, tagline_ru, tagline_en
   } = req.body;
+
+  // Слоган в шапке удостоверения (KZ / RU / EN). Правило простое:
+  //   поле не передано (undefined / null) — значение в базе не трогаем;
+  //   передана пустая строка — слоган этого языка очищен, на бланке строка не печатается;
+  //   иначе — обрезаем пробелы и ограничиваем длину (строка на бланке одна, ~420 px).
+  const cleanTagline = (v) => (v === undefined || v === null ? null : String(v).replace(/\s+/g, ' ').trim().slice(0, TAGLINE_MAX));
 
   try {
     const actChair = active_chairman !== undefined ? (parseInt(active_chairman, 10) === 2 ? 2 : 1) : null;
@@ -70,7 +79,10 @@ router.put('/', authRequired, requireRole('superadmin'), async (req, res) => {
         active_chairman = COALESCE($6, active_chairman),
         certificate_prefix = COALESCE($7, certificate_prefix),
         certificate_digits = COALESCE($8, certificate_digits),
-        certificate_next_number = COALESCE($9, certificate_next_number)
+        certificate_next_number = COALESCE($9, certificate_next_number),
+        tagline_kz = COALESCE($10, tagline_kz),
+        tagline_ru = COALESCE($11, tagline_ru),
+        tagline_en = COALESCE($12, tagline_en)
       WHERE id = 1
       RETURNING *`,
       [
@@ -80,7 +92,10 @@ router.put('/', authRequired, requireRole('superadmin'), async (req, res) => {
         actChair,
         certificate_prefix,
         certificate_digits !== undefined ? Number(certificate_digits) : null,
-        certificate_next_number !== undefined ? Number(certificate_next_number) : null
+        certificate_next_number !== undefined ? Number(certificate_next_number) : null,
+        cleanTagline(tagline_kz),
+        cleanTagline(tagline_ru),
+        cleanTagline(tagline_en)
       ]
     );
     res.json(result.rows[0]);

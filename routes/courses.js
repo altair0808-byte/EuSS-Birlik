@@ -6,6 +6,7 @@ const { authRequired, requireRole } = require('./auth');
 const { makeMemoryUploader } = require('../upload');
 const supabaseStorage = require('../supabaseStorage');
 const { splitMulti } = require('../lib/multiFilter');
+const { normalizeCardColor, pickFreeColor } = require('../lib/cardColors');
 
 // Материалы курса — презентация или PDF-методичка. Загружаются в память и сразу
 // отправляются в Supabase Storage (п.2 запроса) — файл не хранится на локальном
@@ -242,19 +243,26 @@ router.get('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
 
 // Create course
 router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry, is_mandatory } = req.body;
+  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry, is_mandatory, card_color } = req.body;
   if (!title_ru || !title_kz) return res.status(400).json({ error: 'missing_title' });
 
   try {
+    // Цвет не выбран -> первый свободный из палитры, чтобы у нового вида обучения был свой цвет
+    let cardColor = normalizeCardColor(card_color);
+    if (!cardColor) {
+      const used = (await query('SELECT card_color FROM courses WHERE card_color IS NOT NULL')).rows.map((r) => r.card_color);
+      cardColor = pickFreeColor(used);
+    }
     const result = await query(`
-      INSERT INTO courses (title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, created_by, category_ru, category_kz, no_expiry, is_mandatory)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id
+      INSERT INTO courses (title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, created_by, category_ru, category_kz, no_expiry, is_mandatory, card_color)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id
     `, [
       title_ru, title_kz, description_ru || '', description_kz || '', video_url || '',
       video_url_ru || '', video_url_kz || '',
       time_limit_minutes || 20, pass_score_percent || 80, validity_months || 12, req.user.id,
       cleanCategory(category_ru), cleanCategory(category_kz), no_expiry === true || no_expiry === 'true',
-      is_mandatory === true || is_mandatory === 'true'
+      is_mandatory === true || is_mandatory === 'true',
+      cardColor
     ]);
     res.json({ id: result.rows[0].id });
   } catch (e) {
@@ -264,7 +272,7 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
 
 // Update course
 router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry, is_mandatory } = req.body;
+  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry, is_mandatory, card_color } = req.body;
   try {
     const prev = (await query('SELECT no_expiry FROM courses WHERE id = $1', [req.params.id])).rows[0];
     // no_expiry не пришёл (старый клиент) -> null -> COALESCE оставляет прежнее значение
@@ -278,7 +286,8 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
           video_url_ru=$6, video_url_kz=$7, time_limit_minutes=$8, pass_score_percent=$9, validity_months=$10,
           category_ru=COALESCE($12, category_ru), category_kz=COALESCE($13, category_kz),
           no_expiry=COALESCE($14, no_expiry),
-          is_mandatory=COALESCE($15, is_mandatory)
+          is_mandatory=COALESCE($15, is_mandatory),
+          card_color=COALESCE($16, card_color)
       WHERE id=$11
     `, [
       title_ru, title_kz, description_ru, description_kz, video_url,
@@ -286,7 +295,9 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
       category_ru === undefined ? null : cleanCategory(category_ru),
       category_kz === undefined ? null : cleanCategory(category_kz),
       noExpiry,
-      mandatory
+      mandatory,
+      // не пришёл/некорректный -> null -> COALESCE оставляет прежний цвет
+      normalizeCardColor(card_color)
     ]);
 
     // Переключили «бессрочный»: приводим уже сданные тесты этого курса в соответствие.
