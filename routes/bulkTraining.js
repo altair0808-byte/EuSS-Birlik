@@ -353,7 +353,7 @@ async function buildPlan(buffer) {
       const cur = user[f] == null ? '' : String(user[f]);
       if (val !== cur) {
         emp.changes[f] = { from: cur, to: val };
-        if (f === 'department' && knownDeps.size && !knownDeps.has(val)) plan.warnings.push(`Строка ${rowNum}: отдела «${val}» нет в справочнике (Настройки → Отделы и должности).`);
+        if (f === 'department' && knownDeps.size && !knownDeps.has(val)) plan.warnings.push(`Строка ${rowNum}: отдела «${val}» нет в справочнике (Настройки → Объекты, отделы и должности).`);
         if (f === 'position' && knownPos.size && !knownPos.has(val)) plan.warnings.push(`Строка ${rowNum}: должности «${val}» нет в справочнике.`);
       } else delete emp.changes[f];
     }

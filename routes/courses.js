@@ -84,6 +84,14 @@ function orgParams(req) {
   return [splitMulti(req.query.object), splitMulti(req.query.department)];
 }
 
+// Для кого обязателен курс: 'all' (все) | 'employee' (сотрудники) | 'manager' (руководители)
+const MANDATORY_FOR = ['all', 'employee', 'manager'];
+function normalizeMandatoryFor(v) {
+  if (v === undefined || v === null || v === '') return null;
+  const s = String(v).trim().toLowerCase();
+  return MANDATORY_FOR.includes(s) ? s : null;
+}
+
 router.get('/', authRequired, async (req, res) => {
   try {
     // untrained_count считается только для обязательных курсов (is_mandatory) —
@@ -95,6 +103,7 @@ router.get('/', authRequired, async (req, res) => {
         CASE WHEN c.is_mandatory THEN (
           SELECT COUNT(*)::int FROM users u
           WHERE u.role = 'employee' AND u.active = 1 AND ${ORG_SQL}
+            AND (c.mandatory_for = 'all' OR c.mandatory_for = COALESCE(u.staff_category, 'employee'))
             AND NOT EXISTS (
               SELECT 1 FROM assignments a
               WHERE a.user_id = u.id AND a.course_id = c.id AND a.status = 'passed'
@@ -114,7 +123,7 @@ router.get('/', authRequired, async (req, res) => {
 router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
     const coursesRes = await query(`
-      SELECT c.id, c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.is_mandatory,
+      SELECT c.id, c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.is_mandatory, c.mandatory_for,
         (SELECT COUNT(*)::int FROM users u WHERE u.role = 'employee' AND u.active = 1 AND ${ORG_SQL}) AS total_employees,
         -- «Прошли обучение» — только ДЕЙСТВУЮЩЕЕ обучение по этому курсу: берём актуальную
         -- (последнюю) запись 'passed' по каждому сотруднику и убираем из неё тех, у кого срок
@@ -146,6 +155,7 @@ router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), a
         CASE WHEN c.is_mandatory THEN (
           SELECT COUNT(*)::int FROM users u
           WHERE u.role = 'employee' AND u.active = 1 AND ${ORG_SQL}
+            AND (c.mandatory_for = 'all' OR c.mandatory_for = COALESCE(u.staff_category, 'employee'))
             AND NOT EXISTS (
               SELECT 1 FROM assignments a WHERE a.user_id = u.id AND a.course_id = c.id AND a.status = 'passed'
             )
@@ -163,6 +173,7 @@ router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), a
              AND EXISTS (
                SELECT 1 FROM courses c
                WHERE c.is_mandatory = true
+                 AND (c.mandatory_for = 'all' OR c.mandatory_for = COALESCE(u.staff_category, 'employee'))
                  AND NOT EXISTS (
                    SELECT 1 FROM assignments a
                    WHERE a.user_id = u.id AND a.course_id = c.id AND a.status = 'passed'
@@ -277,6 +288,8 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
       kind !== 'internal',
       kind
     ]);
+    const mf = normalizeMandatoryFor(req.body.mandatory_for);
+    if (mf) await query('UPDATE courses SET mandatory_for = $1 WHERE id = $2', [mf, result.rows[0].id]);
     res.json({ id: result.rows[0].id });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
@@ -342,6 +355,8 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
         WHERE course_id = $1 AND status = 'passed' AND test_date IS NOT NULL AND next_test_date IS NULL
       `, [req.params.id, months]);
     }
+    const mfu = normalizeMandatoryFor(req.body.mandatory_for);
+    if (mfu) await query('UPDATE courses SET mandatory_for = $1 WHERE id = $2', [mfu, req.params.id]);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
@@ -436,6 +451,8 @@ router.get('/:id/untrained', authRequired, requireRole('admin', 'superadmin'), a
         ) AS has_assignment
       FROM users u
       WHERE u.role = 'employee' AND u.active = 1
+        AND EXISTS (SELECT 1 FROM courses mc WHERE mc.id = $1
+                    AND (mc.mandatory_for = 'all' OR mc.mandatory_for = COALESCE(u.staff_category, 'employee')))
         AND (cardinality($2::text[]) = 0 OR u.object = ANY($2::text[]))
         AND (cardinality($3::text[]) = 0 OR u.department = ANY($3::text[]))
         AND NOT EXISTS (

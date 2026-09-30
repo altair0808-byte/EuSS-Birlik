@@ -127,41 +127,98 @@ function normalizePositions(arr) {
   return [...seen.values()].sort((a, b) => a.ru.localeCompare(b.ru, 'ru'));
 }
 
+// Структура «Объект → Отдел → Должность».
+//  - objects    — список объектов (массив строк);
+//  - positions  — общий справочник должностей [{ru, kz}] (как и раньше);
+//  - structure  — [{ object, departments: [{ name, positions: [<ru>, ...] }] }]:
+//                 какие отделы есть в объекте и какие должности закреплены за отделом;
+//  - departments — плоский список всех отделов (производный, для старых мест сайта:
+//                 фильтры, зоны ассистентов, предупреждения при импорте из Excel).
+// Порядок отделов/должностей внутри структуры сохраняется как задан.
+function cleanNames(arr) {
+  if (!Array.isArray(arr)) return undefined;
+  return [...new Set(arr.map(v => String(v || '').trim()).filter(Boolean))];
+}
+
+function normalizeStructure(raw, objects, positionsCatalog) {
+  if (!Array.isArray(raw)) return undefined;
+  const known = new Set((positionsCatalog || []).map(p => p.ru));
+  const byObject = new Map();
+  raw.forEach(o => {
+    const name = String((o && o.object) || '').trim();
+    if (!name || !objects.includes(name)) return; // отделы удалённого объекта не храним
+    const deps = byObject.get(name) || new Map();
+    (Array.isArray(o.departments) ? o.departments : []).forEach(d => {
+      const dn = String((d && d.name) || '').trim();
+      if (!dn) return;
+      const list = deps.get(dn) || [];
+      (Array.isArray(d.positions) ? d.positions : []).forEach(p => {
+        const ru = String((typeof p === 'string' ? p : p && p.ru) || '').trim();
+        if (ru && known.has(ru) && !list.includes(ru)) list.push(ru);
+      });
+      deps.set(dn, list);
+    });
+    byObject.set(name, deps);
+  });
+  return objects.map(obj => ({
+    object: obj,
+    departments: [...(byObject.get(obj) || new Map()).entries()].map(([name, positions]) => ({ name, positions }))
+  }));
+}
+
+function allDepartmentsOf(structure) {
+  return [...new Set((structure || []).flatMap(o => o.departments.map(d => d.name)))]
+    .sort((a, b) => a.localeCompare(b, 'ru'));
+}
+
+function dictionariesPayload(row) {
+  const structure = Array.isArray(row.org_structure) ? row.org_structure : [];
+  return {
+    objects: Array.isArray(row.objects_list) ? row.objects_list : [],
+    departments: allDepartmentsOf(structure).length ? allDepartmentsOf(structure) : (Array.isArray(row.departments_list) ? row.departments_list : []),
+    positions: normalizePositions(row.positions_list) || [],
+    structure
+  };
+}
+
+const DICT_COLUMNS = 'departments_list, positions_list, objects_list, org_structure';
+
 router.get('/dictionaries', authRequired, async (req, res) => {
   try {
-    const result = await query('SELECT departments_list, positions_list FROM settings WHERE id = 1');
-    const row = result.rows[0] || {};
-    res.json({
-      departments: Array.isArray(row.departments_list) ? row.departments_list : [],
-      positions: normalizePositions(row.positions_list) || []
-    });
+    const result = await query(`SELECT ${DICT_COLUMNS} FROM settings WHERE id = 1`);
+    res.json(dictionariesPayload(result.rows[0] || {}));
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }
 });
 
-// Сохраняет справочники целиком (весь список сразу — добавление/удаление значений
-// происходит на фронтенде, сюда отправляется итоговый список). Значения очищаются
-// от пустых строк и дублей и сортируются по алфавиту.
-// ТЗ §9: весь роутер settings — только суперадмин (справочники Отдел/Должность входят
-// в «Настройки» матрицы прав, admin больше не может их редактировать).
+// Сохраняет справочники целиком: фронтенд присылает итоговое состояние (objects, positions,
+// structure). Чего в теле нет — остаётся как в базе. Порядок: сначала общий справочник
+// должностей, затем объекты, затем структура — в ней остаются только существующие объекты и
+// должности из справочника (удалил должность из справочника — она пропадает и из отделов).
+// Список отделов пересчитывается из структуры.
+// ТЗ §9: весь роутер settings — только суперадмин.
 router.put('/dictionaries', authRequired, requireRole('superadmin'), async (req, res) => {
-  const cleanDepartments = arr => Array.isArray(arr)
-    ? [...new Set(arr.map(v => String(v || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru'))
-    : undefined;
-  const departments = cleanDepartments(req.body.departments);
-  const positions = normalizePositions(req.body.positions);
   try {
+    const cur = (await query(`SELECT ${DICT_COLUMNS} FROM settings WHERE id = 1`)).rows[0] || {};
+    const positions = normalizePositions(req.body.positions) || normalizePositions(cur.positions_list) || [];
+    const objects = cleanNames(req.body.objects) || (Array.isArray(cur.objects_list) ? cur.objects_list : []);
+    const structure = normalizeStructure(
+      req.body.structure !== undefined ? req.body.structure : cur.org_structure,
+      objects, positions
+    ) || [];
+    const departments = allDepartmentsOf(structure);
     const result = await query(
       `UPDATE settings SET
-        departments_list = COALESCE($1::jsonb, departments_list),
-        positions_list = COALESCE($2::jsonb, positions_list)
+        objects_list = $1::jsonb,
+        positions_list = $2::jsonb,
+        org_structure = $3::jsonb,
+        departments_list = $4::jsonb
       WHERE id = 1
-      RETURNING departments_list, positions_list`,
-      [departments ? JSON.stringify(departments) : null, positions ? JSON.stringify(positions) : null]
+      RETURNING ${DICT_COLUMNS}`,
+      [JSON.stringify(objects), JSON.stringify(positions), JSON.stringify(structure), JSON.stringify(departments)]
     );
-    const row = result.rows[0] || {};
-    res.json({ departments: row.departments_list || [], positions: normalizePositions(row.positions_list) || [] });
+    res.json(dictionariesPayload(result.rows[0] || {}));
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }

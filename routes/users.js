@@ -6,7 +6,7 @@ const XLSX = require('xlsx'); // для ЧТЕНИЯ загружаемых фа
                                // к файлам, созданным не Microsoft Excel (LibreOffice, Google
                                // Таблицы, openpyxl/Python-выгрузки из 1С и т.п.). Бланк для
                                // скачивания по-прежнему генерируется через ExcelJS ниже.
-const { query, pool } = require('../db');
+const { query, pool, restoreExpiredLeaves } = require('../db');
 const { authRequired, requireRole } = require('./auth');
 const { makeUploader } = require('../upload');
 const { buildHistoricalFields } = require('./assignments');
@@ -29,6 +29,24 @@ async function findDuplicateEmployee(lastName, firstName, excludeId) {
   sql += ' LIMIT 1';
   const res = await query(sql, params);
   return res.rows[0] || null;
+}
+
+
+// Категория сотрудника: обычный сотрудник или руководитель
+const STAFF_CATEGORIES = ['employee', 'manager'];
+function normalizeStaffCategory(v) {
+  if (v === undefined || v === null || v === '') return undefined;
+  const s = String(v).trim().toLowerCase();
+  if (!STAFF_CATEGORIES.includes(s)) throw new Error('invalid_staff_category');
+  return s;
+}
+// Дата YYYY-MM-DD (пустое значение -> null, некорректное -> ошибка)
+function normalizeDateOnly(v) {
+  if (v === undefined) return undefined;
+  if (v === null || String(v).trim() === '') return null;
+  const s = String(v).trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || isNaN(new Date(s + 'T00:00:00Z').getTime())) throw new Error('invalid_date');
+  return s;
 }
 
 const upload = makeUploader('imports');
@@ -58,8 +76,12 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), a
     // мульти-выбор фильтров) — если передан, имеет приоритет над ?status.
     const statusesParam = splitMulti(req.query.statuses);
     const statusFilter = req.query.status === 'archive' ? 'archive' : (req.query.status === 'all' ? 'all' : 'active');
+    await restoreExpiredLeaves();
     let sql = `SELECT id, last_name, first_name, object, department, position, login, role, active,
-                      employment_status, status_date, created_at, permanent_certificate_number, tco_badge,
+                      employment_status, to_char(status_date, 'YYYY-MM-DD') AS status_date,
+                      to_char(status_date_end, 'YYYY-MM-DD') AS status_date_end,
+                      staff_category, to_char(hire_date, 'YYYY-MM-DD') AS hire_date,
+                      created_at, permanent_certificate_number, tco_badge,
                       committee_role, iin, assistant_objects, assistant_departments
                FROM users WHERE role = ANY($1::text[])`;
     const params = [roles];
@@ -405,12 +427,31 @@ router.get('/meta/objects', authRequired, requireRole('admin', 'superadmin'), as
   }
 });
 
+// Свои данные о работе в компании (для дашборда сотрудника): дата начала работы и категория.
+// Должен быть раньше '/:id', иначе 'me' будет принят за id.
+router.get('/me/work', authRequired, async (req, res) => {
+  try {
+    const r = await query(
+      `SELECT to_char(hire_date, 'YYYY-MM-DD') AS hire_date, staff_category FROM users WHERE id = $1`,
+      [req.user.id]
+    );
+    const row = r.rows[0] || {};
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ hire_date: row.hire_date || null, staff_category: row.staff_category || 'employee' });
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
 // Get single user (профиль сотрудника) — должен быть после /meta/objects, чтобы не перехватывать его
 router.get('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   try {
     const result = await query(
       `SELECT id, last_name, first_name, object, department, position, login, role, active,
-              employment_status, status_date, created_at, permanent_certificate_number, tco_badge,
+              employment_status, to_char(status_date, 'YYYY-MM-DD') AS status_date,
+              to_char(status_date_end, 'YYYY-MM-DD') AS status_date_end,
+              staff_category, to_char(hire_date, 'YYYY-MM-DD') AS hire_date,
+              created_at, permanent_certificate_number, tco_badge,
               committee_role, iin, public_uid, assistant_objects, assistant_departments
        FROM users WHERE id = $1 AND role != 'superadmin'`,
       [req.params.id]
@@ -434,32 +475,47 @@ router.get('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
 const EMPLOYMENT_STATUSES = ['active', 'fired', 'maternity'];
 router.patch('/:id/employment-status', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   const id = Number(req.params.id);
-  const { employment_status, status_date } = req.body;
+  const { employment_status } = req.body;
   if (!EMPLOYMENT_STATUSES.includes(employment_status)) {
     return res.status(400).json({ error: 'invalid_status', message: 'Недопустимый статус' });
+  }
+  let startDate, endDate;
+  try {
+    startDate = normalizeDateOnly(req.body.status_date);
+    endDate = normalizeDateOnly(req.body.status_date_end);
+  } catch (e) {
+    return res.status(400).json({ error: 'invalid_date', message: 'Некорректная дата (нужен формат ГГГГ-ММ-ДД)' });
+  }
+  // Отпуск: обязательно указываем период «с — по»
+  if (employment_status === 'maternity') {
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'leave_dates_required', message: 'Укажите даты отпуска: с какого и по какое число' });
+    }
+    if (endDate < startDate) {
+      return res.status(400).json({ error: 'invalid_date_range', message: 'Дата окончания отпуска раньше даты начала' });
+    }
   }
   try {
     const targetRes = await query('SELECT * FROM users WHERE id = $1', [id]);
     const target = targetRes.rows[0];
     if (!target) return res.status(404).json({ error: 'not_found' });
     if (target.role !== 'employee') {
-      return res.status(400).json({ error: 'not_employee', message: 'Статус «уволен/в декрете» применим только к сотрудникам' });
+      return res.status(400).json({ error: 'not_employee', message: 'Статус «уволен / в отпуске» применим только к сотрудникам и руководителям' });
     }
-    if (req.user.role === 'admin' && target.role !== 'employee') {
-      return res.status(403).json({ error: 'forbidden' });
-    }
-    // Уволен / в декрете — сотрудник больше не может войти в систему (как обычная деактивация),
+    // Уволен / в отпуске — сотрудник больше не может войти в систему (как обычная деактивация),
     // сразу пропадает из общего списка/статистики и появляется во вкладке «Архив».
-    // Возврат в штат снова включает вход и статистику.
+    // Возврат в штат снова включает вход и статистику. Из отпуска сотрудник возвращается
+    // автоматически после даты окончания (см. restoreExpiredLeaves в db.js).
     const active = employment_status === 'active' ? 1 : 0;
-    const dateVal = status_date ? String(status_date).trim() || null : null;
+    const dateVal = employment_status === 'active' ? null : startDate;
+    const endVal = employment_status === 'maternity' ? endDate : null;
     await query(
-      `UPDATE users SET employment_status = $1, status_date = $2, active = $3 WHERE id = $4`,
-      [employment_status, employment_status === 'active' ? null : dateVal, active, id]
+      `UPDATE users SET employment_status = $1, status_date = $2, status_date_end = $3, active = $4 WHERE id = $5`,
+      [employment_status, dateVal, endVal, active, id]
     );
     await logAction(req, 'employment_status_changed', {
       entityType: 'user', entityId: id, entityName: fullName(target),
-      details: { status: employment_status, date: employment_status === 'active' ? null : dateVal }
+      details: { status: employment_status, date: dateVal, date_end: endVal }
     });
     res.json({ ok: true });
   } catch (e) {
@@ -565,6 +621,13 @@ router.post('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), 
     }
   }
   const { last_name, first_name, object, department, position, login, password, role, permanent_certificate_number, tco_badge, committee_role, iin, assistant_objects, assistant_departments } = req.body;
+  let staffCategoryVal, hireDateVal;
+  try {
+    staffCategoryVal = normalizeStaffCategory(req.body.staff_category) || 'employee';
+    hireDateVal = normalizeDateOnly(req.body.hire_date) ?? null;
+  } catch (e) {
+    return res.status(400).json({ error: e.message === 'invalid_date' ? 'invalid_date' : 'invalid_staff_category', message: e.message === 'invalid_date' ? 'Некорректная дата начала работы' : 'Недопустимая категория сотрудника' });
+  }
   const targetRole = role || 'employee';
   const loginVal = login && String(login).trim() ? String(login).trim() : null;
 
@@ -616,12 +679,13 @@ router.post('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), 
     const hash = loginVal ? bcrypt.hashSync(String(password), 10) : null;
     const { normalized, translit } = computeFioFields(last_name, first_name);
     const result = await query(
-      `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role, permanent_certificate_number, tco_badge, full_name_normalized, full_name_translit, committee_role, iin, assistant_objects, assistant_departments)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
+      `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role, permanent_certificate_number, tco_badge, full_name_normalized, full_name_translit, committee_role, iin, assistant_objects, assistant_departments, staff_category, hire_date)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING id`,
       [last_name, first_name, object || '', department || '', position || '', loginVal, hash, targetRole,
        String(permanent_certificate_number || '').trim() || null,
        String(tco_badge || '').trim() || null,
-       normalized, translit, committeeRoleVal, iinVal, zoneObjects, zoneDepartments]
+       normalized, translit, committeeRoleVal, iinVal, zoneObjects, zoneDepartments,
+       targetRole === 'employee' ? staffCategoryVal : 'employee', hireDateVal]
     );
     await logAction(req, 'user_created', {
       entityType: 'user', entityId: result.rows[0].id, entityName: `${last_name} ${first_name}`.trim(),
@@ -667,6 +731,19 @@ router.put('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
     const { last_name, first_name, object, department, position, login, password, active, role, permanent_certificate_number, tco_badge, committee_role, iin, assistant_objects, assistant_departments } = req.body;
     const fields = [];
     const params = [];
+
+    // Категория (сотрудник / руководитель) и дата начала работы — только админ/суперадмин
+    // (в ASSISTANT_EDITABLE_FIELDS этих полей нет, так что у ассистента они сюда не попадут).
+    if (req.body.staff_category !== undefined || req.body.hire_date !== undefined) {
+      try {
+        const cat = normalizeStaffCategory(req.body.staff_category);
+        if (cat !== undefined) { params.push(cat); fields.push(`staff_category = $${params.length}`); }
+        const hd = normalizeDateOnly(req.body.hire_date);
+        if (hd !== undefined) { params.push(hd); fields.push(`hire_date = $${params.length}`); }
+      } catch (e) {
+        return res.status(400).json({ error: e.message === 'invalid_date' ? 'invalid_date' : 'invalid_staff_category', message: e.message === 'invalid_date' ? 'Некорректная дата начала работы' : 'Недопустимая категория сотрудника' });
+      }
+    }
 
     // Роль в комиссии по проверке знаний (модуль электронного подписания протоколов).
     // Пустая строка/null снимает роль — при этом сохранённая подпись сотрудника
@@ -809,6 +886,8 @@ router.put('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
       track('permanent_certificate_number', target.permanent_certificate_number, b.permanent_certificate_number);
       track('login', target.login, b.login);
       track('committee_role', target.committee_role, b.committee_role);
+      track('staff_category', target.staff_category, b.staff_category);
+      if (b.hire_date !== undefined) track('hire_date', target.hire_date ? new Date(target.hire_date).toISOString().slice(0, 10) : '', String(b.hire_date || '').slice(0, 10));
       if (req.user.role === 'superadmin') track('role', target.role, b.role);
       if (b.iin !== undefined && String(target.iin || '') !== String(b.iin || '')) changed.iin = { changed: true };
       if (b.password) changed.password = { changed: true };

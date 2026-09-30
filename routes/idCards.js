@@ -81,6 +81,7 @@ router.get('/me', authRequired, async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.json({
       public_uid: person.user.public_uid,
+      hire_date: person.user.hire_date || null,
       url,
       qr_svg,
       overall_status: person.overall_status,

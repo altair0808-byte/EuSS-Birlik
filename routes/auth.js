@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const { query } = require('../db');
+const { query, restoreExpiredLeaves } = require('../db');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
@@ -57,6 +57,8 @@ router.post('/login', async (req, res) => {
   }
 
   try {
+    // сотрудник, у которого закончился отпуск, должен мочь войти сразу, не дожидаясь почасовой задачи
+    await restoreExpiredLeaves();
     const result = await query('SELECT * FROM users WHERE login = $1 AND active = 1', [login]);
     const user = result.rows[0];
 
