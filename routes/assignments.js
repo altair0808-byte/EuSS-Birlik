@@ -14,6 +14,7 @@ const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 const { ensureCertificateForAssignment } = require('../certificateService');
 // Удостоверение — ВТОРОЙ, отдельный документ на то же назначение (idCardService.js).
 const { ensureIdCardForAssignment } = require('../idCardService');
+const driveSync = require('../driveSync');
 
 const uploadImport = makeUploader('imports');
 
@@ -204,6 +205,7 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
       }
       try { await ensureIdCardForAssignment(result.rows[0].id); }
       catch (e) { console.error('Не удалось создать удостоверение (историческая запись)', result.rows[0].id, e.message); }
+      driveSync.enqueueIdCard(result.rows[0].id, req);
       const nm = await auditNames(user_id, course_id);
       await logAction(req, 'course_assigned', {
         entityType: 'user', entityId: user_id, entityName: nm.userName,
@@ -302,6 +304,7 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (re
       }
       try { await ensureIdCardForAssignment(assignmentId); }
       catch (e) { console.error('Не удалось создать удостоверение (массовая историческая запись)', assignmentId, e.message); }
+      driveSync.enqueueIdCard(assignmentId, req);
     }
 
     try {
@@ -587,6 +590,7 @@ router.post('/:id/submit', authRequired, async (req, res) => {
       catch (e) { console.error('Не удалось создать сертификат для назначения', a.id, e.message); }
       try { await ensureIdCardForAssignment(a.id); }
       catch (e) { console.error('Не удалось создать удостоверение для назначения', a.id, e.message); }
+      driveSync.enqueueIdCard(a.id, req);
     }
 
     res.json({ passed, scorePercent, certificate_number: certNum, protocol_number: protocolNumber });

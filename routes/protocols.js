@@ -10,6 +10,7 @@ const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 const { COMMITTEE_ROLES, COMMITTEE_ROLE_LABELS } = require('../lib/committeeRoles');
 const { revokeCertificatesForProtocol } = require('../certificateService');
 const { revokeIdCardsForProtocol } = require('../idCardService');
+const driveSync = require('../driveSync');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
@@ -484,6 +485,11 @@ router.post('/:id/sign', authRequired, requireRole('admin', 'assistant', 'supera
         [hash, pdfBuffer ? pdfBuffer.toString('base64') : null, docxBuffer ? docxBuffer.toString('base64') : null, p.id]
       );
     }
+
+    // Запасное хранилище (Google Drive): только ставим в очередь, сайт облака не ждёт и от него не зависит.
+    // Подпись председателя «будит» удостоверения, ждавшие её; полное подписание отправляет PDF + Word протокола.
+    driveSync.wakeWaitersForProtocol(p.id);
+    if (fullySigned) driveSync.enqueueProtocol(p.id);
 
     res.json({ ok: true, fully_signed: fullySigned });
   } catch (e) {

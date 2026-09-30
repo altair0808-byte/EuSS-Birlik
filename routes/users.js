@@ -14,6 +14,7 @@ const { computeFioFields, transliterate } = require('../lib/fio');
 const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 const { COMMITTEE_ROLES } = require('../lib/committeeRoles');
 const { logAction, fullName } = require('../lib/audit');
+const driveSync = require('../driveSync');
 
 // Ищет уже существующего сотрудника с таким же ФИО (без учёта регистра/пробелов) —
 // п.9 запроса: "УТЯШЕВ АЛТАИР" / "утяшев алтаир" / "Утяшев Алтаир" — одна запись.
@@ -277,13 +278,15 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
               certificate_number: get('certificate_number'),
               score_percent: get('score_percent')
             }, userId);
-            await query(`
+            const histIns = await query(`
               INSERT INTO assignments (user_id, course_id, protocol_number, protocol_date, assigned_by,
                 status, score_percent, test_date, next_test_date, certificate_number)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id
             `, [userId, course.id, protocol_number, protocol_date, req.user.id,
                 h.status, h.score_percent, h.test_date, h.next_test_date, h.certificate_number]);
             historyCreated++;
+            // Запасное хранилище (Google Drive): удостоверение по внесённому обучению уйдёт в облако в фоне
+            driveSync.enqueueIdCard(histIns.rows[0].id, req);
           } catch (histErr) {
             errors.push(`Строка ${rowNum}: сотрудник создан, но не удалось внести обучение — ${histErr.message}`);
           }
