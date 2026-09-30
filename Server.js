@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
 
-const { initDb } = require('./db');
+const { initDb, restoreExpiredLeaves } = require('./db');
 
 const app = express();
 // За прокси Render реальный IP клиента приходит в X-Forwarded-For; без этого req.ip — адрес прокси
@@ -81,6 +81,9 @@ initDb()
   .then(() => {
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`✅ TB Training Platform запущен на порту ${PORT} (база данных Supabase)`);
+      // Автовозврат сотрудников из отпуска после даты окончания (при старте и далее раз в час)
+      restoreExpiredLeaves();
+      setInterval(restoreExpiredLeaves, 60 * 60 * 1000);
       // Фоновая отправка файлов в Google Drive (если заданы GDRIVE_*); сайт от неё не зависит
       try { require('./driveSync').startWorker(); } catch (e) { console.error('[drive] не удалось запустить воркер:', e.message); }
     });

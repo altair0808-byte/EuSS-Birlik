@@ -418,7 +418,7 @@ const state = {
   assignFilter: { status: '', object: '', department: '', q: '', date_from: '', date_to: '' },
   meta: { objects: [], departments: [], pairs: [] },
   metaLoaded: false,
-  dictionaries: { departments: [], positions: [] },
+  dictionaries: { objects: [], departments: [], positions: [], structure: [] },
   dictionariesLoaded: false,
   org: normalizeOrgFilter(sessionStorage.getItem('orgFilter')),   // единый фильтр «объект / отдел» для всех вкладок (мульти-выбор — массивы)
   profileUserId: null,
@@ -484,7 +484,8 @@ const api = {
   getUsersMeta() { return this.req('/api/users/meta/objects'); },
   saveUser(data, id) { return this.req(id ? '/api/users/' + id : '/api/users', { method: id ? 'PUT' : 'POST', body: data }); },
   deleteUser(id) { return this.req('/api/users/' + id, { method: 'DELETE' }); },
-  setEmploymentStatus(id, employment_status, status_date) { return this.req('/api/users/' + id + '/employment-status', { method: 'PATCH', body: { employment_status, status_date } }); },
+  setEmploymentStatus(id, employment_status, status_date, status_date_end) { return this.req('/api/users/' + id + '/employment-status', { method: 'PATCH', body: { employment_status, status_date, status_date_end } }); },
+  getMyWork() { return this.req('/api/users/me/work'); },
   getCourses(filter = {}) { return this.req('/api/courses' + qs(filter)); },
   getCourse(id) { return this.req('/api/courses/' + id); },
   saveCourse(data, id) { return this.req(id ? '/api/courses/' + id : '/api/courses', { method: id ? 'PUT' : 'POST', body: data }); },
@@ -850,11 +851,35 @@ async function refreshOrgMeta() {
 
 // Справочники «Отдел» / «Должность» (п.1 запроса) — грузятся один раз и переиспользуются
 // в модалке сотрудника (select) и во вкладке «Настройки» (управление списком).
+// Приводит ответ /api/settings/dictionaries к единому виду в state.dictionaries.
+function setDictionaries(d) {
+  d = d || {};
+  state.dictionaries = {
+    objects: d.objects || [],
+    departments: d.departments || [],
+    positions: d.positions || [],
+    structure: d.structure || []
+  };
+}
+
+// Структура «Объект → Отдел → Должность» (Настройки → «Объекты, отделы и должности»).
+// Отделы объекта и должности отдела — только те, что закреплены в настройках.
+function orgDepartmentsOf(object) {
+  const o = (state.dictionaries.structure || []).find(x => x.object === object);
+  return o ? o.departments.map(d => d.name) : [];
+}
+function orgPositionsOf(object, department) {
+  const o = (state.dictionaries.structure || []).find(x => x.object === object);
+  const d = o && o.departments.find(x => x.name === department);
+  if (!d) return [];
+  const catalog = state.dictionaries.positions || [];
+  return d.positions.map(ru => catalog.find(p => p.ru === ru) || { ru, kz: '' });
+}
+
 async function loadDictionaries(force = false) {
   if (state.dictionariesLoaded && !force) return state.dictionaries;
   try {
-    const d = await api.getDictionaries();
-    state.dictionaries = { departments: d.departments || [], positions: d.positions || [] };
+    setDictionaries(await api.getDictionaries());
     state.dictionariesLoaded = true;
   } catch (e) {}
   return state.dictionaries;
@@ -1149,11 +1174,11 @@ async function loadTabContent() {
           </div>
         </div>
         ${isAdminsTab ? `<p class="text-xs text-slate-500 mb-4">${_L('Здесь администраторы и ассистенты. Администраторы управляют системой, ассистенты работают с сотрудниками только в своей зоне (объекты/отделы). Они не входят в список сотрудников, статистику, назначения, протоколы и экспорт. Что делал каждый из них — во вкладке «Журнал действий».', 'Мұнда әкімшілер мен ассистенттер. Әкімшілер жүйені басқарады, ассистенттер тек өз аймағында (нысандар/бөлімдер) қызметкерлермен жұмыс істейді. Олар қызметкерлер тізіміне, статистикаға, тағайындауларға, хаттамаларға және экспортқа кірмейді.')}</p>` : ''}
-        ${isArchiveTab ? `<p class="text-xs text-slate-500 mb-4">${_L('Уволенные и сотрудники в декретном отпуске. Они не входят в общий список сотрудников и статистику (в т.ч. на главной странице), но их история обучения, протоколы и сертификаты сохраняются. Кнопка «Восстановить» возвращает сотрудника в штат.', 'Жұмыстан босатылған және декреттегі қызметкерлер. Олар жалпы тізімге және статистикаға кірмейді, бірақ оқу тарихы, хаттамалары мен сертификаттары сақталады.')}</p>` : ''}
+        ${isArchiveTab ? `<p class="text-xs text-slate-500 mb-4">${_L('Уволенные и сотрудники в отпуске. Они не входят в общий список сотрудников и статистику (в т.ч. на главной странице), но их история обучения, протоколы и сертификаты сохраняются. Кнопка «Восстановить» возвращает сотрудника в штат.', 'Жұмыстан босатылған және декреттегі қызметкерлер. Олар жалпы тізімге және статистикаға кірмейді, бірақ оқу тарихы, хаттамалары мен сертификаттары сақталады.')}</p>` : ''}
         <div class="flex flex-wrap items-center gap-2 mb-4">
           <input id="uFilterQ" type="text" placeholder="${t('search_placeholder')}" value="${esc(state.usersFilter.q)}" oninput="onUsersFilterChange()" class="flex-1 min-w-[200px] border border-slate-300 rounded-lg px-3 py-2 text-sm">
           ${!isAdminsTab ? usersFilterDropdownHtml('positions', _L('Все должности', 'Барлық лауазымдар'), (state.dictionaries.positions || []).map(p => p.ru), posLabel) : ''}
-          ${isArchiveTab ? usersFilterDropdownHtml('statuses', _L('Все статусы', 'Барлық мәртебелер'), ['fired', 'maternity'], v => v === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В декрете', 'Декретте')) : ''}
+          ${isArchiveTab ? usersFilterDropdownHtml('statuses', _L('Все статусы', 'Барлық мәртебелер'), ['fired', 'maternity'], v => v === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В отпуске', 'Демалыста')) : ''}
           ${!isAdminsTab && !isArchiveTab && !isObserverUser() ? `<button type="button" id="bulkAssignBtn" onclick="openAssignModal(null, [...bulkSelectedUserIds])" class="hidden px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg whitespace-nowrap">${_L('Назначить выбранным', 'Таңдалғандарға тағайындау')} (<span id="bulkAssignCount">0</span>)</button>` : ''}
         </div>
         <div class="overflow-x-auto">
@@ -1183,23 +1208,42 @@ async function loadTabContent() {
               <div><label class="text-xs font-semibold text-slate-600">Фамилия</label><input id="uLastName" required class="w-full border p-2 rounded text-sm"></div>
               <div><label class="text-xs font-semibold text-slate-600">Имя</label><input id="uFirstName" required class="w-full border p-2 rounded text-sm"></div>
             </div>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div><label class="text-xs font-semibold text-slate-600">Объект</label><input id="uObject" list="uObjectList" class="w-full border p-2 rounded text-sm"><datalist id="uObjectList"></datalist></div>
-              <div>
-                <label class="text-xs font-semibold text-slate-600">Отдел</label>
-                <div class="flex items-center gap-1">
-                  <select id="uDept" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select>
-                  <button type="button" onclick="quickAddDictionaryValue('departments', 'uDept')" title="Добавить новый отдел в список" class="dict-add-btn shrink-0 px-2 py-2 border rounded text-sm font-bold text-slate-500 hover:text-blue-600">+</button>
-                </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Объект</label>
+              <div class="flex items-center gap-1">
+                <select id="uObject" onchange="onOrgSelectChange('u', 'object')" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select>
+                <button type="button" onclick="quickAddOrgValue('object', 'u')" title="Добавить новый объект в список" class="dict-add-btn shrink-0 px-2 py-2 border rounded text-sm font-bold text-slate-500 hover:text-blue-600">+</button>
+              </div>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Отдел</label>
+              <div class="flex items-center gap-1">
+                <select id="uDept" onchange="onOrgSelectChange('u', 'department')" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select>
+                <button type="button" onclick="quickAddOrgValue('department', 'u')" title="Добавить новый отдел в выбранный объект" class="dict-add-btn shrink-0 px-2 py-2 border rounded text-sm font-bold text-slate-500 hover:text-blue-600">+</button>
               </div>
             </div>
             <div>
               <label class="text-xs font-semibold text-slate-600">Должность</label>
               <div class="flex items-center gap-1">
                 <select id="uPos" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select>
-                <button type="button" onclick="quickAddDictionaryValue('positions', 'uPos')" title="Добавить новую должность в список" class="dict-add-btn shrink-0 px-2 py-2 border rounded text-sm font-bold text-slate-500 hover:text-blue-600">+</button>
+                <button type="button" onclick="quickAddOrgValue('position', 'u')" title="Добавить новую должность в выбранный отдел" class="dict-add-btn shrink-0 px-2 py-2 border rounded text-sm font-bold text-slate-500 hover:text-blue-600">+</button>
               </div>
-              <p class="text-[11px] text-slate-400 mt-1">Список отделов и должностей ведётся во вкладке «Настройки» — так одна и та же должность у всех сотрудников пишется одинаково.</p>
+              <p class="text-[11px] text-slate-400 mt-1">Сначала выберите объект — в списке отделов появятся только его отделы, а после выбора отдела — только его должности. Структура ведётся во вкладке «Настройки».</p>
+            </div>
+            <div id="staffFieldsWrapper" data-staff-only class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label class="text-xs font-semibold text-slate-600">Категория</label>
+                <select id="uCategory" class="w-full border p-2 rounded text-sm">
+                  <option value="employee">Сотрудник</option>
+                  <option value="manager">Руководитель</option>
+                </select>
+                <p class="text-[11px] text-slate-400 mt-1">Руководитель — руководящая должность. Кабинет тот же, отличаются только обязательные курсы.</p>
+              </div>
+              <div>
+                <label class="text-xs font-semibold text-slate-600">Дата начала работы в компании</label>
+                <input type="date" id="uHireDate" class="w-full border p-2 rounded text-sm">
+                <p class="text-[11px] text-slate-400 mt-1">Из неё считается стаж (в кабинете сотрудника и у QR-кода).</p>
+              </div>
             </div>
             <div data-staff-only class="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div><label class="text-xs font-semibold text-slate-600">Логин (табельный номер)</label><input id="uLogin" placeholder="Можно назначить позже" class="w-full border p-2 rounded text-sm"></div>
@@ -1271,6 +1315,10 @@ async function loadTabContent() {
               <label class="text-xs font-semibold text-slate-600" id="statusDateLabel">Дата</label>
               <input type="date" id="statusDate" class="w-full border p-2 rounded text-sm">
             </div>
+            <div id="statusDateEndWrap" class="hidden">
+              <label class="text-xs font-semibold text-slate-600" id="statusDateEndLabel">Отпуск по</label>
+              <input type="date" id="statusDateEnd" class="w-full border p-2 rounded text-sm">
+            </div>
             <div class="flex justify-end space-x-2 pt-3 border-t">
               <button type="button" onclick="closeStatusModal()" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
               <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Подтвердить</button>
@@ -1291,10 +1339,11 @@ async function loadTabContent() {
         if (state.tab !== 'users' && state.tab !== 'admins' && state.tab !== 'archive') return;
         const modal = document.getElementById('userModal');
         if (modal && !modal.classList.contains('hidden')) {
-          const posSel = document.getElementById('uPos');
-          const deptSel = document.getElementById('uDept');
-          if (posSel) fillPositionSelect('uPos', state.dictionaries.positions, posSel.value);
-          if (deptSel) fillDictionarySelect('uDept', state.dictionaries.departments, deptSel.value);
+          fillOrgSelects('u', {
+            object: (document.getElementById('uObject') || {}).value || '',
+            department: (document.getElementById('uDept') || {}).value || '',
+            position: (document.getElementById('uPos') || {}).value || ''
+          });
           return;
         }
         loadTabContent();
@@ -1374,9 +1423,17 @@ async function loadTabContent() {
               <span><b>Бессрочный курс</b> — сертификат не истекает, повторно проходить не нужно. Такой курс не попадает в список «Скоро истекает срок», а на сертификате пишется «бессрочно».</span>
             </label>
             <label class="flex items-start gap-2 text-xs text-slate-700 cursor-pointer -mt-1">
-              <input type="checkbox" id="cMandatory" class="mt-0.5 rounded text-blue-600">
-              <span><b>Обязательный курс для всех сотрудников</b> — сотрудники, которых добавили в систему, но ещё не прошедшие этот курс, будут отдельно показаны на карточке курса и в общей статистике на главной странице.</span>
+              <input type="checkbox" id="cMandatory" onchange="onCourseMandatoryToggle()" class="mt-0.5 rounded text-blue-600">
+              <span><b>Обязательный курс</b> — те, кого добавили в систему, но кто ещё не прошёл этот курс, будут отдельно показаны на карточке курса и в общей статистике на главной странице.</span>
             </label>
+            <div id="cMandatoryForWrap" class="hidden -mt-1 ml-6">
+              <label class="text-xs font-semibold text-slate-600">Обязателен для</label>
+              <select id="cMandatoryFor" class="w-full border p-2 rounded text-sm">
+                <option value="all">Всех (сотрудников и руководителей)</option>
+                <option value="employee">Сотрудников</option>
+                <option value="manager">Руководителей</option>
+              </select>
+            </div>
             <div>
               <label class="text-xs font-semibold text-slate-600">Цвет удостоверения по этому курсу</label>
               <input type="hidden" id="cCardColor" value="">
@@ -1714,7 +1771,8 @@ async function loadTabContent() {
   if (state.tab === 'my_tests') {
     container.innerHTML = `
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-        <h2 class="text-lg font-bold text-slate-900 mb-6">${t('nav_my_tests')}</h2>
+        <h2 class="text-lg font-bold text-slate-900 mb-3">${t('nav_my_tests')}</h2>
+        <div id="myTenure" class="mb-5"></div>
         <div id="myTestsList" class="space-y-4"><div class="text-slate-400">Загрузка...</div></div>
       </div>
             <div id="testRunModal" class="fixed inset-0 bg-slate-900/60 hidden flex items-stretch sm:items-center justify-center p-0 sm:p-4 z-50 overflow-hidden overscroll-contain">
@@ -1752,6 +1810,7 @@ async function loadTabContent() {
       </div>
     `;
     loadMyTests();
+    loadMyTenure();
   }
 
   if (state.tab === 'my_id_cards') {
@@ -1899,21 +1958,21 @@ async function loadTabContent() {
           </div>
         </fieldset>
       </div>
-      <div data-stab="dicts" class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-w-xl">
-        <h2 class="text-lg font-bold text-slate-900 mb-1">Отделы и должности</h2>
-        <p class="text-xs text-slate-500 mb-4">Эти списки используются в выпадающих полях «Отдел» и «Должность» в карточке сотрудника, чтобы значения не писались по-разному.</p>
+      <div data-stab="dicts" class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-w-3xl">
+        <h2 class="text-lg font-bold text-slate-900 mb-1">Объекты, отделы и должности</h2>
+        <p class="text-xs text-slate-500 mb-4">Структура «Объект → Отдел → Должность». В карточке сотрудника после выбора объекта показываются только его отделы, а после выбора отдела — только его должности.</p>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
           <div>
-            <h3 class="text-sm font-bold text-slate-900 mb-2">Отделы</h3>
-            <div id="dictDepartmentsList" class="space-y-1 mb-2"></div>
+            <h3 class="text-sm font-bold text-slate-900 mb-2">Объекты</h3>
+            <div id="dictObjectsList" class="space-y-1 mb-2"></div>
             <div class="flex gap-1">
-              <input id="dictDepartmentsNew" placeholder="Новый отдел" class="w-full border p-2 rounded text-sm" onkeydown="if(event.key==='Enter'){event.preventDefault();addDictionaryValueFromSettings('departments');}">
-              <button type="button" onclick="addDictionaryValueFromSettings('departments')" class="shrink-0 px-3 py-2 border rounded text-sm font-semibold">Добавить</button>
+              <input id="dictObjectsNew" placeholder="Новый объект" class="w-full border p-2 rounded text-sm" onkeydown="if(event.key==='Enter'){event.preventDefault();addDictionaryValueFromSettings('objects');}">
+              <button type="button" onclick="addDictionaryValueFromSettings('objects')" class="shrink-0 px-3 py-2 border rounded text-sm font-semibold">Добавить</button>
             </div>
           </div>
           <div>
-            <h3 class="text-sm font-bold text-slate-900 mb-2">Должности <span class="font-normal text-slate-400">(рус. / қаз.)</span></h3>
-            <div id="dictPositionsList" class="space-y-1 mb-2"></div>
+            <h3 class="text-sm font-bold text-slate-900 mb-2">Справочник должностей <span class="font-normal text-slate-400">(рус. / қаз.)</span></h3>
+            <div id="dictPositionsList" class="space-y-1 mb-2 max-h-64 overflow-y-auto"></div>
             <div class="flex flex-col gap-1">
               <input id="dictPositionsNewRu" placeholder="Новая должность (русский)" class="w-full border p-2 rounded text-sm">
               <div class="flex gap-1">
@@ -1921,6 +1980,16 @@ async function loadTabContent() {
                 <button type="button" onclick="addDictionaryValueFromSettings('positions')" class="shrink-0 px-3 py-2 border rounded text-sm font-semibold">Добавить</button>
               </div>
             </div>
+            <p class="text-[11px] text-slate-400 mt-1">Удаление должности из справочника убирает её и из всех отделов.</p>
+          </div>
+        </div>
+        <div class="mt-6 pt-4 border-t border-slate-200">
+          <h3 class="text-sm font-bold text-slate-900 mb-2">Отделы и должности объекта</h3>
+          <select id="orgStructObject" onchange="selectOrgStructObject(this.value)" class="w-full sm:w-72 border p-2 rounded text-sm mb-3"></select>
+          <div id="orgStructBox" class="space-y-3"></div>
+          <div id="orgStructAddDept" class="flex gap-1 mt-3">
+            <input id="orgNewDept" placeholder="Новый отдел в этом объекте" class="w-full sm:w-72 border p-2 rounded text-sm" onkeydown="if(event.key==='Enter'){event.preventDefault();addOrgDepartment();}">
+            <button type="button" onclick="addOrgDepartment()" class="shrink-0 px-3 py-2 border rounded text-sm font-semibold">Добавить отдел</button>
           </div>
         </div>
       </div>
@@ -1950,7 +2019,7 @@ const SETTINGS_TABS = [
   { id: 'commission', label: 'Комиссия и подписи' },
   { id: 'numbering', label: 'Нумерация' },
   { id: 'card', label: 'Удостоверение' },
-  { id: 'dicts', label: 'Отделы и должности' },
+  { id: 'dicts', label: 'Объекты, отделы и должности' },
   { id: 'storage', label: 'Хранилище', superOnly: true }
 ];
 function settingsTabBarHtml(isSuperadmin, active) {
@@ -2034,76 +2103,181 @@ async function driveRetryFailed() {
   }
 }
 
-// --- Управление справочниками «Отдел» / «Должность» во вкладке «Настройки» ---
+// --- Управление структурой «Объект → Отдел → Должность» во вкладке «Настройки» ---
+// Все изменения сразу сохраняются на сервере целиком (см. PUT /api/settings/dictionaries).
 async function renderDictionariesSettings() {
   await loadDictionaries(true);
-  const deptBox = document.getElementById('dictDepartmentsList');
-  if (deptBox) {
-    const values = state.dictionaries.departments;
-    deptBox.innerHTML = values.length
-      ? values.map(v => `
+  renderOrgSettings();
+}
+
+function renderOrgSettings() {
+  const d = state.dictionaries;
+  const objBox = document.getElementById('dictObjectsList');
+  if (objBox) {
+    objBox.innerHTML = d.objects.length
+      ? d.objects.map(v => `
         <div class="flex items-center justify-between gap-2 px-2 py-1 rounded bg-slate-50 border border-slate-100 text-sm">
           <span>${esc(v)}</span>
-          <button type="button" onclick="removeDictionaryValueFromSettings('departments', '${jsAttrEsc(v)}')" class="text-red-500 hover:text-red-700 text-xs font-bold" title="Удалить">✕</button>
-        </div>
-      `).join('')
+          <button type="button" onclick="removeDictionaryValueFromSettings('objects', '${jsAttrEsc(v)}')" class="text-red-500 hover:text-red-700 text-xs font-bold" title="Удалить">✕</button>
+        </div>`).join('')
       : `<div class="text-xs text-slate-400">Список пуст</div>`;
   }
   const posBox = document.getElementById('dictPositionsList');
   if (posBox) {
-    const positions = state.dictionaries.positions;
-    posBox.innerHTML = positions.length
-      ? positions.map(p => `
+    posBox.innerHTML = d.positions.length
+      ? d.positions.map(p => `
         <div class="flex items-center justify-between gap-2 px-2 py-1 rounded bg-slate-50 border border-slate-100 text-sm">
           <span>${esc(p.ru)}${p.kz ? ` <span class="text-slate-400">— ${esc(p.kz)}</span>` : ''}</span>
-          <button type="button" onclick="removeDictionaryValueFromSettings('positions', '${jsAttrEsc(p.ru)}')" class="text-red-500 hover:text-red-700 text-xs font-bold" title="Удалить">✕</button>
-        </div>
-      `).join('')
+          <button type="button" onclick="removeDictionaryValueFromSettings('positions', '${jsAttrEsc(p.ru)}')" class="text-red-500 hover:text-red-700 text-xs font-bold shrink-0" title="Удалить из справочника и из всех отделов">✕</button>
+        </div>`).join('')
       : `<div class="text-xs text-slate-400">Список пуст</div>`;
   }
+
+  // Выбор объекта для редактирования его отделов
+  if (!d.objects.includes(state.orgStructObject)) state.orgStructObject = d.objects[0] || '';
+  const sel = document.getElementById('orgStructObject');
+  if (sel) {
+    sel.innerHTML = d.objects.length
+      ? d.objects.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('')
+      : '<option value="">— сначала добавьте объект —</option>';
+    sel.value = state.orgStructObject;
+  }
+  const addDept = document.getElementById('orgStructAddDept');
+  if (addDept) addDept.classList.toggle('hidden', !state.orgStructObject);
+
+  const box = document.getElementById('orgStructBox');
+  if (!box) return;
+  const obj = d.structure.find(o => o.object === state.orgStructObject);
+  if (!obj || !obj.departments.length) {
+    box.innerHTML = `<div class="text-xs text-slate-400">${state.orgStructObject ? 'В этом объекте пока нет отделов' : ''}</div>`;
+    return;
+  }
+  box.innerHTML = obj.departments.map((dep, di) => {
+    const linked = new Set(dep.positions);
+    const available = d.positions.filter(p => !linked.has(p.ru));
+    return `
+      <div class="border border-slate-200 rounded-lg p-3">
+        <div class="flex items-center justify-between gap-2 mb-2">
+          <div class="font-semibold text-sm text-slate-900">${esc(dep.name)} <span class="font-normal text-slate-400 text-xs">· должностей: ${dep.positions.length}</span></div>
+          <button type="button" onclick="removeOrgDepartment(${di})" class="text-red-500 hover:text-red-700 text-xs font-bold shrink-0" title="Удалить отдел из объекта">✕ отдел</button>
+        </div>
+        <div class="space-y-1 mb-2">
+          ${dep.positions.length ? dep.positions.map((ru, pi) => {
+            const kz = (d.positions.find(p => p.ru === ru) || {}).kz;
+            return `
+          <div class="flex items-center justify-between gap-2 px-2 py-1 rounded bg-slate-50 border border-slate-100 text-sm">
+            <span>${esc(ru)}${kz ? ` <span class="text-slate-400">— ${esc(kz)}</span>` : ''}</span>
+            <button type="button" onclick="removeOrgPosition(${di}, ${pi})" class="text-red-500 hover:text-red-700 text-xs font-bold shrink-0" title="Убрать из отдела">✕</button>
+          </div>`;
+          }).join('') : '<div class="text-xs text-slate-400">Должности не закреплены</div>'}
+        </div>
+        <div class="flex gap-1">
+          <select id="orgAddPos_${di}" class="w-full border p-2 rounded text-sm">
+            <option value="">— добавить должность в отдел —</option>
+            ${available.map(p => `<option value="${esc(p.ru)}">${esc(p.ru)}</option>`).join('')}
+          </select>
+          <button type="button" onclick="addOrgPosition(${di})" class="shrink-0 px-3 py-2 border rounded text-sm font-semibold">Добавить</button>
+        </div>
+      </div>`;
+  }).join('');
 }
 
-async function saveDictionariesFromSettings() {
+async function saveOrgDictionaries(next) {
   try {
-    const saved = await api.saveDictionaries(state.dictionaries);
-    state.dictionaries = { departments: saved.departments || [], positions: saved.positions || [] };
-    renderDictionariesSettings();
+    setDictionaries(await api.saveDictionaries(next));
   } catch (e) {
     alert('Не удалось сохранить список: ' + (e.message || 'ошибка сервера'));
+    await loadDictionaries(true);
   }
+  renderOrgSettings();
+}
+
+function selectOrgStructObject(name) {
+  state.orgStructObject = name;
+  renderOrgSettings();
 }
 
 function addDictionaryValueFromSettings(kind) {
-  if (kind === 'departments') {
-    const input = document.getElementById('dictDepartmentsNew');
+  const next = cloneDictionaries();
+  if (kind === 'objects') {
+    const input = document.getElementById('dictObjectsNew');
     const value = (input.value || '').trim();
     if (!value) return;
-    if (!state.dictionaries.departments.includes(value)) {
-      state.dictionaries.departments = [...state.dictionaries.departments, value];
-    }
+    if (!next.objects.includes(value)) next.objects.push(value);
     input.value = '';
+    state.orgStructObject = value;
   } else {
     const ruInput = document.getElementById('dictPositionsNewRu');
     const kzInput = document.getElementById('dictPositionsNewKz');
     const ru = (ruInput.value || '').trim();
     const kz = (kzInput.value || '').trim();
     if (!ru) return;
-    const idx = state.dictionaries.positions.findIndex(p => p.ru === ru);
-    if (idx === -1) state.dictionaries.positions = [...state.dictionaries.positions, { ru, kz }];
-    else state.dictionaries.positions[idx] = { ru, kz: kz || state.dictionaries.positions[idx].kz };
+    const idx = next.positions.findIndex(p => p.ru === ru);
+    if (idx === -1) next.positions.push({ ru, kz });
+    else next.positions[idx] = { ru, kz: kz || next.positions[idx].kz };
     ruInput.value = '';
     kzInput.value = '';
   }
-  saveDictionariesFromSettings();
+  saveOrgDictionaries(next);
 }
 
 function removeDictionaryValueFromSettings(kind, value) {
-  if (kind === 'departments') {
-    state.dictionaries.departments = state.dictionaries.departments.filter(v => v !== value);
+  const next = cloneDictionaries();
+  if (kind === 'objects') {
+    if (!confirm(`Удалить объект «${value}» вместе с его отделами и закреплёнными должностями? У сотрудников записанные значения не изменятся.`)) return;
+    next.objects = next.objects.filter(v => v !== value);
   } else {
-    state.dictionaries.positions = state.dictionaries.positions.filter(p => p.ru !== value);
+    if (!confirm(`Удалить должность «${value}» из справочника и из всех отделов? У сотрудников записанные значения не изменятся.`)) return;
+    next.positions = next.positions.filter(p => p.ru !== value);
   }
-  saveDictionariesFromSettings();
+  saveOrgDictionaries(next);
+}
+
+function orgStructTarget(next) {
+  return next.structure.find(o => o.object === state.orgStructObject);
+}
+
+function addOrgDepartment() {
+  const input = document.getElementById('orgNewDept');
+  const value = (input.value || '').trim();
+  if (!value || !state.orgStructObject) return;
+  const next = cloneDictionaries();
+  const o = orgStructTarget(next);
+  if (!o) return;
+  if (!o.departments.some(d => d.name === value)) o.departments.push({ name: value, positions: [] });
+  input.value = '';
+  saveOrgDictionaries(next);
+}
+
+function removeOrgDepartment(di) {
+  const next = cloneDictionaries();
+  const o = orgStructTarget(next);
+  const dep = o && o.departments[di];
+  if (!dep) return;
+  if (!confirm(`Убрать отдел «${dep.name}» из объекта «${o.object}»? У сотрудников записанные значения не изменятся.`)) return;
+  o.departments.splice(di, 1);
+  saveOrgDictionaries(next);
+}
+
+function addOrgPosition(di) {
+  const sel = document.getElementById('orgAddPos_' + di);
+  const ru = sel ? sel.value : '';
+  if (!ru) return;
+  const next = cloneDictionaries();
+  const o = orgStructTarget(next);
+  const dep = o && o.departments[di];
+  if (!dep) return;
+  if (!dep.positions.includes(ru)) dep.positions.push(ru);
+  saveOrgDictionaries(next);
+}
+
+function removeOrgPosition(di, pi) {
+  const next = cloneDictionaries();
+  const o = orgStructTarget(next);
+  const dep = o && o.departments[di];
+  if (!dep) return;
+  dep.positions.splice(pi, 1);
+  saveOrgDictionaries(next);
 }
 
 // --- ЭКСПОРТ В EXCEL: окно настройки выгрузки ---
@@ -2913,7 +3087,7 @@ function auditActionLabel(row) {
 
 function auditDetailsHtml(row) {
   const d = row.details || {};
-  const statusLbl = { active: 'вернул в штат', fired: 'уволен', maternity: 'в декрете' };
+  const statusLbl = { active: 'вернул в штат', fired: 'уволен', maternity: 'в отпуске' };
   const parts = [];
   switch (row.action) {
     case 'user_created':
@@ -2927,7 +3101,7 @@ function auditDetailsHtml(row) {
       });
       break;
     case 'employment_status_changed':
-      parts.push(esc(statusLbl[d.status] || d.status || '') + (d.date ? ' · ' + esc(fmtDate(d.date)) : ''));
+      parts.push(esc(statusLbl[d.status] || d.status || '') + (d.date ? ' · ' + esc(fmtDate(d.date)) + (d.date_end ? ' — ' + esc(fmtDate(d.date_end)) : '') : ''));
       break;
     case 'users_imported':
       parts.push(`создано: ${esc(d.created)}, пропущено: ${esc(d.skipped)}, обучение внесено: ${esc(d.historyCreated)}${d.errors ? ', ошибок: ' + esc(d.errors) : ''}`);
@@ -3092,7 +3266,7 @@ async function loadUsersList() {
     updateBulkAssignButton();
     return;
   }
-  const statusLabel = s => s === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В декрете', 'Декретте');
+  const statusLabel = s => s === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В отпуске', 'Демалыста');
   // Ассистент (и вообще любой "наблюдатель") видит только чтение + карточку сотрудника
   // (openUserProfile), там же и ограниченное редактирование — см. ТЗ §3, §10. В списке
   // кнопки полного редактирования/статуса/удаления и чекбоксы массового назначения скрыты.
@@ -3101,7 +3275,7 @@ async function loadUsersList() {
     <tr class="hover:bg-slate-50">
       ${showCheckbox && !isObserver ? `<td class="px-4 py-3"><input type="checkbox" data-uid="${u.id}" ${bulkSelectedUserIds.has(u.id) ? 'checked' : ''} onchange="toggleBulkSelect(${u.id}, this.checked)" class="rounded text-blue-600"></td>` : ''}
       <td class="px-4 py-3 font-medium text-slate-900">
-        ${(u.role === 'admin' || u.role === 'assistant') ? `${esc(u.last_name)} ${esc(u.first_name)}` : `<button onclick="openUserProfile(${u.id})" class="hover:text-blue-600 hover:underline text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>`}
+        ${(u.role === 'admin' || u.role === 'assistant') ? `${esc(u.last_name)} ${esc(u.first_name)}` : `<button onclick="openUserProfile(${u.id})" class="hover:text-blue-600 hover:underline text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>${u.staff_category === 'manager' ? `<span class="ml-1.5 align-middle text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">${_L('Руководитель', 'Басшы')}</span>` : ''}`}
       </td>
       <td class="px-4 py-3 font-mono text-slate-600">${u.login ? esc(u.login) : '<span class="text-slate-400 italic font-sans">не назначен</span>'}</td>
       <td class="px-4 py-3 text-slate-600">${u.role === 'assistant' ? assistantZoneCellHtml(u) : `${esc(u.object || '—')} / ${esc(u.department || '—')}`}</td>
@@ -3109,7 +3283,7 @@ async function loadUsersList() {
       ${!isAdminsTab ? `<td class="px-4 py-3 text-xs text-slate-600">${iinCellHtml(u.iin)}</td>` : ''}
       <td class="px-4 py-3">
         ${isArchiveTab
-          ? `<span class="text-xs font-semibold px-2 py-0.5 rounded ${u.employment_status === 'fired' ? 'bg-red-100 text-red-700' : 'bg-purple-100 text-purple-700'}">${statusLabel(u.employment_status)}</span>${u.status_date ? `<div class="text-[11px] text-slate-400 mt-0.5">${fmtDate(u.status_date)}</div>` : ''}`
+          ? `<span class="text-xs font-semibold px-2 py-0.5 rounded ${u.employment_status === 'fired' ? 'bg-red-100 text-red-700' : 'bg-purple-100 text-purple-700'}">${statusLabel(u.employment_status)}</span>${u.status_date ? `<div class="text-[11px] text-slate-400 mt-0.5">${fmtDate(u.status_date)}${u.status_date_end ? ' — ' + fmtDate(u.status_date_end) : ''}</div>` : ''}`
           : `<span class="text-xs font-semibold px-2 py-0.5 rounded ${u.role === 'superadmin' ? 'bg-purple-100 text-purple-700' : u.role === 'admin' ? 'bg-blue-100 text-blue-700' : u.role === 'assistant' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'}">${esc(t('role_' + u.role) || u.role)}</span>`}
       </td>
       <td class="px-4 py-3 text-right space-x-2 whitespace-nowrap">
@@ -3123,7 +3297,7 @@ async function loadUsersList() {
           <button onclick="editUser(${u.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>
           ${!isAdminsTab ? `
             <button onclick="openStatusModal(${u.id}, 'fired')" class="text-amber-700 hover:underline text-xs">${_L('Уволить', 'Жұмыстан босату')}</button>
-            <button onclick="openStatusModal(${u.id}, 'maternity')" class="text-purple-700 hover:underline text-xs">${_L('В декрет', 'Декретке')}</button>
+            <button onclick="openStatusModal(${u.id}, 'maternity')" class="text-purple-700 hover:underline text-xs">${_L('В отпуск', 'Демалысқа')}</button>
           ` : ''}
           <button onclick="delUser(${u.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
         `}
@@ -3144,24 +3318,34 @@ function openStatusModal(id, status) {
   document.getElementById('statusValue').value = status;
   const titles = {
     fired: _L('Уволить сотрудника', 'Қызметкерді жұмыстан босату'),
-    maternity: _L('Отправить в декрет', 'Декретке жіберу'),
+    maternity: _L('Отправить в отпуск', 'Демалысқа жіберу'),
     active: _L('Вернуть в штат', 'Штатқа қайтару')
   };
+  const archiveHint = _L('Сотрудник переместится во вкладку «Архив», перестанет входить в статистику и в списки для назначения тестов. История обучения и сертификаты сохранятся.', 'Қызметкер «Мұрағат» бөліміне ауысады, статистикаға кірмейді. Оқу тарихы сақталады.');
   const hints = {
-    fired: _L('Сотрудник переместится во вкладку «Архив», перестанет входить в статистику и в списки для назначения тестов. История обучения и сертификаты сохранятся.', 'Қызметкер «Мұрағат» бөліміне ауысады, статистикаға кірмейді. Оқу тарихы сақталады.'),
-    maternity: _L('Сотрудник переместится во вкладку «Архив», перестанет входить в статистику и в списки для назначения тестов. История обучения и сертификаты сохранятся.', 'Қызметкер «Мұрағат» бөліміне ауысады, статистикаға кірмейді. Оқу тарихы сақталады.'),
+    fired: archiveHint,
+    maternity: _L('Сотрудник переместится во вкладку «Архив» на время отпуска и после даты окончания отпуска автоматически вернётся в штат. Пока он в отпуске, войти в систему нельзя. История обучения и сертификаты сохранятся.', 'Қызметкер демалыс уақытында «Мұрағат» бөліміне ауысады, демалыс аяқталған соң автоматты түрде қайтады. История и сертификаттар сақталады.'),
     active: _L('Сотрудник вернётся в общий список «Сотрудники» и снова будет учитываться в статистике.', 'Қызметкер жалпы тізімге қайтады және қайта статистикаға кіреді.')
   };
   document.getElementById('statusModalTitle').textContent = titles[status] || '';
   document.getElementById('statusModalHint').textContent = hints[status] || '';
   const dateLabel = document.getElementById('statusDateLabel');
   const dateInput = document.getElementById('statusDate');
+  const endWrap = document.getElementById('statusDateEndWrap');
+  const endInput = document.getElementById('statusDateEnd');
+  const endLabel = document.getElementById('statusDateEndLabel');
+  const isLeave = status === 'maternity';
+  if (endWrap) endWrap.classList.toggle('hidden', !isLeave);
+  if (endInput) { endInput.value = ''; endInput.required = isLeave; }
   if (status === 'active') {
     dateLabel.textContent = _L('Дата возврата (необязательно)', 'Оралу күні');
     dateInput.required = false;
     dateInput.value = '';
   } else {
-    dateLabel.textContent = status === 'fired' ? _L('Дата увольнения', 'Жұмыстан босату күні') : _L('Дата начала декретного отпуска', 'Декрет басталу күні');
+    dateLabel.textContent = status === 'fired'
+      ? _L('Дата увольнения', 'Жұмыстан босату күні')
+      : _L('Отпуск с', 'Демалыс басталуы');
+    if (endLabel) endLabel.textContent = _L('Отпуск по (включительно)', 'Демалыс аяқталуы (қоса алғанда)');
     dateInput.required = true;
     dateInput.value = toLocalDateStr(new Date());
   }
@@ -3177,10 +3361,15 @@ async function submitStatusForm(e) {
   const id = document.getElementById('statusUserId').value;
   const status = document.getElementById('statusValue').value;
   const date = document.getElementById('statusDate').value || null;
+  const dateEnd = status === 'maternity' ? (document.getElementById('statusDateEnd').value || null) : null;
+  if (status === 'maternity' && dateEnd && date && dateEnd < date) {
+    alert(_L('Дата окончания отпуска раньше даты начала.', 'Демалыс аяқталу күні басталу күнінен ерте.'));
+    return;
+  }
   const btn = e.target.querySelector('button[type=submit]');
   if (btn) btn.disabled = true;
   try {
-    await api.setEmploymentStatus(id, status, date);
+    await api.setEmploymentStatus(id, status, date, dateEnd);
   } catch (err) {
     alert('Не удалось изменить статус: ' + (err.message || 'ошибка сервера'));
     if (btn) btn.disabled = false;
@@ -3201,10 +3390,15 @@ async function submitProfileStatusForm(e, userId) {
   e.preventDefault();
   const status = document.getElementById('statusValue').value;
   const date = document.getElementById('statusDate').value || null;
+  const dateEnd = status === 'maternity' ? (document.getElementById('statusDateEnd').value || null) : null;
+  if (status === 'maternity' && dateEnd && date && dateEnd < date) {
+    alert(_L('Дата окончания отпуска раньше даты начала.', 'Демалыс аяқталу күні басталу күнінен ерте.'));
+    return;
+  }
   const btn = e.target.querySelector('button[type=submit]');
   if (btn) btn.disabled = true;
   try {
-    await api.setEmploymentStatus(userId, status, date);
+    await api.setEmploymentStatus(userId, status, date, dateEnd);
   } catch (err) {
     alert('Не удалось изменить статус: ' + (err.message || 'ошибка сервера'));
     if (btn) btn.disabled = false;
@@ -3218,12 +3412,12 @@ async function submitProfileStatusForm(e, userId) {
 // Заполняет select значениями справочника; если у сотрудника уже стоит значение,
 // которого в справочнике ещё нет (старые данные / значение удалили из списка),
 // добавляем его отдельным пунктом — иначе оно потеряется при сохранении карточки.
-function fillDictionarySelect(selectId, values, current) {
+function fillDictionarySelect(selectId, values, current, placeholder) {
   const sel = document.getElementById(selectId);
   if (!sel) return;
   const list = [...values];
   if (current && !list.includes(current)) list.unshift(current);
-  sel.innerHTML = '<option value="">— не выбрано —</option>' + list.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  sel.innerHTML = `<option value="">${esc(placeholder || '— не выбрано —')}</option>` + list.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
   sel.value = current || '';
 }
 
@@ -3231,33 +3425,61 @@ function fillDictionarySelect(selectId, values, current) {
 // значение (value) сотрудника всегда сохраняется по-русски (канонический текст,
 // используется в фильтрах/экспорте), а подпись в выпадающем списке показывается
 // на текущем языке интерфейса — как и во всём остальном приложении.
-function fillPositionSelect(selectId, positions, current) {
+function fillPositionSelect(selectId, positions, current, placeholder) {
   const sel = document.getElementById(selectId);
   if (!sel) return;
   const list = [...positions];
   if (current && !list.some(p => p.ru === current)) list.unshift({ ru: current, kz: '' });
-  sel.innerHTML = '<option value="">— не выбрано —</option>'
+  sel.innerHTML = `<option value="">${esc(placeholder || '— не выбрано —')}</option>`
     + list.map(p => `<option value="${esc(p.ru)}">${esc(CURRENT_LANG === 'kz' ? (p.kz || p.ru) : p.ru)}</option>`).join('');
   sel.value = current || '';
+}
+
+// --- Каскад «Объект → Отдел → Должность» в карточке сотрудника ---
+const ORG_SELECT_IDS = {
+  u: { object: 'uObject', department: 'uDept', position: 'uPos' },
+  ae: { object: 'aeObject', department: 'aeDept', position: 'aePos' }
+};
+
+// Заполняет три выпадающих списка. cur — текущие значения. Если у сотрудника уже записано
+// значение, которого нет в структуре (старые данные), оно остаётся отдельным пунктом,
+// чтобы не потеряться при сохранении. Ассистент видит только свою зону.
+function fillOrgSelects(prefix, cur = {}) {
+  const ids = ORG_SELECT_IDS[prefix];
+  const asObserver = isObserverUser();
+  const zoneObjs = asObserver ? (state.user.assistant_objects || []) : [];
+  const zoneDeps = asObserver ? (state.user.assistant_departments || []) : [];
+  const objects = (state.dictionaries.objects || []).filter(o => !zoneObjs.length || zoneObjs.includes(o));
+  fillDictionarySelect(ids.object, objects, cur.object || '');
+  const object = (document.getElementById(ids.object) || {}).value || '';
+  const departments = orgDepartmentsOf(object).filter(d => !zoneDeps.length || zoneDeps.includes(d));
+  fillDictionarySelect(ids.department, departments, cur.department || '',
+    object ? '— не выбрано —' : '— сначала выберите объект —');
+  const department = (document.getElementById(ids.department) || {}).value || '';
+  fillPositionSelect(ids.position, orgPositionsOf(object, department), cur.position || '',
+    department ? '— не выбрано —' : '— сначала выберите отдел —');
+}
+
+// Смена объекта сбрасывает отдел и должность, смена отдела — только должность.
+function onOrgSelectChange(prefix, level) {
+  const ids = ORG_SELECT_IDS[prefix];
+  const val = id => (document.getElementById(id) || {}).value || '';
+  if (level === 'object') fillOrgSelects(prefix, { object: val(ids.object) });
+  else fillOrgSelects(prefix, { object: val(ids.object), department: val(ids.department) });
 }
 
 async function openUserModal(u = null, presetRole = null) {
   document.getElementById('userId').value = u ? u.id : '';
   document.getElementById('uLastName').value = u ? u.last_name : '';
   document.getElementById('uFirstName').value = u ? u.first_name : '';
-  document.getElementById('uObject').value = u ? u.object : '';
-  const dict = await loadDictionaries();
-  // Ассистент видит и выбирает объекты/отделы только из своей зоны (сервер это тоже проверяет).
+  await loadDictionaries();
+  // Ассистент выбирает объекты/отделы только из своей зоны (сервер это тоже проверяет).
   const asObserver = isObserverUser();
   const zoneObjs = asObserver ? (state.user.assistant_objects || []) : [];
   const zoneDeps = asObserver ? (state.user.assistant_departments || []) : [];
-  const deptList = zoneDeps.length ? dict.departments.filter(d => zoneDeps.includes(d)) : dict.departments;
-  fillDictionarySelect('uDept', deptList, u ? u.department : (zoneDeps.length === 1 ? zoneDeps[0] : ''));
-  fillPositionSelect('uPos', dict.positions, u ? u.position : '');
-  const objList = zoneObjs.length ? zoneObjs : ((state.meta && state.meta.objects) || []);
-  const objDl = document.getElementById('uObjectList');
-  if (objDl) objDl.innerHTML = objList.map(o => `<option value="${esc(o)}"></option>`).join('');
-  if (!u && zoneObjs.length === 1) document.getElementById('uObject').value = zoneObjs[0];
+  fillOrgSelects('u', u
+    ? { object: u.object || '', department: u.department || '', position: u.position || '' }
+    : { object: zoneObjs.length === 1 ? zoneObjs[0] : '', department: zoneDeps.length === 1 ? zoneDeps[0] : '', position: '' });
   // Поля доступа (логин/пароль, № сертификата, комиссия) и «+» в справочниках — не для ассистента
   document.querySelectorAll('#userModal [data-staff-only], #userModal .dict-add-btn').forEach(el => el.classList.toggle('hidden', asObserver));
   document.getElementById('uLogin').value = u ? u.login : '';
@@ -3265,6 +3487,8 @@ async function openUserModal(u = null, presetRole = null) {
   document.getElementById('uCertNumber').value = u ? (u.permanent_certificate_number || '') : '';
   document.getElementById('uTcoBadge').value = u ? (u.tco_badge || '') : '';
   document.getElementById('uIin').value = u ? (u.iin || '') : '';
+  document.getElementById('uCategory').value = u ? (u.staff_category || 'employee') : 'employee';
+  document.getElementById('uHireDate').value = u ? (u.hire_date || '') : '';
   document.getElementById('uRole').value = u ? u.role : (presetRole || (state.tab === 'admins' ? 'admin' : 'employee'));
   const committeeSel = document.getElementById('uCommitteeRole');
   if (committeeSel) committeeSel.value = u ? (u.committee_role || '') : '';
@@ -3293,8 +3517,9 @@ function renderAssistantZoneCheckboxes(selectedObjects, selectedDepartments) {
   const objBox = document.getElementById('uAssistantObjects');
   const depBox = document.getElementById('uAssistantDepartments');
   if (!objBox || !depBox) return;
-  const objects = (state.meta && state.meta.objects) || [];
-  const departments = (state.meta && state.meta.departments) || (state.dictionaries && state.dictionaries.departments) || [];
+  const uniq = arr => [...new Set(arr.filter(Boolean))];
+  const objects = uniq([...((state.dictionaries && state.dictionaries.objects) || []), ...((state.meta && state.meta.objects) || [])]);
+  const departments = uniq([...((state.dictionaries && state.dictionaries.departments) || []), ...((state.meta && state.meta.departments) || [])]);
   const row = (val, checked) => `<label class="flex items-center gap-1.5"><input type="checkbox" class="rounded text-blue-600" value="${esc(val)}" ${checked ? 'checked' : ''}><span class="truncate">${esc(val)}</span></label>`;
   objBox.innerHTML = objects.length ? objects.map(o => row(o, selectedObjects.includes(o))).join('') : '<div class="text-[11px] text-slate-400">нет данных</div>';
   depBox.innerHTML = departments.length ? departments.map(d => row(d, selectedDepartments.includes(d))).join('') : '<div class="text-[11px] text-slate-400">нет данных</div>';
@@ -3305,36 +3530,62 @@ function onUserRoleFieldChange() {
   const wrapper = document.getElementById('assistantZoneWrapper');
   if (!roleSel || !wrapper) return;
   wrapper.classList.toggle('hidden', roleSel.value !== 'assistant');
+  // Категория и дата начала работы — только для сотрудников (не для админов/ассистентов) и не для ассистента-редактора
+  const sf = document.getElementById('staffFieldsWrapper');
+  if (sf) sf.classList.toggle('hidden', roleSel.value !== 'employee' || isObserverUser());
 }
 
-// Быстрое добавление нового значения в справочник прямо из карточки сотрудника,
-// без похода во вкладку «Настройки» — сохраняется сразу на сервере.
-async function quickAddDictionaryValue(kind, selectId) {
-  const label = kind === 'departments' ? 'отдела' : 'должности';
-  const value = (prompt(`Название нового ${label} (русский):`) || '').trim();
+// Быстрое добавление значения в структуру прямо из карточки сотрудника, без похода во
+// вкладку «Настройки» — сохраняется сразу на сервере:
+//  объект — в общий список объектов; отдел — в выбранный объект; должность — в выбранный
+//  отдел (если такой должности нет в общем справочнике, она создаётся).
+async function quickAddOrgValue(kind, prefix) {
+  const ids = ORG_SELECT_IDS[prefix];
+  const val = id => (document.getElementById(id) || {}).value || '';
+  const object = val(ids.object);
+  const department = val(ids.department);
+  if (kind === 'department' && !object) { alert('Сначала выберите объект — отдел добавляется в выбранный объект.'); return; }
+  if (kind === 'position' && (!object || !department)) { alert('Сначала выберите объект и отдел — должность добавляется в выбранный отдел.'); return; }
+  const label = { object: 'объекта', department: 'отдела', position: 'должности' }[kind];
+  const value = (prompt(`Название нового ${label}${kind === 'position' ? ' (русский)' : ''}:`) || '').trim();
   if (!value) return;
   let kzValue = '';
-  if (kind === 'positions') {
+  if (kind === 'position') {
     kzValue = (prompt('То же самое на казахском (можно оставить пустым — впишете позже в «Настройках»):') || '').trim();
   }
-  const dict = await loadDictionaries();
-  const already = kind === 'positions' ? dict.positions.some(p => p.ru === value) : dict.departments.includes(value);
-  if (!already) {
-    const updated = {
-      departments: dict.departments,
-      positions: dict.positions,
-      [kind]: kind === 'positions' ? [...dict.positions, { ru: value, kz: kzValue }] : [...dict.departments, value]
-    };
-    try {
-      const saved = await api.saveDictionaries(updated);
-      state.dictionaries = { departments: saved.departments || [], positions: saved.positions || [] };
-    } catch (e) {
-      alert('Не удалось сохранить: ' + (e.message || 'ошибка сервера'));
-      return;
-    }
+  await loadDictionaries();
+  const next = cloneDictionaries();
+  if (kind === 'object') {
+    if (!next.objects.includes(value)) next.objects.push(value);
+  } else if (kind === 'department') {
+    const o = next.structure.find(x => x.object === object);
+    if (o && !o.departments.some(d => d.name === value)) o.departments.push({ name: value, positions: [] });
+  } else {
+    if (!next.positions.some(p => p.ru === value)) next.positions.push({ ru: value, kz: kzValue });
+    const d = (next.structure.find(x => x.object === object) || { departments: [] }).departments.find(x => x.name === department);
+    if (d && !d.positions.includes(value)) d.positions.push(value);
   }
-  if (kind === 'positions') fillPositionSelect(selectId, state.dictionaries.positions, value);
-  else fillDictionarySelect(selectId, state.dictionaries.departments, value);
+  try {
+    setDictionaries(await api.saveDictionaries(next));
+  } catch (e) {
+    alert('Не удалось сохранить: ' + (e.message || 'ошибка сервера'));
+    return;
+  }
+  fillOrgSelects(prefix, {
+    object: kind === 'object' ? value : object,
+    department: kind === 'department' ? value : (kind === 'position' ? department : ''),
+    position: kind === 'position' ? value : ''
+  });
+}
+
+// Копия справочников для изменения перед сохранением на сервере.
+function cloneDictionaries() {
+  const d = state.dictionaries || {};
+  return JSON.parse(JSON.stringify({
+    objects: d.objects || [],
+    positions: d.positions || [],
+    structure: d.structure || []
+  }));
 }
 
 function closeUserModal() {
@@ -3366,11 +3617,14 @@ async function saveUserForm(e) {
     permanent_certificate_number: document.getElementById('uCertNumber').value.trim(),
     tco_badge: document.getElementById('uTcoBadge').value.trim(),
     iin: document.getElementById('uIin') ? document.getElementById('uIin').value.trim() : '',
-    committee_role: document.getElementById('uCommitteeRole') ? document.getElementById('uCommitteeRole').value : ''
+    committee_role: document.getElementById('uCommitteeRole') ? document.getElementById('uCommitteeRole').value : '',
+    staff_category: document.getElementById('uCategory') ? document.getElementById('uCategory').value : 'employee',
+    hire_date: document.getElementById('uHireDate') ? (document.getElementById('uHireDate').value || '') : ''
   };
+  if (data.role !== 'employee') { delete data.staff_category; delete data.hire_date; }
   if (isObserverUser()) {
     // сервер всё равно игнорирует эти поля для ассистента; не шлём, чтобы не затирать значения
-    ['login', 'role', 'permanent_certificate_number', 'committee_role'].forEach(k => delete data[k]);
+    ['login', 'role', 'permanent_certificate_number', 'committee_role', 'staff_category', 'hire_date'].forEach(k => delete data[k]);
   }
   if (data.role === 'assistant') {
     data.assistant_objects = Array.from(document.querySelectorAll('#uAssistantObjects input:checked')).map(el => el.value);
@@ -3724,6 +3978,7 @@ function courseCardHtml(c, color) {
               ? '<p class="text-xs mt-2 text-violet-700 font-semibold">🏷 Курс без протокола — без теста и удостоверения; на странице по QR отображается как «пройден», входит в статистику</p>'
               : '<p class="text-xs mt-2 text-violet-700 font-semibold">🏷 Внешний курс — без теста, нашего протокола и удостоверения; на странице по QR отображается как «пройден», входит в статистику</p>')
           : `<p class="text-xs mt-2 ${hasQ ? 'text-slate-500' : 'text-amber-600 font-semibold'}">${hasQ ? 'Вопросов в базе: ' + c.questions_count : 'Вопросы не добавлены — тест пока пройти нельзя'}</p>`}
+        ${c.is_mandatory ? `<p class="text-[11px] font-semibold text-blue-700 mt-2">📌 ${_L('Обязательный для', 'Міндетті')}: ${mandatoryForLabel(c.mandatory_for)}</p>` : ''}
         ${c.is_mandatory ? `
         <button type="button" onclick="openUntrainedModal(${c.id}, '${jsAttrEsc(courseTitleOf(c))}')" class="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded ${(c.untrained_count || 0) > 0 ? 'bg-red-50 text-red-700 hover:bg-red-100' : 'bg-emerald-50 text-emerald-700'}">
           ${(c.untrained_count || 0) > 0 ? `⚠ Не прошли обучение: ${c.untrained_count}` : '✓ Все сотрудники прошли обучение'}
@@ -3872,6 +4127,64 @@ function onCourseCatRuInput() {
   if (match) kzInput.value = match.category_kz;
 }
 
+function onCourseMandatoryToggle() {
+  const cb = document.getElementById('cMandatory');
+  const wrap = document.getElementById('cMandatoryForWrap');
+  if (wrap && cb) wrap.classList.toggle('hidden', !cb.checked);
+}
+
+// Для кого обязателен курс — подпись
+function mandatoryForLabel(v) {
+  return v === 'manager' ? _L('руководителей', 'басшылар үшін') : v === 'employee' ? _L('сотрудников', 'қызметкерлер үшін') : _L('всех', 'барлығы үшін');
+}
+
+// Стаж в компании: «2 года 3 месяца 5 дней» (по дате начала работы YYYY-MM-DD)
+function tenureText(hireDate) {
+  const m = String(hireDate || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return '';
+  const now = new Date();
+  const t = { y: now.getFullYear(), m: now.getMonth() + 1, d: now.getDate() };
+  const h = { y: +m[1], m: +m[2], d: +m[3] };
+  if (Date.UTC(t.y, t.m - 1, t.d) < Date.UTC(h.y, h.m - 1, h.d)) return '';
+  let years = t.y - h.y, months = t.m - h.m, days = t.d - h.d;
+  if (days < 0) { months -= 1; days += new Date(t.y, t.m - 1, 0).getDate(); }
+  if (months < 0) { years -= 1; months += 12; }
+  const kz = CURRENT_LANG === 'kz';
+  const plural = (n, one, few, many) => { const a = n % 100, b = n % 10; return (a > 10 && a < 20) ? many : (b > 1 && b < 5) ? few : b === 1 ? one : many; };
+  const parts = [];
+  if (kz) {
+    if (years) parts.push(years + ' жыл');
+    if (months) parts.push(months + ' ай');
+    if (days || !parts.length) parts.push(days + ' күн');
+  } else {
+    if (years) parts.push(years + ' ' + plural(years, 'год', 'года', 'лет'));
+    if (months) parts.push(months + ' ' + plural(months, 'месяц', 'месяца', 'месяцев'));
+    if (days || !parts.length) parts.push(days + ' ' + plural(days, 'день', 'дня', 'дней'));
+  }
+  return parts.join(' ');
+}
+
+// Плашка «В компании: ...» (дашборд сотрудника и блок у QR-кода)
+function tenureBannerHtml(hireDate) {
+  const txt = tenureText(hireDate);
+  if (!txt) return '';
+  return `<div class="flex items-center gap-2 text-sm text-slate-700 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">
+    <span>🏢</span>
+    <span>${_L('В компании', 'Компанияда')}: <b>${esc(txt)}</b> <span class="text-slate-400 text-xs">(${_L('с', '')} ${fmtDate(hireDate)})</span></span>
+  </div>`;
+}
+
+async function loadMyTenure() {
+  const box = document.getElementById('myTenure');
+  if (!box) return;
+  try {
+    const w = await api.getMyWork();
+    const cat = w.staff_category === 'manager' ? `<span class="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">${_L('Руководитель', 'Басшы')}</span>` : '';
+    box.innerHTML = tenureBannerHtml(w.hire_date) || '';
+    if (cat && box.firstElementChild) box.firstElementChild.insertAdjacentHTML('beforeend', cat);
+  } catch (e) { /* стаж — вспомогательная информация, ошибку не показываем */ }
+}
+
 async function openCourseModal(id) {
   if (!(state.courses || []).length) { try { state.courses = await api.getCourses(); } catch (e) {} }
   fillCourseCategoryLists();
@@ -3895,6 +4208,8 @@ async function openCourseModal(id) {
     document.getElementById('cValid').value = course.validity_months;
     document.getElementById('cNoExpiry').checked = !!course.no_expiry;
     document.getElementById('cMandatory').checked = !!course.is_mandatory;
+    document.getElementById('cMandatoryFor').value = course.mandatory_for || 'all';
+    onCourseMandatoryToggle();
     document.getElementById('cKind').value = course.course_kind || (course.is_external ? 'external' : 'internal');
     setCourseCardColor(course.card_color || '');
     onCourseNoExpiryToggle();
@@ -3923,6 +4238,8 @@ async function openCourseModal(id) {
     document.getElementById('cValid').value = 12;
     document.getElementById('cNoExpiry').checked = false;
     document.getElementById('cMandatory').checked = false;
+    document.getElementById('cMandatoryFor').value = 'all';
+    onCourseMandatoryToggle();
     document.getElementById('cKind').value = 'internal';
     setCourseCardColor('');
     onCourseNoExpiryToggle();
@@ -3969,6 +4286,7 @@ async function saveCourseForm(e) {
     validity_months: parseInt(document.getElementById('cValid').value) || 12,
     no_expiry: document.getElementById('cNoExpiry').checked,
     is_mandatory: document.getElementById('cMandatory').checked,
+    mandatory_for: document.getElementById('cMandatoryFor').value || 'all',
     course_kind: document.getElementById('cKind').value,
     is_external: document.getElementById('cKind').value !== 'internal',
     card_color: document.getElementById('cCardColor').value || undefined,
@@ -5332,14 +5650,8 @@ async function editAssistantFields(id) {
   document.getElementById('aeFirstName').value = u.first_name || '';
   document.getElementById('aeTcoBadge').value = u.tco_badge || '';
   document.getElementById('aeIin').value = u.iin || '';
-  const dict = await loadDictionaries();
-  fillPositionSelect('aePos', dict.positions, u.position || '');
-  const zoneObjs = state.user.assistant_objects || [];
-  const zoneDeps = state.user.assistant_departments || [];
-  document.getElementById('aeObject').value = u.object || '';
-  const aeDl = document.getElementById('aeObjectList');
-  if (aeDl) aeDl.innerHTML = zoneObjs.map(o => `<option value="${esc(o)}"></option>`).join('');
-  fillDictionarySelect('aeDept', zoneDeps.length ? dict.departments.filter(d => zoneDeps.includes(d)) : dict.departments, u.department || '');
+  await loadDictionaries();
+  fillOrgSelects('ae', { object: u.object || '', department: u.department || '', position: u.position || '' });
   document.getElementById('assistantEditModal').classList.remove('hidden');
 }
 
@@ -5382,12 +5694,15 @@ async function loadUserProfile(userId) {
         <div class="flex flex-wrap justify-between items-start gap-4">
           <div>
             <h2 class="text-xl font-bold text-slate-900">${esc(user.last_name)} ${esc(user.first_name)}
-              ${user.employment_status && user.employment_status !== 'active' ? `<span class="ml-2 align-middle text-xs font-semibold px-2 py-0.5 rounded ${user.employment_status === 'fired' ? 'bg-red-100 text-red-700' : 'bg-purple-100 text-purple-700'}">${user.employment_status === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В декрете', 'Декретте')}</span>` : ''}
+              ${user.employment_status && user.employment_status !== 'active' ? `<span class="ml-2 align-middle text-xs font-semibold px-2 py-0.5 rounded ${user.employment_status === 'fired' ? 'bg-red-100 text-red-700' : 'bg-purple-100 text-purple-700'}">${user.employment_status === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В отпуске', 'Демалыста')}</span>` : ''}
             </h2>
             <p class="text-sm text-slate-500 mt-1">${esc(posLabel(user.position) || '—')} · ${esc(user.object || '—')} / ${esc(user.department || '—')}</p>
             <p class="text-xs text-slate-400 mt-1">${t('login_field')}: <span class="font-mono">${user.login ? esc(user.login) : 'не назначен'}</span> · ${esc(roleName)}</p>
             <p class="text-xs text-slate-400 mt-1">№ сертификата: <span class="font-mono font-semibold text-slate-600">${user.permanent_certificate_number ? esc(user.permanent_certificate_number) : 'не присвоен'}</span></p>
             <p class="text-xs text-slate-400 mt-1">ИИН: ${iinCellHtml(user.iin)}</p>
+            ${user.role === 'employee' ? `<p class="text-xs text-slate-400 mt-1">${_L('Категория', 'Санаты')}: <span class="font-semibold text-slate-600">${user.staff_category === 'manager' ? _L('Руководитель', 'Басшы') : _L('Сотрудник', 'Қызметкер')}</span></p>
+            <p class="text-xs text-slate-400 mt-1">${_L('В компании с', 'Компанияда')}: ${user.hire_date ? `<span class="font-semibold text-slate-600">${fmtDate(user.hire_date)}</span> · ${esc(tenureText(user.hire_date))}` : `<span class="italic">${_L('дата начала работы не указана', 'жұмыс басталған күні көрсетілмеген')}</span>`}</p>
+            ${user.employment_status === 'maternity' && user.status_date ? `<p class="text-xs text-purple-600 mt-1">${_L('Отпуск', 'Демалыс')}: ${fmtDate(user.status_date)}${user.status_date_end ? ' — ' + fmtDate(user.status_date_end) : ''}</p>` : ''}` : ''}
           </div>
           <div class="flex flex-wrap gap-2 justify-end">
             ${isObserverUser() ? `
@@ -5403,7 +5718,7 @@ async function loadUserProfile(userId) {
                 user.employment_status && user.employment_status !== 'active'
                   ? `<button onclick="openProfileStatusModal(${user.id}, 'active')" class="px-4 py-2 border border-emerald-300 text-emerald-700 rounded-lg text-sm font-semibold hover:bg-emerald-50">${_L('Восстановить', 'Қалпына келтіру')}</button>`
                   : `<button onclick="openProfileStatusModal(${user.id}, 'fired')" class="px-4 py-2 border border-amber-300 text-amber-700 rounded-lg text-sm font-semibold hover:bg-amber-50">${_L('Уволить', 'Жұмыстан босату')}</button>
-                     <button onclick="openProfileStatusModal(${user.id}, 'maternity')" class="px-4 py-2 border border-purple-300 text-purple-700 rounded-lg text-sm font-semibold hover:bg-purple-50">${_L('В декрет', 'Декретке')}</button>`
+                     <button onclick="openProfileStatusModal(${user.id}, 'maternity')" class="px-4 py-2 border border-purple-300 text-purple-700 rounded-lg text-sm font-semibold hover:bg-purple-50">${_L('В отпуск', 'Демалысқа')}</button>`
               ) : ''}
             `}
           </div>
@@ -5417,8 +5732,8 @@ async function loadUserProfile(userId) {
             <div><label class="text-xs font-semibold text-slate-600">Фамилия</label><input id="aeLastName" required class="w-full border p-2 rounded text-sm"></div>
             <div><label class="text-xs font-semibold text-slate-600">Имя</label><input id="aeFirstName" required class="w-full border p-2 rounded text-sm"></div>
             <div class="grid grid-cols-2 gap-3">
-              <div><label class="text-xs font-semibold text-slate-600">Объект</label><input id="aeObject" list="aeObjectList" class="w-full border p-2 rounded text-sm"><datalist id="aeObjectList"></datalist></div>
-              <div><label class="text-xs font-semibold text-slate-600">Отдел</label><select id="aeDept" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select></div>
+              <div><label class="text-xs font-semibold text-slate-600">Объект</label><select id="aeObject" onchange="onOrgSelectChange('ae', 'object')" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select></div>
+              <div><label class="text-xs font-semibold text-slate-600">Отдел</label><select id="aeDept" onchange="onOrgSelectChange('ae', 'department')" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select></div>
             </div>
             <div>
               <label class="text-xs font-semibold text-slate-600">Должность</label>
@@ -5443,6 +5758,10 @@ async function loadUserProfile(userId) {
             <div>
               <label class="text-xs font-semibold text-slate-600" id="statusDateLabel">Дата</label>
               <input type="date" id="statusDate" class="w-full border p-2 rounded text-sm">
+            </div>
+            <div id="statusDateEndWrap" class="hidden">
+              <label class="text-xs font-semibold text-slate-600" id="statusDateEndLabel">Отпуск по</label>
+              <input type="date" id="statusDateEnd" class="w-full border p-2 rounded text-sm">
             </div>
             <div class="flex justify-end space-x-2 pt-3 border-t">
               <button type="button" onclick="closeStatusModal()" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
@@ -5731,6 +6050,7 @@ async function loadMyIdCards() {
             <button type="button" onclick="copyPersonLink(this)" data-url="${esc(d.url)}" class="px-3 py-1.5 border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-semibold rounded-lg">${_L('Копировать ссылку', 'Сілтемені көшіру')}</button>
           </div>
           <div class="text-[11px] text-slate-400 mt-2 break-all font-mono">${esc(d.url)}</div>
+          ${d.hire_date ? `<div class="mt-3">${tenureBannerHtml(d.hire_date)}</div>` : ''}
         </div>
       </div>`;
 

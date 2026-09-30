@@ -105,6 +105,22 @@
     var m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
     return m ? m[3] + '.' + m[2] + '.' + m[1] : '—';
   }
+  // Стаж от даты начала работы: «2 г. 3 мес. 5 дн.»
+  function tenureShort(hd) {
+    var m = String(hd || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return '';
+    var now = new Date();
+    var ty = now.getFullYear(), tm = now.getMonth() + 1, td = now.getDate();
+    var y = ty - (+m[1]), mo = tm - (+m[2]), d = td - (+m[3]);
+    if (Date.UTC(ty, tm - 1, td) < Date.UTC(+m[1], +m[2] - 1, +m[3])) return '';
+    if (d < 0) { mo -= 1; d += new Date(ty, tm - 1, 0).getDate(); }
+    if (mo < 0) { y -= 1; mo += 12; }
+    var parts = [];
+    if (y) parts.push(y + ' \u0433.');
+    if (mo) parts.push(mo + ' \u043c\u0435\u0441.');
+    if (d || !parts.length) parts.push(d + ' \u0434\u043d.');
+    return parts.join(' ');
+  }
   function safeColor(c) { return /^#[0-9A-Fa-f]{6}$/.test(String(c || '')) ? c : '#1D4ED8'; }
   function kv(k, v) { return '<div class="kv"><span class="k">' + k + '</span><span class="v">' + esc(v || '—') + '</span></div>'; }
 
@@ -125,6 +141,7 @@
       + kv('Должность / Лауазымы / Position', d.position)
       + kv('Подразделение / Бөлім / Department', d.department)
       + kv('Работодатель / Жұмыс беруші / Employer', d.employer)
+      + (d.hire_date && tenureShort(d.hire_date) ? kv('Стаж в компании / Өтілі / Tenure', tenureShort(d.hire_date) + ' (' + fmtDate(d.hire_date) + ')') : '')
       + '<div class="banner st-' + ov + '"><div class="ic">' + ICON[ICON_BY[ov]] + '</div><div>'
       + '<div class="t1">' + ovT.ru + '</div><div class="t2">' + ovT.kz + '<br>' + ovT.en + '</div></div></div>'
       + '</div>';

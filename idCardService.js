@@ -126,6 +126,7 @@ async function getIdCardFullByUid(uid) {
     `SELECT card.*,
             u.last_name, u.first_name, u.position AS user_position, u.department, u.object,
             u.iin, u.login AS user_login, u.public_uid,
+            to_char(u.hire_date, 'YYYY-MM-DD') AS employee_hire_date,
             c.title_ru, c.title_kz, c.card_color, c.is_external,
             p.protocol_number, p.open_date AS protocol_open_date,
             a.protocol_number AS assignment_protocol_number, a.protocol_date AS assignment_protocol_date,

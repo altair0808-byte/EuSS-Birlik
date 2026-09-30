@@ -20,6 +20,7 @@
 // ВАЖНО: вёрстка PDF и Word должна меняться ВМЕСТЕ (idCardPdf.js <-> этот файл).
 const JSZip = require('jszip');
 const QRCode = require('qrcode');
+const { formatTenureShort } = require('./lib/tenure');
 const { resolveImageBuffer, resolveCleanImage } = require('./lib/imageAssets');
 const { CARD_STAMP, cardPalette, fmtDate, todayKz, STATUS, resolveChairman, mix } = require('./lib/cardLayout');
 const { measureSansPt } = require('./lib/textWidthSans');
@@ -345,6 +346,10 @@ async function buildIdCardDocx(card, settings, verifyUrl, committeeSignatures) {
   text('Current status — scan the QR code', 608, 757, { size: 11.5, color: MUTED, maxW: 215 });
   text('Сформировано / Generated:', 608, 787, { size: 11.5, color: MUTED, maxW: 215 });
   text(todayKz(), 608, 805, { size: 11.5, bold: true, color: MUTED, maxW: 215 });
+  // Стаж работы в компании (если в карточке сотрудника указана дата начала работы)
+  if (card.employee_hire_date) {
+    text('Стаж / Өтілі: ' + formatTenureShort(card.employee_hire_date), 608, 823, { size: 11, bold: true, color: pal.dark, maxW: 215 });
+  }
 
   // ---------- Справа: QR ----------
   text('Құжаттың түпнұсқалығын тексеру', 1089, 711, { size: 12, color: MUTED, align: 'right', maxW: 262 });

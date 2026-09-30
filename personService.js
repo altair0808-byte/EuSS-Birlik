@@ -113,7 +113,8 @@ async function buildPerson(userRow) {
   };
 }
 
-const USER_COLS = `id, last_name, first_name, position, department, object, login, public_uid`;
+const USER_COLS = `id, last_name, first_name, position, department, object, login, public_uid,
+  to_char(hire_date, 'YYYY-MM-DD') AS hire_date`;
 
 // Для авторизованных роутов: только сотрудник (role = 'employee').
 async function getPersonForCard(employeeId) {
@@ -144,6 +145,7 @@ function toPublicPayload(person, employer) {
     position: u.position || '',
     department: u.department || u.object || '',
     employer: employer || person.employer || '',
+    hire_date: u.hire_date || null, // дата начала работы в компании (для стажа возле QR)
     overall_status: person.overall_status,
     courses: person.cards.map((c) => ({
       title_ru: c.title_ru || '',

@@ -9,6 +9,7 @@ const bcrypt = require('bcryptjs');
 const { computeFioFields } = require('./lib/fio');
 const { generatePublicUid } = require('./lib/publicUid');
 const { CARD_COLOR_PALETTE } = require('./lib/cardColors');
+const { SEED_OBJECT, DEPARTMENT_RENAMES, SEED_STRUCTURE } = require('./lib/orgSeed');
 
 // Список должностей объекта Dome 6 (файл "Dome 6 MT position - 19.09.2025.xlsx",
 // присланный 25.09.2026) — сеется в справочник positions_list один раз, только если
@@ -127,6 +128,17 @@ async function initDb() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS status_date DATE;
     UPDATE users SET employment_status = 'active' WHERE employment_status IS NULL;
 
+    -- Категория сотрудника: 'employee' (обычный сотрудник) или 'manager' (руководитель —
+    -- руководящая должность). Дашборд у обоих одинаковый, различаются только обязательные курсы.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_category TEXT NOT NULL DEFAULT 'employee';
+    -- Дата начала работы в компании (для стажа в дашборде сотрудника, у QR-кода и в удостоверении)
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS hire_date DATE;
+    -- Конец отпуска. Значение employment_status='maternity' сохранено для совместимости со старыми
+    -- данными, но в интерфейсе это теперь «Отпуск» (у всех), а не только декрет:
+    -- status_date = начало отпуска, status_date_end = конец отпуска (после неё сотрудник
+    -- автоматически возвращается из архива в штат).
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS status_date_end DATE;
+
     -- Защита от дублей сотрудников (п.9 запроса): "УТЯШЕВ АЛТАИР" / "утяшев алтаир" /
     -- "Утяшев Алтаир" должны считаться одной записью, а поиск должен работать и по
     -- русскому написанию, и по английской транслитерации (Altair/Utyashev).
@@ -164,6 +176,9 @@ async function initDb() {
     -- статистике на главной странице (см. routes/courses.js: GET /:id/untrained
     -- и GET /stats/summary).
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_mandatory BOOLEAN NOT NULL DEFAULT FALSE;
+    -- Для кого курс обязателен (имеет смысл при is_mandatory = TRUE):
+    -- 'all' — для всех, 'employee' — только для сотрудников, 'manager' — только для руководителей.
+    ALTER TABLE courses ADD COLUMN IF NOT EXISTS mandatory_for TEXT NOT NULL DEFAULT 'all';
 
     -- Справочники «Отдел» / «Должность» (п.1 запроса): фиксированные списки значений,
     -- которые администратор ведёт во вкладке «Настройки», чтобы при добавлении/редактировании
@@ -171,6 +186,16 @@ async function initDb() {
     -- в произвольном виде (иначе одна и та же должность оказывается записана по-разному).
     ALTER TABLE settings ADD COLUMN IF NOT EXISTS departments_list JSONB NOT NULL DEFAULT '[]'::jsonb;
     ALTER TABLE settings ADD COLUMN IF NOT EXISTS positions_list JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+    -- Структура «Объект → Отдел → Должность»: выпадающие списки в карточке сотрудника
+    -- зависят друг от друга (выбрал объект — видишь только его отделы, выбрал отдел —
+    -- только его должности). objects_list — список объектов (массив строк);
+    -- org_structure — массив вида
+    --   [{ "object": "Бирлик", "departments": [{ "name": "Administration", "positions": ["<рус. название должности>", ...] }] }]
+    -- Должности ссылаются на справочник positions_list по русскому названию.
+    -- Массивы (а не объекты) — потому что JSONB не сохраняет порядок ключей.
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS objects_list JSONB NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS org_structure JSONB NOT NULL DEFAULT '[]'::jsonb;
   `);
 
   // Протоколы комиссии: администратор "открывает" протокол на диапазон дат —
@@ -617,6 +642,106 @@ async function initDb() {
   } catch (e) {
     console.error('Ошибка заполнения справочника должностей:', e.message);
   }
+
+  await migrateOrgStructure();
 }
 
-module.exports = { pool, query, initDb };
+// Одноразовая миграция «Объект → Отдел → Должность». Запускается только пока структура
+// в настройках пуста (org_structure = []), поэтому повторные запуски сервера ничего не
+// перезаписывают — дальше структуру ведёт суперадмин во вкладке «Настройки».
+//  1) переименовывает отделы Admin / FM / HS (в справочнике, у сотрудников и в зонах
+//     ассистентов) на Administration / Facility Maintenance (FM) / Hotel Services (HS);
+//  2) заводит объект «Бирлик»;
+//  3) закрепляет должности за отделами по файлу (lib/orgSeed.js);
+//  4) отделы, которые уже были в справочнике, но которых нет в файле, не теряются —
+//     переносятся в «Бирлик» без должностей.
+async function migrateOrgStructure() {
+  const client = await pool.connect();
+  try {
+    const cur = await client.query('SELECT departments_list, positions_list, objects_list, org_structure FROM settings WHERE id = 1');
+    const row = cur.rows[0];
+    if (!row) return;
+    if (Array.isArray(row.org_structure) && row.org_structure.length > 0) return;
+
+    const rename = (name) => {
+      const key = String(name || '').trim().toLowerCase();
+      return DEPARTMENT_RENAMES[key] || String(name || '').trim();
+    };
+
+    await client.query('BEGIN');
+
+    // 1) переименование отделов
+    const renamedUsers = await client.query(
+      `UPDATE users SET department = CASE lower(btrim(department))
+          WHEN 'admin' THEN $1::text WHEN 'fm' THEN $2::text WHEN 'hs' THEN $3::text END
+       WHERE lower(btrim(department)) IN ('admin','fm','hs')`,
+      [DEPARTMENT_RENAMES.admin, DEPARTMENT_RENAMES.fm, DEPARTMENT_RENAMES.hs]
+    );
+    await client.query(
+      `UPDATE users SET assistant_departments = ARRAY(
+          SELECT CASE lower(btrim(d)) WHEN 'admin' THEN $1::text WHEN 'fm' THEN $2::text WHEN 'hs' THEN $3::text ELSE d END
+          FROM unnest(assistant_departments) WITH ORDINALITY AS t(d, ord) ORDER BY ord)
+       WHERE EXISTS (SELECT 1 FROM unnest(assistant_departments) AS d WHERE lower(btrim(d)) IN ('admin','fm','hs'))`,
+      [DEPARTMENT_RENAMES.admin, DEPARTMENT_RENAMES.fm, DEPARTMENT_RENAMES.hs]
+    );
+    const legacyDepartments = [...new Set(
+      (Array.isArray(row.departments_list) ? row.departments_list : []).map(rename).filter(Boolean)
+    )];
+
+    // 2) объекты
+    const objects = (Array.isArray(row.objects_list) ? row.objects_list : []).map(v => String(v || '').trim()).filter(Boolean);
+    if (!objects.includes(SEED_OBJECT)) objects.unshift(SEED_OBJECT);
+
+    // 3) должности в справочник (если вдруг чего-то не хватает) и структура по файлу
+    const catalog = (Array.isArray(row.positions_list) ? row.positions_list : [])
+      .map(p => ({ ru: String((typeof p === 'string' ? p : p && p.ru) || '').trim(), kz: String((p && typeof p === 'object' ? p.kz : '') || '').trim() }))
+      .filter(p => p.ru);
+    const have = new Set(catalog.map(p => p.ru));
+    const departments = SEED_STRUCTURE.map(d => ({
+      name: d.department,
+      positions: d.positions.map(p => {
+        if (!have.has(p.ru)) { catalog.push({ ru: p.ru, kz: p.kz }); have.add(p.ru); }
+        return p.ru;
+      })
+    }));
+
+    // 4) старые отделы, которых нет в файле, — в «Бирлик» без должностей
+    const inStructure = new Set(departments.map(d => d.name));
+    legacyDepartments.filter(n => !inStructure.has(n)).forEach(n => departments.push({ name: n, positions: [] }));
+
+    const structure = [{ object: SEED_OBJECT, departments }];
+    catalog.sort((a, b) => a.ru.localeCompare(b.ru, 'ru'));
+    const allDepartments = [...new Set(departments.map(d => d.name))].sort((a, b) => a.localeCompare(b, 'ru'));
+
+    await client.query(
+      `UPDATE settings SET objects_list = $1::jsonb, org_structure = $2::jsonb,
+              positions_list = $3::jsonb, departments_list = $4::jsonb WHERE id = 1`,
+      [JSON.stringify(objects), JSON.stringify(structure), JSON.stringify(catalog), JSON.stringify(allDepartments)]
+    );
+    await client.query('COMMIT');
+    console.log(`[migrate] Структура «Объект → Отдел → Должность»: объект «${SEED_OBJECT}», отделов: ${departments.length}; переименовано отделов у сотрудников: ${renamedUsers.rowCount}`);
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* ignore */ }
+    console.error('Ошибка миграции структуры «Объект → Отдел → Должность»:', e.message);
+  } finally {
+    client.release();
+  }
+}
+
+// Автовозврат из отпуска: когда дата окончания отпуска прошла, сотрудник снова становится
+// действующим (active=1, employment_status='active'), даты отпуска очищаются.
+async function restoreExpiredLeaves() {
+  try {
+    const r = await pool.query(
+      `UPDATE users SET employment_status = 'active', active = 1, status_date = NULL, status_date_end = NULL
+       WHERE employment_status = 'maternity' AND status_date_end IS NOT NULL AND status_date_end < CURRENT_DATE
+       RETURNING id`
+    );
+    return r.rowCount || 0;
+  } catch (e) {
+    console.error('restoreExpiredLeaves:', e.message);
+    return 0;
+  }
+}
+
+module.exports = { pool, query, initDb, restoreExpiredLeaves };
