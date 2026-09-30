@@ -315,6 +315,29 @@ async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_users_iin ON users(iin);
   `);
 
+  // ===================== Журнал действий (для суперадмина) =====================
+  // Кто (админ / ассистент) и когда добавил или изменил сотрудника, назначил курс и т.д.
+  // Намеренно БЕЗ внешнего ключа на users: при удалении учётной записи админа журнал остаётся,
+  // а имя и роль исполнителя хранятся в самой записи (actor_name / actor_role).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id BIGSERIAL PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      actor_id BIGINT,
+      actor_name TEXT NOT NULL DEFAULT '',
+      actor_role TEXT NOT NULL DEFAULT '',
+      action TEXT NOT NULL,
+      entity_type TEXT,
+      entity_id BIGINT,
+      entity_name TEXT NOT NULL DEFAULT '',
+      details JSONB NOT NULL DEFAULT '{}'::jsonb,
+      ip TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON audit_log(actor_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+  `);
+
   await pool.query(`
     ALTER TABLE questions ADD COLUMN IF NOT EXISTS variant_number INT NOT NULL DEFAULT 1;
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS video_path TEXT;

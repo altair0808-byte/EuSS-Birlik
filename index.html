@@ -71,6 +71,7 @@ const I18N = {
 
     role_superadmin: 'Суперадминистратор',
     role_admin: 'Администратор (Инженер ТБ)',
+    role_assistant: 'Ассистент',
     role_employee: 'Сотрудник',
 
     hint_last_protocol: 'Последний использованный номер протокола',
@@ -230,6 +231,7 @@ const I18N = {
 
     role_superadmin: 'Супер әкімші',
     role_admin: 'Әкімші (ЕҚ инженері)',
+    role_assistant: 'Ассистент',
     role_employee: 'Қызметкер',
 
     hint_last_protocol: 'Соңғы қолданылған хаттама нөмірі',
@@ -411,6 +413,8 @@ const state = {
   testTimer: null,
   timeLeft: 0,
   usersFilter: { q: '', object: '', department: '', role: '', positions: [], statuses: [] },
+  auditFilter: { actor_id: '', action: '', date_from: '', date_to: '', q: '' },
+  auditRows: [], auditTotal: 0,
   assignFilter: { status: '', object: '', department: '', q: '', date_from: '', date_to: '' },
   meta: { objects: [], departments: [], pairs: [] },
   metaLoaded: false,
@@ -475,6 +479,8 @@ const api = {
   login(login, password) { return this.req('/api/auth/login', { method: 'POST', body: { login, password } }); },
   getUsers(filter = {}) { return this.req('/api/users' + qs(filter)); },
   getUser(id) { return this.req('/api/users/' + id); },
+  getAudit(filter = {}) { return this.req('/api/audit' + qs(filter)); },
+  getAuditActors() { return this.req('/api/audit/actors'); },
   getUsersMeta() { return this.req('/api/users/meta/objects'); },
   saveUser(data, id) { return this.req(id ? '/api/users/' + id : '/api/users', { method: id ? 'PUT' : 'POST', body: data }); },
   deleteUser(id) { return this.req('/api/users/' + id, { method: 'DELETE' }); },
@@ -958,6 +964,10 @@ function renderMain(app) {
   if (!isEmployee && isObserver && !OBSERVER_TABS.includes(state.tab)) {
     state.tab = 'users';
   }
+  // «Администраторы и ассистенты» и «Журнал действий» — только суперадмин
+  if ((state.tab === 'admins' || state.tab === 'audit') && state.user.role !== 'superadmin') {
+    state.tab = 'dashboard';
+  }
   const roleName = t('role_' + state.user.role) || state.user.role;
 
   app.innerHTML = `
@@ -995,7 +1005,7 @@ function renderMain(app) {
             <button onclick="setTab('dashboard')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'dashboard' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_dashboard')}</button>
             <button onclick="setTab('users')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_users')}</button>
             <button onclick="setTab('archive')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'archive' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Архив', 'Мұрағат')}</button>
-            ${state.user.role === 'superadmin' ? `<button onclick="setTab('admins')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'admins' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Администраторы', 'Әкімшілер')}</button>` : ''}
+            ${state.user.role === 'superadmin' ? `<button onclick="setTab('admins')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'admins' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Администраторы и ассистенты', 'Әкімшілер мен ассистенттер')}</button>` : ''}
             <button onclick="setTab('courses')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'courses' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_courses')}</button>
             <button onclick="setTab('assignments')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'assignments' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_assignments')}</button>
             <button onclick="setTab('protocols')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'protocols' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_protocols')}</button>
@@ -1003,6 +1013,7 @@ function renderMain(app) {
             <button onclick="setTab('calendar')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'calendar' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_calendar')}</button>
             <a href="#" onclick="openExportModal();return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-emerald-700 hover:bg-emerald-50">📥 ${t('nav_export')}</a>
             <button onclick="setTab('settings')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'settings' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_settings')}</button>
+            ${state.user.role === 'superadmin' ? `<button onclick="setTab('audit')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'audit' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">📜 ${_L('Журнал действий', 'Әрекеттер журналы')}</button>` : ''}
             ${state.user.committee_role ? `<a href="#" onclick="openSignatureModal();return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-indigo-700 hover:bg-indigo-50">✍️ Электронная подпись</a>` : ''}
           `}
         </div>
@@ -1126,15 +1137,16 @@ async function loadTabContent() {
     container.innerHTML = `
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
         <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
-          <h2 class="text-lg font-bold text-slate-900">${isArchiveTab ? _L('Архив', 'Мұрағат') : isAdminsTab ? _L('Администраторы', 'Әкімшілер') : t('users_title')}</h2>
+          <h2 class="text-lg font-bold text-slate-900">${isArchiveTab ? _L('Архив', 'Мұрағат') : isAdminsTab ? _L('Администраторы и ассистенты', 'Әкімшілер мен ассистенттер') : t('users_title')}</h2>
           <div class="flex flex-wrap gap-2">
             ${isAdminsTab || isArchiveTab || isObserverUser() ? '' : `<input type="file" id="importFile" accept=".xlsx" class="hidden" onchange="handleImportFile(this)">
             <button onclick="downloadUsersTemplate()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">⬇ Скачать бланк</button>
             <button onclick="document.getElementById('importFile').click()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">📥 ${t('import_excel')}</button>`}
-            ${isArchiveTab || isObserverUser() ? '' : `<button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${isAdminsTab ? _L('Добавить администратора', 'Әкімші қосу') : t('add_user')}</button>`}
+            ${isArchiveTab ? '' : isAdminsTab ? `<button onclick="openUserModal(null, 'assistant')" class="px-4 py-2 border border-blue-300 text-blue-700 hover:bg-blue-50 text-sm font-semibold rounded-lg">+ ${_L('Добавить ассистента', 'Ассистент қосу')}</button>
+            <button onclick="openUserModal(null, 'admin')" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${_L('Добавить администратора', 'Әкімші қосу')}</button>` : `<button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${t('add_user')}</button>`}
           </div>
         </div>
-        ${isAdminsTab ? `<p class="text-xs text-slate-500 mb-4">${_L('Администраторы управляют системой. Они не входят в список сотрудников, статистику, назначения, протоколы и экспорт.', 'Әкімшілер жүйені басқарады. Олар қызметкерлер тізіміне, статистикаға, тағайындауларға, хаттамаларға және экспортқа кірмейді.')}</p>` : ''}
+        ${isAdminsTab ? `<p class="text-xs text-slate-500 mb-4">${_L('Здесь администраторы и ассистенты. Администраторы управляют системой, ассистенты работают с сотрудниками только в своей зоне (объекты/отделы). Они не входят в список сотрудников, статистику, назначения, протоколы и экспорт. Что делал каждый из них — во вкладке «Журнал действий».', 'Мұнда әкімшілер мен ассистенттер. Әкімшілер жүйені басқарады, ассистенттер тек өз аймағында (нысандар/бөлімдер) қызметкерлермен жұмыс істейді. Олар қызметкерлер тізіміне, статистикаға, тағайындауларға, хаттамаларға және экспортқа кірмейді.')}</p>` : ''}
         ${isArchiveTab ? `<p class="text-xs text-slate-500 mb-4">${_L('Уволенные и сотрудники в декретном отпуске. Они не входят в общий список сотрудников и статистику (в т.ч. на главной странице), но их история обучения, протоколы и сертификаты сохраняются. Кнопка «Восстановить» возвращает сотрудника в штат.', 'Жұмыстан босатылған және декреттегі қызметкерлер. Олар жалпы тізімге және статистикаға кірмейді, бірақ оқу тарихы, хаттамалары мен сертификаттары сақталады.')}</p>` : ''}
         <div class="flex flex-wrap items-center gap-2 mb-4">
           <input id="uFilterQ" type="text" placeholder="${t('search_placeholder')}" value="${esc(state.usersFilter.q)}" oninput="onUsersFilterChange()" class="flex-1 min-w-[200px] border border-slate-300 rounded-lg px-3 py-2 text-sm">
@@ -1170,12 +1182,12 @@ async function loadTabContent() {
               <div><label class="text-xs font-semibold text-slate-600">Имя</label><input id="uFirstName" required class="w-full border p-2 rounded text-sm"></div>
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div><label class="text-xs font-semibold text-slate-600">Объект</label><input id="uObject" class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Объект</label><input id="uObject" list="uObjectList" class="w-full border p-2 rounded text-sm"><datalist id="uObjectList"></datalist></div>
               <div>
                 <label class="text-xs font-semibold text-slate-600">Отдел</label>
                 <div class="flex items-center gap-1">
                   <select id="uDept" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select>
-                  <button type="button" onclick="quickAddDictionaryValue('departments', 'uDept')" title="Добавить новый отдел в список" class="shrink-0 px-2 py-2 border rounded text-sm font-bold text-slate-500 hover:text-blue-600">+</button>
+                  <button type="button" onclick="quickAddDictionaryValue('departments', 'uDept')" title="Добавить новый отдел в список" class="dict-add-btn shrink-0 px-2 py-2 border rounded text-sm font-bold text-slate-500 hover:text-blue-600">+</button>
                 </div>
               </div>
             </div>
@@ -1183,15 +1195,15 @@ async function loadTabContent() {
               <label class="text-xs font-semibold text-slate-600">Должность</label>
               <div class="flex items-center gap-1">
                 <select id="uPos" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select>
-                <button type="button" onclick="quickAddDictionaryValue('positions', 'uPos')" title="Добавить новую должность в список" class="shrink-0 px-2 py-2 border rounded text-sm font-bold text-slate-500 hover:text-blue-600">+</button>
+                <button type="button" onclick="quickAddDictionaryValue('positions', 'uPos')" title="Добавить новую должность в список" class="dict-add-btn shrink-0 px-2 py-2 border rounded text-sm font-bold text-slate-500 hover:text-blue-600">+</button>
               </div>
               <p class="text-[11px] text-slate-400 mt-1">Список отделов и должностей ведётся во вкладке «Настройки» — так одна и та же должность у всех сотрудников пишется одинаково.</p>
             </div>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div data-staff-only class="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div><label class="text-xs font-semibold text-slate-600">Логин (табельный номер)</label><input id="uLogin" placeholder="Можно назначить позже" class="w-full border p-2 rounded text-sm"></div>
               <div><label class="text-xs font-semibold text-slate-600">Пароль</label><input type="password" id="uPass" placeholder="Не менять" class="w-full border p-2 rounded text-sm"></div>
             </div>
-            <div>
+            <div data-staff-only>
               <label class="text-xs font-semibold text-slate-600">№ сертификата (уникальный номер сотрудника)</label>
               <input id="uCertNumber" placeholder="Например, 0125" class="w-full border p-2 rounded text-sm">
               <p class="text-[11px] text-slate-400 mt-1">Можно исправить вручную в любой момент — история пройденных тестов сотрудника при этом не меняется.</p>
@@ -1206,7 +1218,7 @@ async function loadTabContent() {
               <input id="uIin" inputmode="numeric" maxlength="12" placeholder="12 цифр" class="w-full border p-2 rounded text-sm">
               <p class="text-[11px] text-slate-400 mt-1">Необязательно. Ровно 12 цифр. В Word/PDF протокол не выводится.</p>
             </div>
-            <p class="text-xs text-slate-400 -mt-1">Логин и пароль можно не указывать сейчас, а добавить позже — просто откройте карточку сотрудника ещё раз и нажмите «Изменить». При указании логина обязательно укажите и пароль.</p>
+            <p data-staff-only class="text-xs text-slate-400 -mt-1">Логин и пароль можно не указывать сейчас, а добавить позже — просто откройте карточку сотрудника ещё раз и нажмите «Изменить». При указании логина обязательно укажите и пароль.</p>
             <div id="roleFieldWrapper">
               <label class="text-xs font-semibold text-slate-600">Роль</label>
               <select id="uRole" onchange="onUserRoleFieldChange()" class="w-full border p-2 rounded text-sm">
@@ -1229,7 +1241,7 @@ async function loadTabContent() {
                 </div>
               </div>
             </div>
-            <div>
+            <div data-staff-only>
               <label class="text-xs font-semibold text-slate-600">Роль в комиссии</label>
               <select id="uCommitteeRole" class="w-full border p-2 rounded text-sm">
                 <option value="">— нет —</option>
@@ -1753,6 +1765,11 @@ async function loadTabContent() {
       </div>
     `;
     loadMyCertificate();
+  }
+
+  if (state.tab === 'audit') {
+    renderAuditTab(container);
+    return;
   }
 
   if (state.tab === 'settings') {
@@ -2743,6 +2760,186 @@ function toggleBulkSelectAll(checked) {
 // (после добавления/импорта/удаления могли появиться новые объекты и отделы).
 function populateUsersMetaFilters() { refreshOrgMeta(); }
 
+// ===================== ЖУРНАЛ ДЕЙСТВИЙ (только суперадмин) =====================
+// Кто из администраторов / ассистентов, что и когда сделал: добавил сотрудника, назначил курс,
+// изменил карточку, уволил и т.д. Данные — GET /api/audit (routes/audit.js).
+const AUDIT_PAGE = 50;
+const AUDIT_ACTION_LABELS = {
+  user_created: ['➕', 'Добавил пользователя'],
+  user_updated: ['✏️', 'Изменил данные'],
+  user_deleted: ['🗑', 'Удалил пользователя'],
+  employment_status_changed: ['📁', 'Изменил кадровый статус'],
+  users_imported: ['📥', 'Импорт сотрудников из Excel'],
+  course_assigned: ['📚', 'Назначил курс'],
+  course_assigned_bulk: ['📚', 'Назначил курс группе'],
+  retake_allowed: ['↻', 'Разрешил пересдачу'],
+  assignment_deleted: ['🗑', 'Удалил назначение']
+};
+const AUDIT_FIELD_LABELS = {
+  last_name: 'Фамилия', first_name: 'Имя', object: 'Объект', department: 'Отдел', position: 'Должность',
+  tco_badge: '№ пропуска ТШО', permanent_certificate_number: '№ сертификата', login: 'Логин',
+  committee_role: 'Роль в комиссии', role: 'Роль', iin: 'ИИН', password: 'Пароль', active: 'Доступ', zone: 'Зона ассистента'
+};
+
+function auditActionLabel(row) {
+  const d = row.details || {};
+  if (row.action === 'user_created' && d.role === 'assistant') return ['➕', 'Добавил ассистента'];
+  if (row.action === 'user_created' && d.role === 'admin') return ['➕', 'Добавил администратора'];
+  if (row.action === 'user_created') return ['➕', 'Добавил сотрудника'];
+  if (row.action === 'user_deleted' && d.role === 'employee') return ['🗑', 'Удалил сотрудника'];
+  return AUDIT_ACTION_LABELS[row.action] || ['•', row.action];
+}
+
+function auditDetailsHtml(row) {
+  const d = row.details || {};
+  const statusLbl = { active: 'вернул в штат', fired: 'уволен', maternity: 'в декрете' };
+  const parts = [];
+  switch (row.action) {
+    case 'user_created':
+      parts.push([d.object, d.department, d.position].filter(Boolean).map(esc).join(' / ') || '');
+      break;
+    case 'user_updated':
+      Object.entries(d.changed || {}).forEach(([k, v]) => {
+        const lbl = AUDIT_FIELD_LABELS[k] || k;
+        if (v && v.changed) parts.push(`${esc(lbl)}: изменён`);
+        else if (v && 'from' in v) parts.push(`${esc(lbl)}: <span class="text-slate-400 line-through">${esc(v.from === '' ? '—' : v.from)}</span> → <b>${esc(v.to === '' ? '—' : v.to)}</b>`);
+      });
+      break;
+    case 'employment_status_changed':
+      parts.push(esc(statusLbl[d.status] || d.status || '') + (d.date ? ' · ' + esc(fmtDate(d.date)) : ''));
+      break;
+    case 'users_imported':
+      parts.push(`создано: ${esc(d.created)}, пропущено: ${esc(d.skipped)}, обучение внесено: ${esc(d.historyCreated)}${d.errors ? ', ошибок: ' + esc(d.errors) : ''}`);
+      break;
+    case 'course_assigned':
+    case 'retake_allowed':
+    case 'assignment_deleted':
+      parts.push(`курс: <b>${esc(d.course || '—')}</b>` + (d.protocol_number ? ` · протокол № ${esc(d.protocol_number)}` : '') + (d.historical ? ' · историческая запись' : ''));
+      break;
+    case 'course_assigned_bulk': {
+      const list = Array.isArray(d.employees) ? d.employees : [];
+      const more = (d.employees_total || 0) - list.length;
+      parts.push(`сотрудников: <b>${esc(d.created)}</b>` + (d.skipped ? ` (пропущено ${esc(d.skipped)})` : '') + (d.protocol_number ? ` · протокол № ${esc(d.protocol_number)}` : ''));
+      if (list.length) parts.push(`<span class="text-slate-500">${esc(list.join(', '))}${more > 0 ? ' и ещё ' + more : ''}</span>`);
+      break;
+    }
+  }
+  return parts.filter(Boolean).join('<br>') || '<span class="text-slate-300">—</span>';
+}
+
+function auditRowHtml(r) {
+  const [icon, label] = auditActionLabel(r);
+  const roleBadge = r.actor_role === 'assistant' ? 'bg-amber-100 text-amber-800' : r.actor_role === 'superadmin' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700';
+  const roleTxt = t('role_' + r.actor_role) || r.actor_role;
+  // Для «назначил курс» / «изменил» объект — сотрудник; для группового назначения — название курса
+  const objLbl = r.entity_type === 'course' ? 'Курс' : '';
+  return `<tr class="align-top hover:bg-slate-50">
+    <td class="px-4 py-3 whitespace-nowrap text-xs text-slate-600">${esc(fmtDateTime(r.created_at))}</td>
+    <td class="px-4 py-3"><div class="font-medium text-slate-900">${esc(r.actor_name || '—')}</div><span class="text-[11px] font-semibold px-1.5 py-0.5 rounded ${roleBadge}">${esc(roleTxt)}</span></td>
+    <td class="px-4 py-3 whitespace-nowrap">${icon} ${esc(label)}</td>
+    <td class="px-4 py-3">${objLbl ? `<span class="text-[11px] text-slate-400">${objLbl}: </span>` : ''}${esc(r.entity_name || '—')}</td>
+    <td class="px-4 py-3 text-xs text-slate-700">${auditDetailsHtml(r)}</td>
+  </tr>`;
+}
+
+async function renderAuditTab(container) {
+  const f = state.auditFilter;
+  const actionOpts = Object.entries(AUDIT_ACTION_LABELS).map(([k, v]) => `<option value="${k}" ${f.action === k ? 'selected' : ''}>${v[0]} ${esc(v[1])}</option>`).join('');
+  container.innerHTML = `
+    <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+      <div class="flex flex-wrap justify-between items-center gap-3 mb-2">
+        <h2 class="text-lg font-bold text-slate-900">📜 ${_L('Журнал действий', 'Әрекеттер журналы')}</h2>
+        <span id="auditCount" class="text-xs text-slate-500"></span>
+      </div>
+      <p class="text-xs text-slate-500 mb-4">${_L('Кто из администраторов и ассистентов, что и когда сделал: добавил сотрудника, назначил курс, изменил данные и т.д. Записи хранятся даже после удаления учётной записи исполнителя.', 'Қай әкімші немесе ассистент, не және қашан істегенін көрсетеді.')}</p>
+      <div class="flex flex-wrap items-end gap-2 mb-4">
+        <div><label class="block text-[11px] font-semibold text-slate-500 mb-0.5">${_L('Кто', 'Кім')}</label>
+          <select id="auditActor" onchange="onAuditFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm min-w-[180px]"><option value="">${_L('Все', 'Барлығы')}</option></select></div>
+        <div><label class="block text-[11px] font-semibold text-slate-500 mb-0.5">${_L('Действие', 'Әрекет')}</label>
+          <select id="auditAction" onchange="onAuditFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm"><option value="">${_L('Все', 'Барлығы')}</option>${actionOpts}</select></div>
+        <div><label class="block text-[11px] font-semibold text-slate-500 mb-0.5">${_L('С', 'Бастап')}</label>
+          <input type="date" id="auditFrom" value="${esc(f.date_from)}" onchange="onAuditFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm"></div>
+        <div><label class="block text-[11px] font-semibold text-slate-500 mb-0.5">${_L('По', 'Дейін')}</label>
+          <input type="date" id="auditTo" value="${esc(f.date_to)}" onchange="onAuditFilterChange()" class="border border-slate-300 rounded-lg px-3 py-2 text-sm"></div>
+        <div class="flex-1 min-w-[180px]"><label class="block text-[11px] font-semibold text-slate-500 mb-0.5">${_L('Поиск', 'Іздеу')}</label>
+          <input id="auditQ" value="${esc(f.q)}" oninput="onAuditFilterChange(true)" placeholder="${_L('ФИО сотрудника, курс, № протокола…', 'Қызметкер аты, курс…')}" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"></div>
+        <button onclick="resetAuditFilter()" class="px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-600 hover:bg-slate-50">${_L('Сбросить', 'Тазалау')}</button>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+          <thead class="bg-slate-50"><tr>
+            <th class="px-4 py-3 text-left font-semibold text-slate-600">${_L('Когда', 'Қашан')}</th>
+            <th class="px-4 py-3 text-left font-semibold text-slate-600">${_L('Кто', 'Кім')}</th>
+            <th class="px-4 py-3 text-left font-semibold text-slate-600">${_L('Действие', 'Әрекет')}</th>
+            <th class="px-4 py-3 text-left font-semibold text-slate-600">${_L('Кому / что', 'Кімге / не')}</th>
+            <th class="px-4 py-3 text-left font-semibold text-slate-600">${_L('Подробности', 'Толығырақ')}</th>
+          </tr></thead>
+          <tbody id="auditTable" class="divide-y divide-slate-100"><tr><td colspan="5" class="p-4 text-center text-slate-400">${t('loading')}</td></tr></tbody>
+        </table>
+      </div>
+      <div class="text-center mt-4"><button id="auditMoreBtn" onclick="loadAudit(true)" class="hidden px-4 py-2 border border-slate-300 rounded-lg text-sm font-semibold text-slate-700 hover:bg-slate-50">${_L('Показать ещё', 'Тағы көрсету')}</button></div>
+    </div>`;
+  // Список исполнителей для фильтра «Кто»
+  try {
+    const actors = await api.getAuditActors();
+    const sel = document.getElementById('auditActor');
+    if (sel) {
+      sel.innerHTML = `<option value="">${_L('Все', 'Барлығы')}</option>` + actors.map(a =>
+        `<option value="${a.id}" ${String(f.actor_id) === String(a.id) ? 'selected' : ''}>${esc(a.name || ('#' + a.id))} (${esc(t('role_' + a.role) || a.role)})</option>`).join('');
+    }
+  } catch (e) { /* фильтр «Кто» просто останется без списка */ }
+  loadAudit(false);
+}
+
+let auditDebounce = null;
+function onAuditFilterChange(debounced) {
+  const apply = () => {
+    const g = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+    state.auditFilter = { actor_id: g('auditActor'), action: g('auditAction'), date_from: g('auditFrom'), date_to: g('auditTo'), q: g('auditQ').trim() };
+    loadAudit(false);
+  };
+  clearTimeout(auditDebounce);
+  if (debounced) auditDebounce = setTimeout(apply, 350); else apply();
+}
+function resetAuditFilter() {
+  state.auditFilter = { actor_id: '', action: '', date_from: '', date_to: '', q: '' };
+  const c = document.getElementById('tabContent');
+  if (c) renderAuditTab(c);
+}
+
+async function loadAudit(append) {
+  const tbody = document.getElementById('auditTable');
+  if (!tbody) return;
+  const f = state.auditFilter;
+  const offset = append ? state.auditRows.length : 0;
+  try {
+    const res = await api.getAudit({ ...f, limit: AUDIT_PAGE, offset });
+    state.auditRows = append ? state.auditRows.concat(res.rows) : res.rows;
+    state.auditTotal = res.total;
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-red-600">${t('error_generic')}${e && e.message ? ': ' + esc(e.message) : ''}</td></tr>`;
+    return;
+  }
+  if (!document.getElementById('auditTable')) return; // пользователь ушёл с вкладки
+  tbody.innerHTML = state.auditRows.length
+    ? state.auditRows.map(auditRowHtml).join('')
+    : `<tr><td colspan="5" class="p-6 text-center text-slate-400">${_L('Записей пока нет', 'Жазбалар әзірге жоқ')}</td></tr>`;
+  const cnt = document.getElementById('auditCount');
+  if (cnt) cnt.textContent = `${_L('Показано', 'Көрсетілген')} ${state.auditRows.length} ${_L('из', '/')} ${state.auditTotal}`;
+  const more = document.getElementById('auditMoreBtn');
+  if (more) more.classList.toggle('hidden', state.auditRows.length >= state.auditTotal);
+}
+
+// Ячейка «Зона доступа» ассистента в списке «Администраторы и ассистенты»
+function assistantZoneCellHtml(u) {
+  const objs = Array.isArray(u.assistant_objects) ? u.assistant_objects : [];
+  const deps = Array.isArray(u.assistant_departments) ? u.assistant_departments : [];
+  if (!objs.length && !deps.length) {
+    return `<span class="text-xs text-red-600 font-semibold">${_L('Зона не выдана — доступа к сотрудникам нет', 'Аймақ берілмеген — қызметкерлерге қолжетімділік жоқ')}</span>`;
+  }
+  return `<div class="text-xs leading-snug"><span class="text-slate-400">${_L('Зона', 'Аймақ')}:</span> ${objs.length ? esc(objs.join(', ')) : _L('все объекты', 'барлық нысандар')}<br><span class="text-slate-400">${_L('Отделы', 'Бөлімдер')}:</span> ${deps.length ? esc(deps.join(', ')) : _L('все отделы', 'барлық бөлімдер')}</div>`;
+}
+
 async function loadUsersList() {
   const tbody = document.getElementById('usersTable');
   let users;
@@ -2751,7 +2948,7 @@ async function loadUsersList() {
     const isArchiveTab = state.tab === 'archive';
     users = await api.getUsers({
       q: state.usersFilter.q,
-      ...(isAdminsTab ? { role: 'admin' } : orgParams()),
+      ...(isAdminsTab ? { role: 'staff' } : orgParams()),
       status: isArchiveTab ? 'archive' : 'active',
       ...(state.usersFilter.positions.length ? { position: state.usersFilter.positions.join(',') } : {}),
       ...(isArchiveTab && state.usersFilter.statuses.length ? { statuses: state.usersFilter.statuses.join(',') } : {})
@@ -2780,16 +2977,16 @@ async function loadUsersList() {
     <tr class="hover:bg-slate-50">
       ${showCheckbox && !isObserver ? `<td class="px-4 py-3"><input type="checkbox" data-uid="${u.id}" ${bulkSelectedUserIds.has(u.id) ? 'checked' : ''} onchange="toggleBulkSelect(${u.id}, this.checked)" class="rounded text-blue-600"></td>` : ''}
       <td class="px-4 py-3 font-medium text-slate-900">
-        ${u.role === 'admin' ? `${esc(u.last_name)} ${esc(u.first_name)}` : `<button onclick="openUserProfile(${u.id})" class="hover:text-blue-600 hover:underline text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>`}
+        ${(u.role === 'admin' || u.role === 'assistant') ? `${esc(u.last_name)} ${esc(u.first_name)}` : `<button onclick="openUserProfile(${u.id})" class="hover:text-blue-600 hover:underline text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>`}
       </td>
       <td class="px-4 py-3 font-mono text-slate-600">${u.login ? esc(u.login) : '<span class="text-slate-400 italic font-sans">не назначен</span>'}</td>
-      <td class="px-4 py-3 text-slate-600">${esc(u.object || '—')} / ${esc(u.department || '—')}</td>
+      <td class="px-4 py-3 text-slate-600">${u.role === 'assistant' ? assistantZoneCellHtml(u) : `${esc(u.object || '—')} / ${esc(u.department || '—')}`}</td>
       <td class="px-4 py-3 text-slate-600">${esc(posLabel(u.position) || '—')}</td>
       ${!isAdminsTab ? `<td class="px-4 py-3 text-xs text-slate-600">${iinCellHtml(u.iin)}</td>` : ''}
       <td class="px-4 py-3">
         ${isArchiveTab
           ? `<span class="text-xs font-semibold px-2 py-0.5 rounded ${u.employment_status === 'fired' ? 'bg-red-100 text-red-700' : 'bg-purple-100 text-purple-700'}">${statusLabel(u.employment_status)}</span>${u.status_date ? `<div class="text-[11px] text-slate-400 mt-0.5">${fmtDate(u.status_date)}</div>` : ''}`
-          : `<span class="text-xs font-semibold px-2 py-0.5 rounded ${u.role === 'superadmin' ? 'bg-purple-100 text-purple-700' : u.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-700'}">${esc(u.role)}</span>`}
+          : `<span class="text-xs font-semibold px-2 py-0.5 rounded ${u.role === 'superadmin' ? 'bg-purple-100 text-purple-700' : u.role === 'admin' ? 'bg-blue-100 text-blue-700' : u.role === 'assistant' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'}">${esc(t('role_' + u.role) || u.role)}</span>`}
       </td>
       <td class="px-4 py-3 text-right space-x-2 whitespace-nowrap">
         ${isObserver ? `
@@ -2919,20 +3116,31 @@ function fillPositionSelect(selectId, positions, current) {
   sel.value = current || '';
 }
 
-async function openUserModal(u = null) {
+async function openUserModal(u = null, presetRole = null) {
   document.getElementById('userId').value = u ? u.id : '';
   document.getElementById('uLastName').value = u ? u.last_name : '';
   document.getElementById('uFirstName').value = u ? u.first_name : '';
   document.getElementById('uObject').value = u ? u.object : '';
   const dict = await loadDictionaries();
-  fillDictionarySelect('uDept', dict.departments, u ? u.department : '');
+  // Ассистент видит и выбирает объекты/отделы только из своей зоны (сервер это тоже проверяет).
+  const asObserver = isObserverUser();
+  const zoneObjs = asObserver ? (state.user.assistant_objects || []) : [];
+  const zoneDeps = asObserver ? (state.user.assistant_departments || []) : [];
+  const deptList = zoneDeps.length ? dict.departments.filter(d => zoneDeps.includes(d)) : dict.departments;
+  fillDictionarySelect('uDept', deptList, u ? u.department : (zoneDeps.length === 1 ? zoneDeps[0] : ''));
   fillPositionSelect('uPos', dict.positions, u ? u.position : '');
+  const objList = zoneObjs.length ? zoneObjs : ((state.meta && state.meta.objects) || []);
+  const objDl = document.getElementById('uObjectList');
+  if (objDl) objDl.innerHTML = objList.map(o => `<option value="${esc(o)}"></option>`).join('');
+  if (!u && zoneObjs.length === 1) document.getElementById('uObject').value = zoneObjs[0];
+  // Поля доступа (логин/пароль, № сертификата, комиссия) и «+» в справочниках — не для ассистента
+  document.querySelectorAll('#userModal [data-staff-only], #userModal .dict-add-btn').forEach(el => el.classList.toggle('hidden', asObserver));
   document.getElementById('uLogin').value = u ? u.login : '';
   document.getElementById('uPass').value = '';
   document.getElementById('uCertNumber').value = u ? (u.permanent_certificate_number || '') : '';
   document.getElementById('uTcoBadge').value = u ? (u.tco_badge || '') : '';
   document.getElementById('uIin').value = u ? (u.iin || '') : '';
-  document.getElementById('uRole').value = u ? u.role : (state.tab === 'admins' ? 'admin' : 'employee');
+  document.getElementById('uRole').value = u ? u.role : (presetRole || (state.tab === 'admins' ? 'admin' : 'employee'));
   const committeeSel = document.getElementById('uCommitteeRole');
   if (committeeSel) committeeSel.value = u ? (u.committee_role || '') : '';
   const roleWrapper = document.getElementById('roleFieldWrapper');
@@ -2945,8 +3153,11 @@ async function openUserModal(u = null) {
   }
   renderAssistantZoneCheckboxes(u ? (u.assistant_objects || []) : [], u ? (u.assistant_departments || []) : []);
   onUserRoleFieldChange();
+  const roleForTitle = u ? u.role : document.getElementById('uRole').value;
   document.getElementById('userModalTitle').textContent = state.tab === 'admins'
-    ? (u ? _L('Редактировать администратора', 'Әкімшіні өзгерту') : _L('Добавить администратора', 'Әкімші қосу'))
+    ? (roleForTitle === 'assistant'
+        ? (u ? _L('Редактировать ассистента', 'Ассистентті өзгерту') : _L('Добавить ассистента', 'Ассистент қосу'))
+        : (u ? _L('Редактировать администратора', 'Әкімшіні өзгерту') : _L('Добавить администратора', 'Әкімші қосу')))
     : (u ? 'Редактировать сотрудника' : 'Добавить сотрудника');
   document.getElementById('userModal').classList.remove('hidden');
 }
@@ -3032,6 +3243,10 @@ async function saveUserForm(e) {
     iin: document.getElementById('uIin') ? document.getElementById('uIin').value.trim() : '',
     committee_role: document.getElementById('uCommitteeRole') ? document.getElementById('uCommitteeRole').value : ''
   };
+  if (isObserverUser()) {
+    // сервер всё равно игнорирует эти поля для ассистента; не шлём, чтобы не затирать значения
+    ['login', 'role', 'permanent_certificate_number', 'committee_role'].forEach(k => delete data[k]);
+  }
   if (data.role === 'assistant') {
     data.assistant_objects = Array.from(document.querySelectorAll('#uAssistantObjects input:checked')).map(el => el.value);
     data.assistant_departments = Array.from(document.querySelectorAll('#uAssistantDepartments input:checked')).map(el => el.value);
@@ -3039,6 +3254,7 @@ async function saveUserForm(e) {
     data.assistant_objects = [];
     data.assistant_departments = [];
   }
+  if (isObserverUser()) { delete data.assistant_objects; delete data.assistant_departments; }
   const pass = document.getElementById('uPass').value;
   if (pass) data.password = pass;
   if (data.login && !pass && !id) {
@@ -3058,7 +3274,9 @@ async function saveUserForm(e) {
       forbidden_role: 'Недостаточно прав для назначения этой роли',
       forbidden: 'Недостаточно прав',
       invalid_committee_role: 'Недопустимая роль в комиссии',
-      invalid_iin: 'ИИН должен состоять ровно из 12 цифр'
+      invalid_iin: 'ИИН должен состоять ровно из 12 цифр',
+      out_of_zone: 'Этот объект/отдел вне вашей зоны доступа',
+      duplicate_employee: 'Сотрудник с таким ФИО уже есть в системе'
     };
     alert('Не удалось сохранить сотрудника: ' + (map[err.message] || err.message || 'ошибка сервера'));
     if (btn) btn.disabled = false;
@@ -4849,6 +5067,12 @@ async function editAssistantFields(id) {
   document.getElementById('aeIin').value = u.iin || '';
   const dict = await loadDictionaries();
   fillPositionSelect('aePos', dict.positions, u.position || '');
+  const zoneObjs = state.user.assistant_objects || [];
+  const zoneDeps = state.user.assistant_departments || [];
+  document.getElementById('aeObject').value = u.object || '';
+  const aeDl = document.getElementById('aeObjectList');
+  if (aeDl) aeDl.innerHTML = zoneObjs.map(o => `<option value="${esc(o)}"></option>`).join('');
+  fillDictionarySelect('aeDept', zoneDeps.length ? dict.departments.filter(d => zoneDeps.includes(d)) : dict.departments, u.department || '');
   document.getElementById('assistantEditModal').classList.remove('hidden');
 }
 
@@ -4858,6 +5082,8 @@ async function submitAssistantFieldsForm(e) {
   const data = {
     last_name: document.getElementById('aeLastName').value.trim(),
     first_name: document.getElementById('aeFirstName').value.trim(),
+    object: document.getElementById('aeObject').value.trim(),
+    department: document.getElementById('aeDept').value.trim(),
     position: document.getElementById('aePos').value.trim(),
     tco_badge: document.getElementById('aeTcoBadge').value.trim(),
     iin: document.getElementById('aeIin').value.trim()
@@ -4869,7 +5095,7 @@ async function submitAssistantFieldsForm(e) {
     document.getElementById('assistantEditModal').classList.add('hidden');
     loadUserProfile(id);
   } catch (err) {
-    alert('Не удалось сохранить: ' + (err.message === 'invalid_iin' ? 'ИИН должен состоять ровно из 12 цифр' : (err.message || 'ошибка сервера')));
+    alert('Не удалось сохранить: ' + (err.message === 'invalid_iin' ? 'ИИН должен состоять ровно из 12 цифр' : err.message === 'out_of_zone' ? 'Этот объект/отдел вне вашей зоны доступа' : err.message === 'duplicate_employee' ? 'Сотрудник с таким ФИО уже есть' : (err.message || 'ошибка сервера')));
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -4898,9 +5124,11 @@ async function loadUserProfile(userId) {
           </div>
           <div class="flex flex-wrap gap-2 justify-end">
             ${isObserverUser() ? `
+              ${user.role === 'employee' && user.public_uid ? `<a href="/p/${encodeURIComponent(user.public_uid)}" target="_blank" rel="noopener" class="px-4 py-2 border border-indigo-300 text-indigo-700 rounded-lg text-sm font-semibold hover:bg-indigo-50">🪪 ${_L('Единое удостоверение', 'Бірыңғай куәлік')}</a>` : ''}
               <button onclick="editAssistantFields(${user.id})" class="px-4 py-2 border rounded-lg text-sm font-semibold hover:bg-slate-50">${t('edit')}</button>
               ${user.role === 'employee' ? `<a href="#" onclick="exportUserJournal(${user.id}, '${jsAttrEsc((user.last_name || '') + '_' + (user.first_name || ''))}');return false;" title="${_L('Выгрузка обучения этого сотрудника', 'Осы қызметкердің оқуын жүктеу')}" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold">📥 ${t('download_report')}</a>` : ''}
             ` : `
+              ${user.role === 'employee' && user.public_uid ? `<a href="/p/${encodeURIComponent(user.public_uid)}" target="_blank" rel="noopener" class="px-4 py-2 border border-indigo-300 text-indigo-700 rounded-lg text-sm font-semibold hover:bg-indigo-50">🪪 ${_L('Единое удостоверение', 'Бірыңғай куәлік')}</a>` : ''}
               <button onclick="openAssignModal(${user.id})" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold">+ Назначить курс</button>
               <button onclick="editUserFromProfile(${user.id})" class="px-4 py-2 border rounded-lg text-sm font-semibold hover:bg-slate-50">${t('edit')}</button>
               <a href="#" onclick="exportUserJournal(${user.id}, '${jsAttrEsc((user.last_name || '') + '_' + (user.first_name || ''))}');return false;" title="${_L('Выгрузка обучения этого сотрудника', 'Осы қызметкердің оқуын жүктеу')}" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold">📥 ${t('download_report')}</a>
@@ -4921,6 +5149,10 @@ async function loadUserProfile(userId) {
             <input type="hidden" id="aeUserId">
             <div><label class="text-xs font-semibold text-slate-600">Фамилия</label><input id="aeLastName" required class="w-full border p-2 rounded text-sm"></div>
             <div><label class="text-xs font-semibold text-slate-600">Имя</label><input id="aeFirstName" required class="w-full border p-2 rounded text-sm"></div>
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="text-xs font-semibold text-slate-600">Объект</label><input id="aeObject" list="aeObjectList" class="w-full border p-2 rounded text-sm"><datalist id="aeObjectList"></datalist></div>
+              <div><label class="text-xs font-semibold text-slate-600">Отдел</label><select id="aeDept" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select></div>
+            </div>
             <div>
               <label class="text-xs font-semibold text-slate-600">Должность</label>
               <select id="aePos" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select>
