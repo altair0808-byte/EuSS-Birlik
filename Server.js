@@ -40,6 +40,8 @@ app.use('/api/assignments', require('./routes/assignments'));
 // Массовое обновление через Excel: выгрузка сотрудников -> новое обучение -> загрузка обратно
 app.use('/api/bulk-training', require('./routes/bulkTraining'));
 app.use('/api/protocols', require('./routes/protocols'));
+// Курсы по должностям: привязка курсов к должностям, Excel-матрица, автозапись
+app.use('/api/course-positions', require('./routes/coursePositions'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/export', require('./routes/export'));
 app.use('/api/certificates', require('./routes/certificate'));

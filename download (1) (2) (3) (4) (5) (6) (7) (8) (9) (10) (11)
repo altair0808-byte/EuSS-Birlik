@@ -1,0 +1,4 @@
+PORT=3000
+JWT_SECRET=change_this_secret_in_production_please
+SUPERADMIN_LOGIN=8888
+SUPERADMIN_PASSWORD=88885555

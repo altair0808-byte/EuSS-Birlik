@@ -539,6 +539,21 @@ async function initDb() {
     ALTER TABLE settings ADD COLUMN IF NOT EXISTS tagline_en TEXT DEFAULT 'SAFE WORK – SUSTAINABLE FUTURE';
   `);
 
+  // Курсы по должностям: какие курсы обязательны для «Объект → Отдел → Должность»
+  // (routes/coursePositions.js, lib/positionCourses.js). key — нормализованная тройка.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS course_positions (
+      id BIGSERIAL PRIMARY KEY,
+      course_id BIGINT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+      object TEXT NOT NULL DEFAULT '',
+      department TEXT NOT NULL DEFAULT '',
+      position TEXT NOT NULL DEFAULT '',
+      key TEXT NOT NULL,
+      UNIQUE (course_id, key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_course_positions_key ON course_positions(key);
+  `);
+
   // Цвет удостоверения по виду обучения: у каждого курса свой (см. lib/cardColors.js).
   await pool.query(`ALTER TABLE courses ADD COLUMN IF NOT EXISTS card_color TEXT;`);
 
