@@ -6,6 +6,7 @@ const XLSX = require('xlsx'); // для ЧТЕНИЯ загружаемых фа
                                // к файлам, созданным не Microsoft Excel (LibreOffice, Google
                                // Таблицы, openpyxl/Python-выгрузки из 1С и т.п.). Бланк для
                                // скачивания по-прежнему генерируется через ExcelJS ниже.
+const { enrollNewUser } = require('../lib/positionCourses');
 const { query, pool, restoreExpiredLeaves } = require('../db');
 const { authRequired, requireRole } = require('./auth');
 const { makeUploader } = require('../upload');
@@ -267,6 +268,7 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
           );
           userId = userResult.rows[0].id;
           created++;
+          await enrollNewUser(userId, req.user.id);
         }
 
         // Если в строке указан курс — параллельно заносим уже пройденное ранее
@@ -691,6 +693,7 @@ router.post('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), 
       entityType: 'user', entityId: result.rows[0].id, entityName: `${last_name} ${first_name}`.trim(),
       details: { role: targetRole, object: object || '', department: department || '', position: position || '' }
     });
+    if (targetRole === 'employee') await enrollNewUser(result.rows[0].id, req.user.id);
     res.json({ id: result.rows[0].id });
   } catch (e) {
     console.error('Error creating user:', e);
