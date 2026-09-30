@@ -48,6 +48,8 @@ app.use('/api/public', require('./routes/public'));
 app.use('/api/signatures', require('./routes/signatures'));
 // Журнал действий администраторов/ассистентов (только суперадмин)
 app.use('/api/audit', require('./routes/audit'));
+// Запасное хранилище в Google Drive: статус, «Выгрузить всё» (только суперадмин)
+app.use('/api/drive', require('./routes/drive'));
 
 // Публичная страница проверки подлинности удостоверения (QR-код на удостоверении
 // ведёт сюда) — отдельная лёгкая статическая страница, без авторизации и без
@@ -77,6 +79,8 @@ initDb()
   .then(() => {
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`✅ TB Training Platform запущен на порту ${PORT} (база данных Supabase)`);
+      // Фоновая отправка файлов в Google Drive (если заданы GDRIVE_*); сайт от неё не зависит
+      try { require('./driveSync').startWorker(); } catch (e) { console.error('[drive] не удалось запустить воркер:', e.message); }
     });
   })
   .catch(err => {

@@ -1908,9 +1908,82 @@ async function loadTabContent() {
           </div>
         </div>
       </div>
+      ${isSuperadmin ? `
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-w-xl mt-6">
+        <h2 class="text-lg font-bold text-slate-900 mb-1">Запасное хранилище (Google Drive)</h2>
+        <p class="text-xs text-slate-500 mb-3">Подписанные протоколы (PDF и Word) и удостоверения сотрудников автоматически копируются в Google Drive. Если облако недоступно, сайт работает как обычно, а файлы отправляются позже.</p>
+        <div id="driveStatusBox" class="text-sm text-slate-500 mb-3">Загрузка…</div>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" id="driveExportBtn" onclick="driveExportAll()" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Выгрузить всё, что уже есть</button>
+          <button type="button" onclick="driveCheckAccess()" class="px-4 py-2 border rounded-lg text-sm font-semibold">Проверить подключение</button>
+          <button type="button" id="driveRetryBtn" onclick="driveRetryFailed()" class="px-4 py-2 border rounded-lg text-sm font-semibold hidden">Повторить неудавшиеся</button>
+        </div>
+        <div id="driveActionMsg" class="text-xs mt-2"></div>
+      </div>` : ''}
     `;
     loadSettingsData();
     renderDictionariesSettings();
+    if (isSuperadmin) loadDriveStatus();
+  }
+}
+
+// --- Запасное хранилище в Google Drive (вкладка «Настройки», только суперадмин) ---
+function driveMsg(text, ok) {
+  const el = document.getElementById('driveActionMsg');
+  if (el) { el.className = 'text-xs mt-2 ' + (ok ? 'text-emerald-700' : 'text-red-600'); el.textContent = text; }
+}
+async function loadDriveStatus() {
+  const box = document.getElementById('driveStatusBox');
+  if (!box) return;
+  try {
+    const st = await api.req('/api/drive/status');
+    if (!st.configured) {
+      box.innerHTML = '<span class="text-amber-700">Не настроено: на сервере не заданы переменные GDRIVE_* (см. env.example). Пока они не заданы, сайт работает без облачной копии.</span>';
+      const b = document.getElementById('driveExportBtn'); if (b) b.disabled = true;
+      return;
+    }
+    const c = st.counts;
+    let html = `Отправлено файлов: <b>${c.done}</b> · В очереди: <b>${c.pending}</b>` +
+      (st.waiting_for_signature ? ` (из них ждут подписи председателя: ${st.waiting_for_signature})` : '') +
+      ` · С ошибкой: <b class="${c.failed ? 'text-red-600' : ''}">${c.failed}</b>`;
+    if (st.problems && st.problems.length) {
+      html += '<ul class="mt-2 space-y-1 text-xs text-red-600">' +
+        st.problems.slice(0, 5).map(p => `<li>#${p.id} (${esc(p.kind)}, попыток: ${p.attempts}): ${esc(p.last_error || '')}</li>`).join('') + '</ul>';
+    }
+    box.innerHTML = html;
+    const rb = document.getElementById('driveRetryBtn'); if (rb) rb.classList.toggle('hidden', !c.failed);
+  } catch (e) {
+    box.textContent = 'Не удалось получить статус: ' + e.message;
+  }
+}
+async function driveExportAll() {
+  if (!confirm('Поставить в очередь все подписанные протоколы и все удостоверения, которых ещё нет в Google Drive? Уже отправленное повторно не загружается. Отправка идёт в фоне и может занять время.')) return;
+  const btn = document.getElementById('driveExportBtn'); if (btn) btn.disabled = true;
+  try {
+    const r = await api.req('/api/drive/export-all', { method: 'POST', body: {} });
+    driveMsg(`Принято в очередь: подписанных протоколов — ${r.protocols}, удостоверений — ${r.id_cards}. Новых задач: ${r.queued}. Обновите статус через минуту.`, true);
+    setTimeout(loadDriveStatus, 3000);
+  } catch (e) {
+    driveMsg('Не удалось запустить выгрузку: ' + e.message, false);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+async function driveCheckAccess() {
+  try {
+    const r = await api.req('/api/drive/check', { method: 'POST', body: {} });
+    driveMsg(`Подключение работает. Корневая папка: «${r.name}»${r.sharedDrive ? ' (Общий диск)' : ''}.`, true);
+  } catch (e) {
+    driveMsg('Нет доступа к Google Drive: ' + e.message, false);
+  }
+}
+async function driveRetryFailed() {
+  try {
+    const r = await api.req('/api/drive/retry', { method: 'POST', body: {} });
+    driveMsg(`Возвращено в очередь: ${r.requeued}.`, true);
+    setTimeout(loadDriveStatus, 2000);
+  } catch (e) {
+    driveMsg('Не удалось: ' + e.message, false);
   }
 }
 

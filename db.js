@@ -472,6 +472,31 @@ async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_id_cards_uid ON id_cards(card_uid);
   `);
 
+  // ОЧЕРЕДЬ ВЫГРУЗКИ В GOOGLE DRIVE (запасное хранилище, см. driveSync.js). Событие на сайте только
+  // добавляет сюда строку; отправляет фоновый воркер, при недоступности облака — повторяет.
+  // Без внешних ключей: удаление протокола/назначения не должно блокироваться очередью.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS drive_outbox (
+      id BIGSERIAL PRIMARY KEY,
+      dedupe_key TEXT NOT NULL UNIQUE,
+      kind TEXT NOT NULL CHECK (kind IN ('protocol_pdf','protocol_docx','id_card')),
+      protocol_id BIGINT,
+      assignment_id BIGINT,
+      base_url TEXT,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','done','failed','skipped')),
+      attempts INT NOT NULL DEFAULT 0,
+      next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_error TEXT,
+      drive_file_id TEXT,
+      drive_path TEXT,
+      uploaded_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_drive_outbox_due ON drive_outbox(status, next_attempt_at);
+    CREATE INDEX IF NOT EXISTS idx_drive_outbox_protocol ON drive_outbox(protocol_id);
+  `);
+
   // ===================== Единое удостоверение сотрудника =====================
   // Один бланк на сотрудника со списком всех его курсов и ОДНИМ постоянным QR на
   // /p/<public_uid>. public_uid не зависит ни от логина, ни от курсов и не меняется.
