@@ -122,6 +122,12 @@ async function isExternalCourse(courseId) {
   const r = await query('SELECT is_external FROM courses WHERE id = $1', [courseId]);
   return !!(r.rows[0] && r.rows[0].is_external);
 }
+// Курс «без протокола» (courses.course_kind = 'no_protocol'): номер протокола не нужен совсем.
+async function isNoProtocolCourse(courseId) {
+  if (courseId === undefined || courseId === null || courseId === '') return false;
+  const r = await query('SELECT course_kind FROM courses WHERE id = $1', [courseId]);
+  return !!(r.rows[0] && r.rows[0].course_kind === 'no_protocol');
+}
 
 // Заполняет недостающие исторические поля (дату следующего прохождения, номер
 // сертификата), когда админ вносит уже пройденное ранее (до внедрения системы)
@@ -171,14 +177,16 @@ async function auditNames(userId, courseId) {
 router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   let { user_id, course_id, protocol_number, protocol_date, historical, test_date, next_test_date, certificate_number, score_percent } = req.body;
   let external = false;
-  try { external = await isExternalCourse(course_id); } catch (e) { external = false; }
+  let noProtocol = false;
+  try { external = await isExternalCourse(course_id); noProtocol = external && await isNoProtocolCourse(course_id); } catch (e) { external = false; }
   if (external) {
-    // Внешний курс: всегда «уже пройденное» обучение, дата протокола не нужна (берём дату прохождения)
+    // Внешний курс / курс без протокола: всегда «уже пройденное» обучение, дата протокола не нужна (берём дату прохождения)
     historical = true;
     certificate_number = undefined;
     if (test_date) protocol_date = String(test_date).slice(0, 10);
+    if (noProtocol) protocol_number = '';
   }
-  if (!user_id || !course_id || !protocol_number || !protocol_date) {
+  if (!user_id || !course_id || (!protocol_number && !external) || !protocol_date) {
     return res.status(400).json({ error: 'missing_fields' });
   }
   if (historical && !test_date) {
@@ -202,10 +210,10 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
       if (!external) {
         try { await ensureCertificateForAssignment(result.rows[0].id); }
         catch (e) { console.error('Не удалось создать сертификат (историческая запись)', result.rows[0].id, e.message); }
+        try { await ensureIdCardForAssignment(result.rows[0].id); }
+        catch (e) { console.error('Не удалось создать удостоверение (историческая запись)', result.rows[0].id, e.message); }
+        driveSync.enqueueIdCard(result.rows[0].id, req);
       }
-      try { await ensureIdCardForAssignment(result.rows[0].id); }
-      catch (e) { console.error('Не удалось создать удостоверение (историческая запись)', result.rows[0].id, e.message); }
-      driveSync.enqueueIdCard(result.rows[0].id, req);
       const nm = await auditNames(user_id, course_id);
       await logAction(req, 'course_assigned', {
         entityType: 'user', entityId: user_id, entityName: nm.userName,
@@ -237,14 +245,16 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
 router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   let { user_ids, course_id, protocol_number, protocol_date, historical, test_date, next_test_date, score_percent } = req.body;
   let external = false;
-  try { external = await isExternalCourse(course_id); } catch (e) { external = false; }
+  let noProtocol = false;
+  try { external = await isExternalCourse(course_id); noProtocol = external && await isNoProtocolCourse(course_id); } catch (e) { external = false; }
   if (external) {
-    // Внешний курс: всегда «уже пройденное» обучение, дата протокола не нужна (берём дату прохождения)
+    // Внешний курс / курс без протокола: всегда «уже пройденное» обучение, дата протокола не нужна (берём дату прохождения)
     historical = true;
     if (test_date) protocol_date = String(test_date).slice(0, 10);
+    if (noProtocol) protocol_number = '';
   }
 
-  if (!Array.isArray(user_ids) || user_ids.length === 0 || !course_id || !protocol_number || !protocol_date) {
+  if (!Array.isArray(user_ids) || user_ids.length === 0 || !course_id || (!protocol_number && !external) || !protocol_date) {
     return res.status(400).json({ error: 'missing_fields' });
   }
   if (historical && !test_date) {
@@ -301,10 +311,10 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (re
       if (!external) {
         try { await ensureCertificateForAssignment(assignmentId); }
         catch (e) { console.error('Не удалось создать сертификат (массовая историческая запись)', assignmentId, e.message); }
+        try { await ensureIdCardForAssignment(assignmentId); }
+        catch (e) { console.error('Не удалось создать удостоверение (массовая историческая запись)', assignmentId, e.message); }
+        driveSync.enqueueIdCard(assignmentId, req);
       }
-      try { await ensureIdCardForAssignment(assignmentId); }
-      catch (e) { console.error('Не удалось создать удостоверение (массовая историческая запись)', assignmentId, e.message); }
-      driveSync.enqueueIdCard(assignmentId, req);
     }
 
     try {

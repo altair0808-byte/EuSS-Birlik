@@ -548,8 +548,18 @@ router.post('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), 
     for (const f of ['login', 'password', 'role', 'permanent_certificate_number', 'committee_role', 'assistant_objects', 'assistant_departments']) {
       delete req.body[f];
     }
-    const o = String(req.body.object || '').trim();
-    const d = String(req.body.department || '').trim();
+    let o = String(req.body.object || '').trim();
+    let d = String(req.body.department || '').trim();
+    const zObjs = Array.isArray(req.user.assistant_objects) ? req.user.assistant_objects : [];
+    const zDeps = Array.isArray(req.user.assistant_departments) ? req.user.assistant_departments : [];
+    // Если зона однозначна (один объект / один отдел) — подставляем сами; если зона ограничивает поле, а оно
+    // пустое, говорим об этом прямо, а не «вне зоны» (пустое значение в зону не входит).
+    if (!o && zObjs.length === 1) o = zObjs[0];
+    if (!d && zDeps.length === 1) d = zDeps[0];
+    if (zObjs.length && !o) return res.status(400).json({ error: 'zone_required', message: 'Выберите объект из вашей зоны доступа' });
+    if (zDeps.length && !d) return res.status(400).json({ error: 'zone_required', message: 'Выберите отдел из вашей зоны доступа' });
+    req.body.object = o;
+    req.body.department = d;
     if (!valueInAssistantZone(req.user, o, d)) {
       return res.status(403).json({ error: 'out_of_zone', message: 'Объект/отдел вне вашей зоны доступа' });
     }

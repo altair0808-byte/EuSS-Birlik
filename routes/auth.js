@@ -14,9 +14,28 @@ function authRequired(req, res, next) {
   const token = authHeader && authHeader.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'unauthorized', message: 'Токен отсутствует' });
 
-  jwt.verify(token, JWT_SECRET, (err, user) => {
+  jwt.verify(token, JWT_SECRET, async (err, user) => {
     if (err) return res.status(403).json({ error: 'forbidden', message: 'Недействительный токен' });
     req.user = user;
+    // Зона доступа ассистента лежит в токене (живёт 12 ч). Если суперадмин изменил зону, отключил учётную запись или
+    // сменил роль — токен об этом не знает, и ассистент видел бы старую зону / получал «вне зоны» до повторного входа.
+    // Поэтому для ассистента зону и статус берём из БД на каждый запрос (для остальных ролей ничего не меняется).
+    if (user && user.role === 'assistant') {
+      try {
+        const r = await query(
+          `SELECT assistant_objects, assistant_departments, active FROM users WHERE id = $1 AND role = 'assistant'`,
+          [user.id]
+        );
+        const row = r.rows[0];
+        if (!row || Number(row.active) === 0) {
+          return res.status(403).json({ error: 'forbidden', message: 'Учётная запись ассистента отключена или изменена — войдите заново' });
+        }
+        req.user.assistant_objects = row.assistant_objects || [];
+        req.user.assistant_departments = row.assistant_departments || [];
+      } catch (e) {
+        console.error('authRequired: не удалось обновить зону ассистента, беру из токена:', e.message);
+      }
+    }
     next();
   });
 }

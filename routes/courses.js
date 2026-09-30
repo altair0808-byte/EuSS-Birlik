@@ -62,6 +62,16 @@ function clampVariant(n) {
   return v;
 }
 
+// Вид курса: 'internal' (наш), 'external' (провела другая организация), 'no_protocol' (без протокола).
+// Старые клиенты присылают только is_external — тогда true = 'external'. Ничего не прислали -> null (не менять).
+const COURSE_KINDS = ['internal', 'external', 'no_protocol'];
+function resolveCourseKind(course_kind, is_external) {
+  if (COURSE_KINDS.includes(course_kind)) return course_kind;
+  if (is_external === true || is_external === 'true') return 'external';
+  if (is_external === false || is_external === 'false') return 'internal';
+  return null;
+}
+
 // ===================== Список / карточка курса =====================
 
 // List courses
@@ -243,8 +253,9 @@ router.get('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
 
 // Create course
 router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry, is_mandatory, card_color, is_external } = req.body;
+  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry, is_mandatory, card_color, is_external, course_kind } = req.body;
   if (!title_ru || !title_kz) return res.status(400).json({ error: 'missing_title' });
+  const kind = resolveCourseKind(course_kind, is_external) || 'internal';
 
   try {
     // Цвет не выбран -> первый свободный из палитры, чтобы у нового вида обучения был свой цвет
@@ -254,8 +265,8 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
       cardColor = pickFreeColor(used);
     }
     const result = await query(`
-      INSERT INTO courses (title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, created_by, category_ru, category_kz, no_expiry, is_mandatory, card_color, is_external)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id
+      INSERT INTO courses (title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, created_by, category_ru, category_kz, no_expiry, is_mandatory, card_color, is_external, course_kind)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING id
     `, [
       title_ru, title_kz, description_ru || '', description_kz || '', video_url || '',
       video_url_ru || '', video_url_kz || '',
@@ -263,7 +274,8 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
       cleanCategory(category_ru), cleanCategory(category_kz), no_expiry === true || no_expiry === 'true',
       is_mandatory === true || is_mandatory === 'true',
       cardColor,
-      is_external === true || is_external === 'true'
+      kind !== 'internal',
+      kind
     ]);
     res.json({ id: result.rows[0].id });
   } catch (e) {
@@ -273,11 +285,12 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
 
 // Update course
 router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
-  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry, is_mandatory, card_color, is_external } = req.body;
+  const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry, is_mandatory, card_color, is_external, course_kind } = req.body;
   try {
     const prev = (await query('SELECT no_expiry, is_external FROM courses WHERE id = $1', [req.params.id])).rows[0];
     // is_external не пришёл (старый клиент) -> null -> COALESCE оставляет прежнее значение
-    const external = (is_external === undefined || is_external === null) ? null : (is_external === true || is_external === 'true');
+    const kind = resolveCourseKind(course_kind, is_external); // null -> не менять
+    const external = kind === null ? null : kind !== 'internal';
     // Тип курса (наш / внешний) нельзя переключать, когда по нему уже есть назначения: наши записи
     // имеют протокол, подпись и сертификат, внешние — нет, и «на лету» их не превратить друг в друга.
     if (prev && external !== null && external !== !!prev.is_external) {
@@ -299,7 +312,8 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
           no_expiry=COALESCE($14, no_expiry),
           is_mandatory=COALESCE($15, is_mandatory),
           card_color=COALESCE($16, card_color),
-          is_external=COALESCE($17, is_external)
+          is_external=COALESCE($17, is_external),
+          course_kind=COALESCE($18, course_kind)
       WHERE id=$11
     `, [
       title_ru, title_kz, description_ru, description_kz, video_url,
@@ -310,7 +324,8 @@ router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req,
       mandatory,
       // не пришёл/некорректный -> null -> COALESCE оставляет прежний цвет
       normalizeCardColor(card_color),
-      external
+      external,
+      kind
     ]);
 
     // Переключили «бессрочный»: приводим уже сданные тесты этого курса в соответствие.
