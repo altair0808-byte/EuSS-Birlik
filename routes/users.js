@@ -872,6 +872,14 @@ router.put('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
     params.push(id);
     await query(`UPDATE users SET ${fields.join(', ')} WHERE id = $${params.length}`, params);
 
+    // Сменили объект/отдел/должность — записываем сотрудника на курсы новой должности
+    // (то, что у него уже назначено или ещё действует, повторно не назначается).
+    const b0 = req.body;
+    const posChanged = (b0.object !== undefined && String(b0.object || '') !== String(target.object || ''))
+      || (b0.department !== undefined && String(b0.department || '') !== String(target.department || ''))
+      || (b0.position !== undefined && String(b0.position || '') !== String(target.position || ''));
+    if (posChanged && target.role === 'employee') await enrollNewUser(id, req.user.id);
+
     // Журнал: только те поля, что реально изменились. Пароль и ИИН значениями не пишем.
     try {
       const b = req.body;
