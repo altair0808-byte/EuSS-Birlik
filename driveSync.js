@@ -114,7 +114,11 @@ async function enqueueProtocol(protocolId) {
 async function enqueueIdCard(assignmentId, req) {
   try {
     if (!drive.isConfigured()) return;
-    const a = await query('SELECT protocol_id FROM assignments WHERE id = $1', [assignmentId]);
+    const a = await query(
+      `SELECT a.protocol_id, c.is_external FROM assignments a JOIN courses c ON c.id = a.course_id WHERE a.id = $1`,
+      [assignmentId]
+    );
+    if (a.rows[0] && a.rows[0].is_external) return; // внешний курс / без протокола: удостоверения нет
     const n = await enqueue([{
       key: `idcard:${assignmentId}`, kind: 'id_card', assignmentId,
       protocolId: a.rows[0] ? a.rows[0].protocol_id : null,
@@ -317,6 +321,7 @@ async function enqueueEverything(req) {
        FROM assignments a
        JOIN users u ON u.id = a.user_id AND u.role = 'employee'
       WHERE a.status = 'passed'
+        AND NOT EXISTS (SELECT 1 FROM courses xc WHERE xc.id = a.course_id AND xc.is_external)
         AND NOT EXISTS (SELECT 1 FROM id_cards c WHERE c.assignment_id = a.id AND c.status = 'REVOKED')
       ORDER BY a.id`
   );

@@ -522,6 +522,16 @@ async function initDb() {
   // протокола (assignments.protocol_number хранит его как обычный текст, в таблицу protocols он
   // не попадает и с нашими протоколами не смешивается). Нужен для учёта и отслеживания сроков.
   await pool.query(`ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_external BOOLEAN NOT NULL DEFAULT FALSE;`);
+  // ВИД КУРСА (course_kind): 'internal' — наш курс (тест, протокол, подписи, удостоверение);
+  // 'external' — обучение провела другая организация (номер её протокола вносится как текст);
+  // 'no_protocol' — курс, который оформляется без протокола вообще.
+  // Для 'external' и 'no_protocol' удостоверение НЕ выпускается: обучение видно на странице по QR
+  // (/p/<public_uid>) как «пройден» и входит в статистику. is_external остаётся флагом «без нашего
+  // теста/протокола/удостоверения» и всегда = (course_kind <> 'internal').
+  await pool.query(`ALTER TABLE courses ADD COLUMN IF NOT EXISTS course_kind TEXT NOT NULL DEFAULT 'internal';`);
+  await pool.query(`UPDATE courses SET course_kind = 'external' WHERE is_external = TRUE AND course_kind = 'internal';`);
+  await pool.query(`UPDATE courses SET is_external = (course_kind <> 'internal') WHERE is_external <> (course_kind <> 'internal');`);
+
   // Разовая раздача цветов существующим курсам — по порядку создания, разные, пока хватает палитры.
   try {
     const noColor = await pool.query('SELECT id FROM courses WHERE card_color IS NULL ORDER BY id');

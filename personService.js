@@ -14,6 +14,7 @@ async function ensureCardsForEmployee(userId) {
   const r = await query(
     `SELECT a.id FROM assignments a
      WHERE a.user_id = $1 AND a.status = 'passed'
+       AND NOT EXISTS (SELECT 1 FROM courses xc WHERE xc.id = a.course_id AND xc.is_external)
        AND NOT EXISTS (SELECT 1 FROM id_cards c WHERE c.assignment_id = a.id)`,
     [userId]
   );
@@ -27,7 +28,7 @@ async function loadLatestCards(userId) {
   const res = await query(
     `SELECT card.id, card.card_uid, card.card_number, card.status, card.issue_date, card.expiry_date,
             card.assignment_id, card.course_id,
-            c.title_ru, c.title_kz, c.card_color, c.is_external,
+            c.title_ru, c.title_kz, c.card_color, c.is_external, c.course_kind,
             a.score_percent, a.test_date,
             COALESCE(p.protocol_number, a.protocol_number) AS protocol_number
      FROM id_cards card
@@ -35,6 +36,7 @@ async function loadLatestCards(userId) {
      LEFT JOIN protocols p ON p.id = card.protocol_id
      JOIN assignments a ON a.id = card.assignment_id
      WHERE card.employee_id = $1
+       AND NOT COALESCE(c.is_external, FALSE)
      ORDER BY card.issue_date DESC NULLS LAST, card.id DESC`,
     [userId]
   );
@@ -47,6 +49,37 @@ async function loadLatestCards(userId) {
     out.push({ ...r, status: computeLiveStatus(r.status, r.expiry_date) });
   }
   return out;
+}
+
+// Обучение по курсам БЕЗ удостоверения: внешний курс и курс без протокола (courses.is_external).
+// Бланка нет, но на странице по QR оно показывается как «пройден» (с живым статусом по сроку) и
+// входит в статистику. По каждому курсу — только самая свежая сданная запись.
+async function loadExternalTrainings(userId) {
+  const res = await query(
+    `SELECT DISTINCT ON (a.course_id)
+            a.id AS assignment_id, a.course_id, a.test_date, a.next_test_date, a.score_percent, a.protocol_number,
+            c.title_ru, c.title_kz, c.card_color, c.is_external, c.course_kind, c.no_expiry
+     FROM assignments a
+     JOIN courses c ON c.id = a.course_id
+     WHERE a.user_id = $1 AND a.status = 'passed' AND c.is_external
+     ORDER BY a.course_id, COALESCE(a.test_date, '') DESC, a.id DESC`,
+    [userId]
+  );
+  return res.rows.map((r) => {
+    const issue = toDateOnly(r.test_date);
+    const expiry = r.no_expiry ? null : toDateOnly(r.next_test_date);
+    return {
+      id: null, card_uid: null, card_number: '',
+      status: computeLiveStatus('VALID', expiry),
+      issue_date: issue, expiry_date: expiry,
+      assignment_id: r.assignment_id, course_id: r.course_id,
+      title_ru: r.title_ru, title_kz: r.title_kz, card_color: r.card_color,
+      is_external: true, course_kind: r.course_kind || 'external',
+      score_percent: r.score_percent, test_date: r.test_date,
+      // номер протокола есть только у внешнего курса (протокол другой организации); у «без протокола» его нет
+      protocol_number: r.course_kind === 'no_protocol' ? '' : (r.protocol_number || '')
+    };
+  });
 }
 
 // NONE — удостоверений нет; VALID — все действуют; PARTIAL — часть действует;
@@ -66,7 +99,11 @@ async function loadEmployer() {
 
 async function buildPerson(userRow) {
   await ensureCardsForEmployee(userRow.id);
-  const cards = await loadLatestCards(userRow.id);
+  const own = await loadLatestCards(userRow.id);
+  const noCard = await loadExternalTrainings(userRow.id);
+  // Общий список для QR-страницы: свежие сверху (по дате прохождения / выдачи)
+  const dk = (c) => String(toDateOnly(c.test_date) || toDateOnly(c.issue_date) || '');
+  const cards = [...own, ...noCard].sort((x, y) => dk(y).localeCompare(dk(x)));
   return {
     user: userRow,
     employer: await loadEmployer(),
@@ -112,7 +149,8 @@ function toPublicPayload(person, employer) {
       title_ru: c.title_ru || '',
       title_kz: c.title_kz || '',
       color: c.card_color || null,
-      external: !!c.is_external, // внешний курс: без нашего протокола/подписи/печати (для пометки на странице)
+      external: !!c.is_external, // внешний курс / без протокола: удостоверения нет, обучение показывается как «пройден»
+      kind: c.course_kind || (c.is_external ? 'external' : 'internal'), // internal | external | no_protocol
       test_date: toDateOnly(c.test_date) || toDateOnly(c.issue_date),
       score_percent: c.score_percent == null ? null : c.score_percent,
       protocol_number: c.protocol_number ? String(c.protocol_number) : '',

@@ -66,7 +66,7 @@ function computeLiveStatus(storedStatus, expiryDate) {
 async function ensureIdCardForAssignment(assignmentId) {
   const aRes = await query(
     `SELECT a.*, u.login AS user_login, u.permanent_certificate_number AS user_perm_cert,
-            c.validity_months, c.no_expiry
+            c.validity_months, c.no_expiry, c.is_external
      FROM assignments a
      JOIN users u ON u.id = a.user_id
      JOIN courses c ON c.id = a.course_id
@@ -75,6 +75,8 @@ async function ensureIdCardForAssignment(assignmentId) {
   );
   const a = aRes.rows[0];
   if (!a || a.status !== 'passed') return null;
+  // Внешний курс / курс без протокола: удостоверение не выпускается (обучение видно по QR и в статистике).
+  if (a.is_external) return null;
 
   // Номер удостоверения = логин сотрудника (решение заказчика).
   const cardNumber = a.user_login || a.user_perm_cert || `A${a.id}`;

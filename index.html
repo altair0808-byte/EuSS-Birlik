@@ -1141,7 +1141,9 @@ async function loadTabContent() {
           <div class="flex flex-wrap gap-2">
             ${isAdminsTab || isArchiveTab || isObserverUser() ? '' : `<input type="file" id="importFile" accept=".xlsx" class="hidden" onchange="handleImportFile(this)">
             <button onclick="downloadUsersTemplate()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">⬇ Скачать бланк</button>
-            <button onclick="document.getElementById('importFile').click()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">📥 ${t('import_excel')}</button>`}
+            <button onclick="document.getElementById('importFile').click()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">📥 ${t('import_excel')}</button>
+            <button onclick="exportUsersForTraining()" title="${_L('Выгрузить всех сотрудников, внести новое обучение в Excel и загрузить обратно', 'Қызметкерлерді Excel-ге шығару')}" class="px-4 py-2 border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-sm font-semibold rounded-lg">📤 ${_L('Выгрузить в Excel для обучения', 'Оқыту үшін Excel-ге шығару')}</button>
+            <button onclick="openBulkTrainingModal()" class="px-4 py-2 border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-sm font-semibold rounded-lg">📥 ${_L('Загрузить обновлённый Excel', 'Жаңартылған Excel жүктеу')}</button>`}
             ${isArchiveTab ? '' : isAdminsTab ? `<button onclick="openUserModal(null, 'assistant')" class="px-4 py-2 border border-blue-300 text-blue-700 hover:bg-blue-50 text-sm font-semibold rounded-lg">+ ${_L('Добавить ассистента', 'Ассистент қосу')}</button>
             <button onclick="openUserModal(null, 'admin')" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${_L('Добавить администратора', 'Әкімші қосу')}</button>` : `<button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${t('add_user')}</button>`}
           </div>
@@ -1344,10 +1346,15 @@ async function loadTabContent() {
             <input type="hidden" id="courseId">
             <div><label class="text-xs font-semibold text-slate-600">Название (RU)</label><input id="cTitleRu" required class="w-full border p-2 rounded text-sm"></div>
             <div><label class="text-xs font-semibold text-slate-600">Название (KZ)</label><input id="cTitleKz" required class="w-full border p-2 rounded text-sm"></div>
-            <label class="flex items-start gap-2 text-sm text-violet-900 cursor-pointer bg-violet-50 border-2 border-violet-300 rounded-lg p-3">
-              <input type="checkbox" id="cExternal" onchange="onCourseExternalToggle()" class="mt-0.5 rounded text-violet-600">
-              <span><b>🏷 Внешнее обучение</b> — обучение проводила не наша компания. Сертификат не выдаётся, только удостоверение: без теста, нашего протокола, подписи и печати — с пометкой «Обучение пройдено во внешней организации». Сотруднику вносятся только дата прохождения, срок и номер протокола внешней организации.</span>
-            </label>
+            <div class="bg-violet-50 border-2 border-violet-300 rounded-lg p-3">
+              <label class="text-xs font-semibold text-violet-900">Вид курса</label>
+              <select id="cKind" onchange="onCourseKindChange()" class="w-full border p-2 rounded text-sm bg-white mt-1">
+                <option value="internal">Наш курс — тест, протокол, сертификат и удостоверение</option>
+                <option value="external">Внешний курс — обучала другая организация</option>
+                <option value="no_protocol">Курс без протокола</option>
+              </select>
+              <p id="cKindHint" class="text-[11px] text-violet-800 mt-2"></p>
+            </div>
             <div><label class="text-xs font-semibold text-slate-600">Описание (RU)</label><textarea id="cDescRu" rows="2" class="w-full border p-2 rounded text-sm"></textarea></div>
             <div><label class="text-xs font-semibold text-slate-600">Описание (KZ)</label><textarea id="cDescKz" rows="2" class="w-full border p-2 rounded text-sm"></textarea></div>
             <div class="border rounded-lg p-3 bg-slate-50">
@@ -1774,17 +1781,21 @@ async function loadTabContent() {
 
   if (state.tab === 'settings') {
     const isSuperadmin = state.user && state.user.role === 'superadmin';
+    const stab = state.settingsTab || 'org';
     container.innerHTML = `
-      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-w-xl">
-        <h2 class="text-lg font-bold text-slate-900 mb-4">${t('nav_settings')}</h2>
+      <div class="max-w-3xl">
+        <h2 class="text-lg font-bold text-slate-900 mb-3">${t('nav_settings')}</h2>
+        <div id="settingsTabBar" class="flex flex-wrap gap-1 border-b border-slate-200 mb-4">${settingsTabBarHtml(isSuperadmin, stab)}</div>
+      </div>
+      <div data-stab="org commission numbering card" class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-w-xl">
         ${!isSuperadmin ? `<div class="mb-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">Изменение настроек и фирменного бланка доступно только суперадминистратору.</div>` : ''}
         <fieldset ${!isSuperadmin ? 'disabled' : ''}>
           <form onsubmit="saveSettingsForm(event)" class="space-y-4">
-            <div>
+            <div data-stab="org">
               <label class="text-xs font-semibold text-slate-600">Наименование организации (ТОО / АО)</label>
-              <input id="setComp" required class="w-full border p-2.5 rounded-lg text-sm">
+              <input id="setComp" class="w-full border p-2.5 rounded-lg text-sm">
             </div>
-            <div class="border-t pt-4">
+            <div data-stab="commission" class="pt-1">
               <h3 class="text-sm font-bold text-slate-900 mb-2">Комиссия (на сертификате используется только выбранный председатель)</h3>
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div class="space-y-2 border rounded-lg p-3">
@@ -1794,7 +1805,7 @@ async function loadTabContent() {
                   </label>
                   <div>
                     <label class="text-xs font-semibold text-slate-600">ФИО</label>
-                    <input id="setChair1Name" required class="w-full border p-2.5 rounded-lg text-sm">
+                    <input id="setChair1Name" class="w-full border p-2.5 rounded-lg text-sm">
                   </div>
                   <div>
                     <label class="text-xs font-semibold text-slate-600">Должность</label>
@@ -1818,7 +1829,7 @@ async function loadTabContent() {
               </div>
               <p class="text-[11px] text-slate-500 mt-2">На сертификате будут указаны ФИО, должность, подпись и печать только того председателя, у кого отмечена галочка. Данные второго председателя на сертификат не попадают.</p>
             </div>
-            <div class="border-t pt-4">
+            <div data-stab="numbering" class="pt-1">
               <h3 class="text-sm font-bold text-slate-900 mb-2">Нумерация сертификатов</h3>
               <div class="grid grid-cols-2 gap-3">
                 <div>
@@ -1836,7 +1847,7 @@ async function loadTabContent() {
               </div>
               <p class="text-[11px] text-slate-500 mt-2">Измените "Следующий номер", чтобы продолжить нумерацию с номера из уже существующего бумажного/Excel-реестра. Дальше номера будут присваиваться автоматически.</p>
             </div>
-            <div class="border-t pt-4">
+            <div data-stab="card" class="pt-1">
               <h3 class="text-sm font-bold text-slate-900 mb-2">Слоган на удостоверении</h3>
               <p class="text-[11px] text-slate-500 mb-2">Три строки в правом верхнем углу бланка удостоверения (PDF и Word). Пустое поле — эта строка на бланке не печатается.</p>
               <div class="space-y-2">
@@ -1857,7 +1868,8 @@ async function loadTabContent() {
             </div>
             <button type="submit" class="px-5 py-2.5 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить настройки</button>
           </form>
-          <div class="border-t mt-6 pt-6 space-y-4">
+          <div data-stab="org commission" class="border-t mt-6 pt-6 space-y-4">
+            <div data-stab="org" class="space-y-4">
             <h3 class="text-sm font-bold text-slate-900">Фирменный бланк сертификата</h3>
             <p class="text-[11px] text-slate-500">Файлы загружаются в облачное хранилище (Supabase Storage) один раз — повторно грузить их не нужно.</p>
             ${['logo', 'stamp'].map(kind => `
@@ -1870,6 +1882,9 @@ async function loadTabContent() {
                 <div id="set_${kind}_status" class="text-xs text-slate-500 mt-1"></div>
               </div>
             `).join('')}
+            </div>
+            <div data-stab="commission" class="space-y-4">
+            <h3 class="text-sm font-bold text-slate-900">Подписи председателей</h3>
             ${[1, 2].map(n => `
               <div>
                 <label class="text-xs font-semibold text-slate-600">Подпись председателя ${n}</label>
@@ -1880,10 +1895,11 @@ async function loadTabContent() {
                 <div id="set_signature${n}_status" class="text-xs text-slate-500 mt-1"></div>
               </div>
             `).join('')}
+            </div>
           </div>
         </fieldset>
       </div>
-      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-w-xl mt-6">
+      <div data-stab="dicts" class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-w-xl">
         <h2 class="text-lg font-bold text-slate-900 mb-1">Отделы и должности</h2>
         <p class="text-xs text-slate-500 mb-4">Эти списки используются в выпадающих полях «Отдел» и «Должность» в карточке сотрудника, чтобы значения не писались по-разному.</p>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
@@ -1909,7 +1925,7 @@ async function loadTabContent() {
         </div>
       </div>
       ${isSuperadmin ? `
-      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-w-xl mt-6">
+      <div data-stab="storage" class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-w-xl">
         <h2 class="text-lg font-bold text-slate-900 mb-1">Запасное хранилище (Google Drive)</h2>
         <p class="text-xs text-slate-500 mb-3">Подписанные протоколы (PDF и Word) и удостоверения сотрудников автоматически копируются в Google Drive. Если облако недоступно, сайт работает как обычно, а файлы отправляются позже.</p>
         <div id="driveStatusBox" class="text-sm text-slate-500 mb-3">Загрузка…</div>
@@ -1924,7 +1940,38 @@ async function loadTabContent() {
     loadSettingsData();
     renderDictionariesSettings();
     if (isSuperadmin) loadDriveStatus();
+    showSettingsTab(stab);
   }
+}
+
+// --- Вкладки внутри «Настроек» (чтобы всё не шло одной длинной страницей) ---
+const SETTINGS_TABS = [
+  { id: 'org', label: 'Организация' },
+  { id: 'commission', label: 'Комиссия и подписи' },
+  { id: 'numbering', label: 'Нумерация' },
+  { id: 'card', label: 'Удостоверение' },
+  { id: 'dicts', label: 'Отделы и должности' },
+  { id: 'storage', label: 'Хранилище', superOnly: true }
+];
+function settingsTabBarHtml(isSuperadmin, active) {
+  return SETTINGS_TABS.filter(t => !t.superOnly || isSuperadmin).map(t =>
+    `<button type="button" data-stab-btn="${t.id}" onclick="showSettingsTab('${t.id}')" class="px-3 py-2 text-sm font-semibold -mb-px border-b-2 ${t.id === active ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-800'}">${t.label}</button>`
+  ).join('');
+}
+function showSettingsTab(name) {
+  const isSuper = state.user && state.user.role === 'superadmin';
+  if (!SETTINGS_TABS.some(t => t.id === name && (!t.superOnly || isSuper))) name = 'org';
+  state.settingsTab = name;
+  document.querySelectorAll('[data-stab]').forEach(el => {
+    el.classList.toggle('hidden', !el.getAttribute('data-stab').split(' ').includes(name));
+  });
+  document.querySelectorAll('[data-stab-btn]').forEach(b => {
+    const on = b.getAttribute('data-stab-btn') === name;
+    b.classList.toggle('border-blue-600', on);
+    b.classList.toggle('text-blue-700', on);
+    b.classList.toggle('border-transparent', !on);
+    b.classList.toggle('text-slate-500', !on);
+  });
 }
 
 // --- Запасное хранилище в Google Drive (вкладка «Настройки», только суперадмин) ---
@@ -2843,6 +2890,7 @@ const AUDIT_ACTION_LABELS = {
   user_deleted: ['🗑', 'Удалил пользователя'],
   employment_status_changed: ['📁', 'Изменил кадровый статус'],
   users_imported: ['📥', 'Импорт сотрудников из Excel'],
+  training_excel_update: ['📊', 'Обновление обучения через Excel'],
   course_assigned: ['📚', 'Назначил курс'],
   course_assigned_bulk: ['📚', 'Назначил курс группе'],
   retake_allowed: ['↻', 'Разрешил пересдачу'],
@@ -2883,6 +2931,9 @@ function auditDetailsHtml(row) {
       break;
     case 'users_imported':
       parts.push(`создано: ${esc(d.created)}, пропущено: ${esc(d.skipped)}, обучение внесено: ${esc(d.historyCreated)}${d.errors ? ', ошибок: ' + esc(d.errors) : ''}`);
+      break;
+    case 'training_excel_update':
+      parts.push(`строк: ${esc(d.rows)}, карточек обновлено: ${esc(d.cards_updated)}, обучений внесено: ${esc(d.trainings_created)}, удостоверений: ${esc(d.id_cards)}${d.errors ? ', ошибок: ' + esc(d.errors) : ''}`);
       break;
     case 'course_assigned':
     case 'retake_allowed':
@@ -3064,6 +3115,7 @@ async function loadUsersList() {
       <td class="px-4 py-3 text-right space-x-2 whitespace-nowrap">
         ${isObserver ? `
           <button onclick="openUserProfile(${u.id})" class="text-blue-600 hover:underline text-xs">${_L('Открыть', 'Ашу')}</button>
+          ${u.role === 'employee' ? `<button onclick="editUser(${u.id})" class="text-emerald-700 hover:underline text-xs font-semibold">${_L('Изменить', 'Өзгерту')}</button>` : ''}
         ` : isArchiveTab ? `
           <button onclick="openStatusModal(${u.id}, 'active')" class="text-emerald-700 hover:underline text-xs">${_L('Восстановить', 'Қалпына келтіру')}</button>
           <button onclick="delUser(${u.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
@@ -3349,6 +3401,7 @@ async function saveUserForm(e) {
       invalid_committee_role: 'Недопустимая роль в комиссии',
       invalid_iin: 'ИИН должен состоять ровно из 12 цифр',
       out_of_zone: 'Этот объект/отдел вне вашей зоны доступа',
+      zone_required: 'Выберите объект и отдел из вашей зоны доступа',
       duplicate_employee: 'Сотрудник с таким ФИО уже есть в системе'
     };
     alert('Не удалось сохранить сотрудника: ' + (map[err.message] || err.message || 'ошибка сервера'));
@@ -3358,6 +3411,127 @@ async function saveUserForm(e) {
   if (btn) btn.disabled = false;
   closeUserModal();
   loadUsersList();
+}
+
+// ===================== МАССОВОЕ ОБНОВЛЕНИЕ ЧЕРЕЗ EXCEL =====================
+// 1) «Выгрузить в Excel для обучения» — все сотрудники (с учётом фильтра объект/отдел, если он включён);
+// 2) в файле вносим новое обучение и/или правим карточки; 3) «Загрузить обновлённый Excel» — сначала проверка
+// (ничего не сохраняется), затем «Применить»: карточки обновятся, обучение внесётся, сертификаты и удостоверения
+// создадутся по нашим курсам. Внешние курсы и курсы без протокола — без удостоверения, но видны по QR и в статистике.
+function exportUsersForTraining() {
+  const qs = new URLSearchParams(orgParams()).toString();
+  downloadAuthed('/api/bulk-training/export' + (qs ? '?' + qs : ''), 'employees_training.xlsx');
+}
+
+let bulkXlFile = null;
+
+function openBulkTrainingModal() {
+  bulkXlFile = null;
+  let m = document.getElementById('bulkXlModal');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'bulkXlModal';
+    m.className = 'fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50';
+    document.body.appendChild(m);
+  }
+  m.innerHTML = `
+    <div class="bg-white rounded-xl shadow-2xl max-w-3xl w-full p-6 max-h-[90vh] overflow-y-auto">
+      <div class="flex justify-between items-start gap-3 mb-2">
+        <h3 class="text-lg font-bold">Загрузить обновлённый Excel</h3>
+        <button type="button" onclick="closeBulkTrainingModal()" class="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+      </div>
+      <p class="text-xs text-slate-500 mb-3">Файл, выгруженный кнопкой «Выгрузить в Excel для обучения». Сначала нажмите «Проверить» — ничего не сохранится, вы увидите, что изменится. Потом «Применить».</p>
+      <div class="flex flex-wrap items-center gap-2 mb-3">
+        <input type="file" id="bulkXlFile" accept=".xlsx" onchange="onBulkXlFileChange(this)" class="text-sm border rounded-lg p-2 flex-1 min-w-[220px]">
+        <button type="button" id="bulkXlCheckBtn" onclick="runBulkTraining(true)" disabled class="px-4 py-2 border border-blue-300 text-blue-700 rounded-lg text-sm font-semibold disabled:opacity-40">Проверить</button>
+        <button type="button" id="bulkXlApplyBtn" onclick="runBulkTraining(false)" disabled class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-semibold disabled:opacity-40">Применить</button>
+      </div>
+      <div id="bulkXlResult" class="text-sm"></div>
+    </div>`;
+  m.classList.remove('hidden');
+}
+
+function closeBulkTrainingModal() {
+  const m = document.getElementById('bulkXlModal');
+  if (m) m.classList.add('hidden');
+}
+
+function onBulkXlFileChange(input) {
+  bulkXlFile = input.files && input.files[0] ? input.files[0] : null;
+  document.getElementById('bulkXlCheckBtn').disabled = !bulkXlFile;
+  document.getElementById('bulkXlApplyBtn').disabled = true; // применять можно только после проверки этого же файла
+  document.getElementById('bulkXlResult').innerHTML = '';
+}
+
+const BULK_KIND_LABEL = { internal: 'наш курс', external: 'внешний курс', no_protocol: 'без протокола' };
+
+function bulkXlRender(r, applied) {
+  const box = document.getElementById('bulkXlResult');
+  const stat = (n, label, cls) => `<div class="border rounded-lg px-3 py-2 ${cls || 'border-slate-200'}"><div class="text-xl font-bold">${n}</div><div class="text-[11px] text-slate-500">${label}</div></div>`;
+  let html = `<div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+    ${stat(r.employees_matched, 'сотрудников найдено')}
+    ${stat(r.employees_changed, 'карточек изменится')}
+    ${stat(r.trainings_new, 'обучений будет внесено', 'border-emerald-300 bg-emerald-50')}
+    ${stat(r.trainings_with_card, 'с удостоверением (наши курсы)')}
+  </div>
+  <div class="text-xs text-slate-600 mb-3">Без удостоверения (внешние курсы и курсы без протокола): <b>${r.trainings_without_card}</b> — они появятся на странице по QR как «пройден» и попадут в статистику. Уже было внесено ранее (пропущено): <b>${r.duplicates_skipped}</b>.</div>`;
+
+  if (applied) {
+    html = `<div class="mb-3 p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm">
+      <b>Готово.</b> Карточек обновлено: ${applied.cards_updated}; обучений внесено: ${applied.trainings_created}; сертификатов создано: ${applied.certificates}; удостоверений создано: ${applied.id_cards}.
+    </div>` + html;
+    if (applied.failed && applied.failed.length) {
+      html += `<div class="mb-3"><div class="text-xs font-bold text-red-700 mb-1">Не удалось (${applied.failed.length}):</div><ul class="text-xs text-red-700 list-disc pl-5 space-y-0.5 max-h-40 overflow-y-auto">${applied.failed.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>`;
+    }
+  }
+
+  if (r.card_changes && r.card_changes.length) {
+    html += `<details class="mb-3 border rounded-lg" ${applied ? '' : 'open'}><summary class="cursor-pointer px-3 py-2 text-xs font-bold text-slate-700">Изменения в карточках (${r.employees_changed})</summary>
+      <div class="max-h-48 overflow-y-auto px-3 pb-2 text-xs space-y-1">${r.card_changes.map(c => `<div><b>${esc(c.name)}</b>: ${c.fields.map(f => `${esc(f.field)} <span class="text-slate-400 line-through">${esc(f.from || '—')}</span> → <b>${esc(f.to)}</b>`).join('; ')}</div>`).join('')}</div></details>`;
+  }
+  if (r.trainings_preview && r.trainings_preview.length) {
+    html += `<details class="mb-3 border rounded-lg" ${applied ? '' : 'open'}><summary class="cursor-pointer px-3 py-2 text-xs font-bold text-slate-700">Новое обучение (${r.trainings_new})</summary>
+      <div class="max-h-56 overflow-y-auto"><table class="w-full text-xs"><thead class="bg-slate-50 text-slate-500"><tr><th class="text-left px-3 py-1">Строка</th><th class="text-left px-2 py-1">Сотрудник</th><th class="text-left px-2 py-1">Курс</th><th class="text-left px-2 py-1">Дата</th><th class="text-left px-2 py-1">Удостоверение</th></tr></thead><tbody>
+      ${r.trainings_preview.map(t => `<tr class="border-t"><td class="px-3 py-1">${t.row}</td><td class="px-2 py-1">${esc(t.name)}</td><td class="px-2 py-1">${esc(t.course)} <span class="text-slate-400">(${BULK_KIND_LABEL[t.kind] || ''})</span></td><td class="px-2 py-1">${esc(fmtDate(t.test_date))}</td><td class="px-2 py-1">${t.card ? '✓ будет' : '—'}</td></tr>`).join('')}
+      </tbody></table></div></details>`;
+  }
+  if (r.warnings && r.warnings.length) {
+    html += `<div class="mb-3"><div class="text-xs font-bold text-amber-700 mb-1">Предупреждения (${r.warnings.length}) — не мешают загрузке:</div><ul class="text-xs text-amber-700 list-disc pl-5 space-y-0.5 max-h-28 overflow-y-auto">${r.warnings.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>`;
+  }
+  if (r.errors && r.errors.length) {
+    html += `<div class="mb-3"><div class="text-xs font-bold text-red-700 mb-1">Ошибки (${r.errors.length}) — эти строки будут пропущены, остальные загрузятся:</div><ul class="text-xs text-red-700 list-disc pl-5 space-y-0.5 max-h-40 overflow-y-auto">${r.errors.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>`;
+  }
+  if (!applied && !r.employees_changed && !r.trainings_new) {
+    html += `<div class="p-3 rounded-lg bg-slate-50 border text-slate-600 text-xs">Ничего нового: заполните колонки «Курс» и «Дата прохождения» (или исправьте данные карточек) и загрузите файл снова.</div>`;
+  }
+  box.innerHTML = html;
+}
+
+async function runBulkTraining(dry) {
+  if (!bulkXlFile) return;
+  const box = document.getElementById('bulkXlResult');
+  const checkBtn = document.getElementById('bulkXlCheckBtn');
+  const applyBtn = document.getElementById('bulkXlApplyBtn');
+  if (!dry && !confirm('Применить файл? Карточки будут обновлены, обучение внесено, удостоверения созданы. Отменить это одним действием нельзя.')) return;
+  checkBtn.disabled = true; applyBtn.disabled = true;
+  box.innerHTML = `<div class="text-slate-500">${dry ? 'Проверяю файл…' : 'Применяю…'}</div>`;
+  try {
+    const fd = new FormData();
+    fd.append('file', bulkXlFile);
+    const r = await api.req('/api/bulk-training/import' + (dry ? '?dry=1' : ''), { method: 'POST', body: fd });
+    bulkXlRender(r, dry ? null : r.applied);
+    checkBtn.disabled = false;
+    if (dry) {
+      applyBtn.disabled = !(r.employees_changed || r.trainings_new);
+    } else {
+      bulkXlFile = null;
+      document.getElementById('bulkXlFile').value = '';
+      loadUsersList();
+    }
+  } catch (e) {
+    box.innerHTML = `<div class="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">${esc(e.message || 'Не удалось обработать файл')}</div>`;
+    checkBtn.disabled = !bulkXlFile;
+  }
 }
 
 // Быстрые действия на главной: раньше кнопки только переключали вкладку и ничего не открывали.
@@ -3543,10 +3717,12 @@ function courseCardHtml(c, color) {
       <div>
         <div class="flex justify-between items-start gap-2">
           <h4 class="font-bold text-slate-900 text-base">${esc(courseTitleOf(c))}</h4>
-          <span class="text-xs font-semibold px-2 py-0.5 rounded whitespace-nowrap" style="background:${color.bg};color:${color.fg}">${c.is_external ? 'Внешнее обучение | ' : c.time_limit_minutes + ' мин | ' + c.pass_score_percent + '% | '}${c.no_expiry ? '∞ бессрочно' : c.validity_months + ' мес'}</span>
+          <span class="text-xs font-semibold px-2 py-0.5 rounded whitespace-nowrap" style="background:${color.bg};color:${color.fg}">${c.is_external ? (c.course_kind === 'no_protocol' ? 'Без протокола | ' : 'Внешнее обучение | ') : c.time_limit_minutes + ' мин | ' + c.pass_score_percent + '% | '}${c.no_expiry ? '∞ бессрочно' : c.validity_months + ' мес'}</span>
         </div>
         ${c.is_external
-          ? '<p class="text-xs mt-2 text-violet-700 font-semibold">🏷 Внешний курс — без теста, протокола, подписи и печати; вносится только удостоверение для учёта</p>'
+          ? (c.course_kind === 'no_protocol'
+              ? '<p class="text-xs mt-2 text-violet-700 font-semibold">🏷 Курс без протокола — без теста и удостоверения; на странице по QR отображается как «пройден», входит в статистику</p>'
+              : '<p class="text-xs mt-2 text-violet-700 font-semibold">🏷 Внешний курс — без теста, нашего протокола и удостоверения; на странице по QR отображается как «пройден», входит в статистику</p>')
           : `<p class="text-xs mt-2 ${hasQ ? 'text-slate-500' : 'text-amber-600 font-semibold'}">${hasQ ? 'Вопросов в базе: ' + c.questions_count : 'Вопросы не добавлены — тест пока пройти нельзя'}</p>`}
         ${c.is_mandatory ? `
         <button type="button" onclick="openUntrainedModal(${c.id}, '${jsAttrEsc(courseTitleOf(c))}')" class="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded ${(c.untrained_count || 0) > 0 ? 'bg-red-50 text-red-700 hover:bg-red-100' : 'bg-emerald-50 text-emerald-700'}">
@@ -3651,9 +3827,19 @@ function onCourseNoExpiryToggle() {
   v.disabled = on;
 }
 
-// Внешний курс: у него нет теста — время и проходной балл не нужны (срок действия остаётся: по нему считается «Действителен до»)
+// Вид курса: у внешнего курса и курса без протокола нет нашего теста — время и проходной балл не нужны
+// (срок действия остаётся: по нему считается «Действителен до»). Удостоверение для них не выпускается.
+const COURSE_KIND_HINTS = {
+  internal: 'Сотрудник проходит тест на сайте. По протоколу комиссии выдаются сертификат и удостоверение.',
+  external: 'Обучение провела другая организация. Вносятся дата прохождения, срок и (по желанию) номер её протокола. Удостоверение не выдаётся: на странице по QR-коду сотрудник отображается как «пройден», обучение попадает в статистику.',
+  no_protocol: 'Курс оформляется без протокола. Вносится только дата прохождения (и срок). Удостоверение не выдаётся: на странице по QR-коду сотрудник отображается как «пройден», обучение попадает в статистику.'
+};
+function onCourseKindChange() { onCourseExternalToggle(); }
 function onCourseExternalToggle() {
-  const on = document.getElementById('cExternal').checked;
+  const kind = document.getElementById('cKind').value;
+  const on = kind !== 'internal';
+  const hint = document.getElementById('cKindHint');
+  if (hint) hint.textContent = COURSE_KIND_HINTS[kind] || '';
   ['cTime', 'cPass'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -3709,7 +3895,7 @@ async function openCourseModal(id) {
     document.getElementById('cValid').value = course.validity_months;
     document.getElementById('cNoExpiry').checked = !!course.no_expiry;
     document.getElementById('cMandatory').checked = !!course.is_mandatory;
-    document.getElementById('cExternal').checked = !!course.is_external;
+    document.getElementById('cKind').value = course.course_kind || (course.is_external ? 'external' : 'internal');
     setCourseCardColor(course.card_color || '');
     onCourseNoExpiryToggle();
     onCourseExternalToggle();
@@ -3737,7 +3923,7 @@ async function openCourseModal(id) {
     document.getElementById('cValid').value = 12;
     document.getElementById('cNoExpiry').checked = false;
     document.getElementById('cMandatory').checked = false;
-    document.getElementById('cExternal').checked = false;
+    document.getElementById('cKind').value = 'internal';
     setCourseCardColor('');
     onCourseNoExpiryToggle();
     onCourseExternalToggle();
@@ -3783,7 +3969,8 @@ async function saveCourseForm(e) {
     validity_months: parseInt(document.getElementById('cValid').value) || 12,
     no_expiry: document.getElementById('cNoExpiry').checked,
     is_mandatory: document.getElementById('cMandatory').checked,
-    is_external: document.getElementById('cExternal').checked,
+    course_kind: document.getElementById('cKind').value,
+    is_external: document.getElementById('cKind').value !== 'internal',
     card_color: document.getElementById('cCardColor').value || undefined,
     video_url_ru: document.getElementById('cVideoRu').value.trim(),
     video_url_kz: document.getElementById('cVideoKz').value.trim()
@@ -4303,7 +4490,6 @@ async function loadAssignmentsList() {
         </td>
         <td class="px-4 py-3 font-bold">${a.score_percent !== null ? a.score_percent + '%' : '—'}</td>
         <td class="px-4 py-3 text-right space-x-2">
-          ${a.status === 'passed' && a.is_external ? `<a href="#" onclick="downloadAuthed('/api/id-cards/${a.id}');return false;" class="text-indigo-600 hover:underline text-xs font-semibold">Удостоверение</a>` : ''}
           ${a.status === 'passed' && !a.is_external && a.certificate_number ? `<a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="text-blue-600 hover:underline text-xs font-semibold">Сертификат</a>
           <a href="#" onclick="downloadAuthed('/api/id-cards/${a.id}');return false;" class="text-indigo-600 hover:underline text-xs font-semibold">Удостоверение</a>` : ''}
           ${a.status === 'failed' ? `<button onclick="allowRetake(${a.id})" class="text-amber-600 hover:underline text-xs">Пересдача</button>` : ''}
@@ -4328,7 +4514,7 @@ function assignModalHtml() {
               <select id="asCourseId" required onchange="applyAsExternalMode()" class="w-full border p-2 rounded text-sm"></select>
             </div>
             <div id="asExternalInfo" class="hidden text-[11px] text-violet-800 bg-violet-50 border border-violet-200 rounded-lg p-2">
-              <b>Внешний курс.</b> Обучение проводила не наша компания: теста, нашего протокола, подписи и печати нет. Укажите номер протокола внешней организации, дату прохождения и (по желанию) срок — сотруднику будет выдано только удостоверение. Этот номер у нас нигде не фиксируется и с нашими протоколами не смешивается.
+              <span id="asExternalInfoText"><b>Внешний курс.</b> Обучение проводила не наша компания: теста, нашего протокола и удостоверения нет. Укажите дату прохождения, (по желанию) номер протокола внешней организации и срок — на странице по QR-коду сотрудник будет отображаться как «пройден», обучение попадёт в статистику. Этот номер у нас нигде не фиксируется и с нашими протоколами не смешивается.</span>
             </div>
             <div class="grid grid-cols-2 gap-3">
               <div id="asProtNumWrap"><label id="asProtNumLabel" class="text-xs font-semibold text-slate-600">Номер протокола</label><input id="asProtNum" required class="w-full border p-2 rounded text-sm"></div>
@@ -4488,17 +4674,25 @@ function applyAsExternalMode() {
   const changed = ext !== asExtMode;
   // Разметку приводим к режиму каждый раз (после прошлого открытия модалки в ней мог остаться другой режим),
   // а значения полей трогаем только при реальном переключении курса.
+  const noProt = ext && course.course_kind === 'no_protocol';
   $('asExternalInfo').classList.toggle('hidden', !ext);
+  if (ext) {
+    $('asExternalInfoText').innerHTML = noProt
+      ? '<b>Курс без протокола.</b> Протокол не нужен. Укажите только дату прохождения и (по желанию) срок — удостоверение не выдаётся; на странице по QR-коду сотрудник будет отображаться как «пройден», обучение попадёт в статистику.'
+      : '<b>Внешний курс.</b> Обучение проводила не наша компания: теста, нашего протокола и удостоверения нет. Укажите дату прохождения, (по желанию) номер протокола внешней организации и срок — на странице по QR-коду сотрудник будет отображаться как «пройден», обучение попадёт в статистику.';
+  }
+  $('asProtNumWrap').classList.toggle('hidden', noProt);
+  $('asProtNum').required = !ext;
   $('asProtDateWrap').classList.toggle('hidden', ext);
   $('asProtDate').required = !ext;
   $('asProtAutoNote').classList.toggle('hidden', ext);
   $('asActiveProtocolHint').classList.toggle('hidden', ext);
   $('asNextCertHint').classList.toggle('hidden', ext);
   $('asHistoricalToggleLabel').classList.toggle('hidden', ext);
-  $('asProtNumLabel').textContent = ext ? 'Номер протокола (внешний)' : 'Номер протокола';
+  $('asProtNumLabel').textContent = ext ? 'Номер протокола (внешний, необязательно)' : 'Номер протокола';
   $('asScoreLabel').textContent = ext ? 'Результат, % (необязательно)' : 'Результат, % (по умолчанию 100)';
   $('asHistNote').textContent = ext
-    ? 'Сертификат не выдаётся. Если дату след. прохождения не указать, она рассчитается по сроку действия курса (у бессрочных курсов даты нет).'
+    ? 'Сертификат и удостоверение не выдаются. Если дату след. прохождения не указать, она рассчитается по сроку действия курса (у бессрочных курсов даты нет).'
     : 'Номер сертификата будет присвоен автоматически. Если дату след. прохождения не указать, она рассчитается по сроку действия курса (у бессрочных курсов даты нет).';
   $('asProtNum').placeholder = ext ? 'Номер из документа внешней организации' : '';
   if (changed) {
@@ -5285,7 +5479,6 @@ async function loadUserProfile(userId) {
                   <td class="px-4 py-3 text-xs text-slate-600">${a.next_test_date ? new Date(a.next_test_date).toLocaleDateString('ru-RU') : (a.no_expiry && a.status === 'passed' ? (CURRENT_LANG === 'kz' ? 'Мерзімсіз' : 'Бессрочно') : '—')}</td>
                   <td class="px-4 py-3 text-right whitespace-nowrap space-x-2">
                     ${a.user_answers ? `<button onclick="openAnswersModal(${a.id})" class="text-slate-600 hover:underline text-xs font-semibold">Подробнее</button>` : ''}
-                    ${a.status === 'passed' && a.is_external ? `<a href="#" onclick="downloadAuthed('/api/id-cards/${a.id}');return false;" class="text-indigo-600 hover:underline text-xs font-semibold">${t('download_id_card')}</a>` : ''}
                     ${a.status === 'passed' && !a.is_external && a.certificate_number ? `<a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="text-blue-600 hover:underline text-xs font-semibold">${t('download_cert')}</a>
                     <a href="#" onclick="downloadAuthed('/api/id-cards/${a.id}');return false;" class="text-indigo-600 hover:underline text-xs font-semibold ml-2">${t('download_id_card')}</a>` : ''}
                     ${state.user && state.user.role === 'superadmin' ? `<button onclick="delAssign(${a.id}, ${user.id})" class="text-red-600 hover:underline text-xs font-semibold">Удалить</button>` : ''}
@@ -5565,8 +5758,10 @@ async function loadMyIdCards() {
             </div>
           </div>
           <div class="flex gap-2 shrink-0">
-            <a href="#" onclick="downloadAuthed('/api/id-cards/uid/${uid}/pdf');return false;" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg">PDF</a>
-            <a href="#" onclick="downloadAuthed('/api/id-cards/uid/${uid}/docx', 'id_card_${uid}.docx');return false;" class="px-3 py-1.5 border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-semibold rounded-lg">Word</a>
+            ${c.external
+              ? `<span class="text-[11px] font-semibold px-2 py-1 rounded bg-violet-50 text-violet-700">${c.kind === 'no_protocol' ? _L('Курс без протокола', 'Хаттамасыз курс') : _L('Внешнее обучение', 'Сыртқы оқыту')} · ${_L('без удостоверения', 'куәліксіз')}</span>`
+              : `<a href="#" onclick="downloadAuthed('/api/id-cards/uid/${uid}/pdf');return false;" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg">PDF</a>
+            <a href="#" onclick="downloadAuthed('/api/id-cards/uid/${uid}/docx', 'id_card_${uid}.docx');return false;" class="px-3 py-1.5 border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-semibold rounded-lg">Word</a>`}
           </div>
         </div>`;
     }).join('') + `</div>`;
@@ -6043,6 +6238,9 @@ async function loadSettingsData() {
 
 async function saveSettingsForm(e) {
   e.preventDefault();
+  // Поля лежат на разных подвкладках, поэтому браузерное «required» не подходит (скрытое поле не проверяется) — проверяем сами.
+  if (!document.getElementById('setComp').value.trim()) { showSettingsTab('org'); alert('Укажите наименование организации.'); document.getElementById('setComp').focus(); return; }
+  if (!document.getElementById('setChair1Name').value.trim()) { showSettingsTab('commission'); alert('Укажите ФИО председателя комиссии 1.'); document.getElementById('setChair1Name').focus(); return; }
   await api.saveSettings({
     company_name: document.getElementById('setComp').value.trim(),
     chairman1_name: document.getElementById('setChair1Name').value.trim(),

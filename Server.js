@@ -37,6 +37,8 @@ app.use('/api/auth', authRouter);
 app.use('/api/users', require('./routes/users'));
 app.use('/api/courses', require('./routes/courses'));
 app.use('/api/assignments', require('./routes/assignments'));
+// Массовое обновление через Excel: выгрузка сотрудников -> новое обучение -> загрузка обратно
+app.use('/api/bulk-training', require('./routes/bulkTraining'));
 app.use('/api/protocols', require('./routes/protocols'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/export', require('./routes/export'));

@@ -82,11 +82,11 @@
     REVOKED: { ru: 'АННУЛИРОВАНО', kz: 'ЖОЙЫЛДЫ', en: 'REVOKED' }
   };
   var OVERALL = {
-    VALID:   { ru: 'ВСЕ УДОСТОВЕРЕНИЯ ДЕЙСТВУЮТ', kz: 'БАРЛЫҚ КУӘЛІКТЕР ЖАРАМДЫ', en: 'ALL CARDS ARE VALID' },
-    PARTIAL: { ru: 'ДЕЙСТВУЮТ НЕ ВСЕ', kz: 'БАРЛЫҒЫ ЖАРАМДЫ ЕМЕС', en: 'NOT ALL CARDS ARE VALID' },
-    EXPIRED: { ru: 'СРОК ВСЕХ УДОСТОВЕРЕНИЙ ИСТЁК', kz: 'БАРЛЫҚ КУӘЛІКТЕРДІҢ МЕРЗІМІ АЯҚТАЛДЫ', en: 'ALL CARDS HAVE EXPIRED' },
+    VALID:   { ru: 'ВСЕ ОБУЧЕНИЯ ДЕЙСТВУЮТ', kz: 'БАРЛЫҚ ОҚЫТУЛАР ЖАРАМДЫ', en: 'ALL TRAININGS ARE VALID' },
+    PARTIAL: { ru: 'ДЕЙСТВУЮТ НЕ ВСЕ ОБУЧЕНИЯ', kz: 'БАРЛЫҒЫ ЖАРАМДЫ ЕМЕС', en: 'NOT ALL TRAININGS ARE VALID' },
+    EXPIRED: { ru: 'СРОК ВСЕХ ОБУЧЕНИЙ ИСТЁК', kz: 'БАРЛЫҚ ОҚЫТУЛАРДЫҢ МЕРЗІМІ АЯҚТАЛДЫ', en: 'ALL TRAININGS HAVE EXPIRED' },
     REVOKED: { ru: 'УДОСТОВЕРЕНИЯ АННУЛИРОВАНЫ', kz: 'КУӘЛІКТЕР ЖОЙЫЛДЫ', en: 'CARDS REVOKED' },
-    NONE:    { ru: 'УДОСТОВЕРЕНИЙ НЕТ', kz: 'КУӘЛІКТЕР ЖОҚ', en: 'NO CARDS' }
+    NONE:    { ru: 'ОБУЧЕНИЙ НЕТ', kz: 'ОҚЫТУЛАР ЖОҚ', en: 'NO TRAININGS' }
   };
   var ICON = {
     ok:   '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>',
@@ -132,7 +132,7 @@
     html += '<div class="sec">Обучения / Оқытулар <span>/ Trainings · ' + courses.length + '</span></div>';
 
     if (!courses.length) {
-      html += '<div class="msg">Пока нет ни одного удостоверения<br>Әзірге куәлік жоқ<br>No cards yet</div>';
+      html += '<div class="msg">Пока нет ни одного обучения<br>Әзірге оқыту жоқ<br>No trainings yet</div>';
     }
     courses.forEach(function (c) {
       var st = STATUS[c.status] ? c.status : 'VALID';
@@ -146,10 +146,14 @@
         + '<div class="grid">'
         + '<div><div class="lb">Дата проверки<i>Тексеру күні / Test date</i></div><div class="vl">' + fmtDate(c.test_date) + '</div></div>'
         + '<div><div class="lb">Результат<i>Нәтиже / Result</i></div><div class="vl">' + result + '</div></div>'
-        + '<div><div class="lb">№ протокола<i>Хаттама № / Protocol</i></div><div class="vl">' + esc(c.protocol_number || '—') + '</div></div>'
+        + (c.kind === 'no_protocol' ? '' : '<div><div class="lb">№ протокола' + (c.external ? ' (внешний)' : '') + '<i>Хаттама № / Protocol</i></div><div class="vl">' + esc(c.protocol_number || '—') + '</div></div>')
         + '<div><div class="lb">Действителен до<i>Жарамды / Valid until</i></div><div class="vl">'
         + (c.valid_until ? fmtDate(c.valid_until) : 'бессрочно / мерзімсіз') + '</div></div>'
-        + (c.external ? '<div class="vl" style="margin-top:8px;font-size:12px;color:#6d28d9;font-weight:600">Внешнее обучение / Сыртқы оқыту / External training</div>' : '')
+        + (c.kind === 'no_protocol'
+            ? '<div class="vl" style="margin-top:8px;font-size:12px;color:#6d28d9;font-weight:600">Курс без протокола / Хаттамасыз курс / No-protocol course</div>'
+            : c.external
+              ? '<div class="vl" style="margin-top:8px;font-size:12px;color:#6d28d9;font-weight:600">Внешнее обучение / Сыртқы оқыту / External training</div>'
+              : '')
         + '</div></div>';
     });
 
