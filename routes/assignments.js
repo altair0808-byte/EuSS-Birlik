@@ -3,6 +3,7 @@ const router = express.Router();
 const ExcelJS = require('exceljs');
 const { query, pool } = require('../db');
 const { authRequired, requireRole } = require('./auth');
+const { logAction } = require('../lib/audit');
 const { makeUploader } = require('../upload');
 const { findActiveProtocol, nextProtocolNumber } = require('./protocols');
 const { splitMulti, scopedFilter } = require('../lib/multiFilter');
@@ -152,6 +153,19 @@ async function buildHistoricalFields(course_id, hist, userId, external = false) 
   };
 }
 
+// Для журнала действий: «Фамилия Имя» сотрудника и название курса (ошибки не пробрасываем).
+async function auditNames(userId, courseId) {
+  let userName = '';
+  let courseTitle = '';
+  try {
+    const u = await query('SELECT last_name, first_name FROM users WHERE id = $1', [userId]);
+    if (u.rows[0]) userName = `${u.rows[0].last_name || ''} ${u.rows[0].first_name || ''}`.trim();
+    const c = await query('SELECT title_ru FROM courses WHERE id = $1', [courseId]);
+    if (c.rows[0]) courseTitle = c.rows[0].title_ru || '';
+  } catch (e) { /* журнал не должен ломать действие */ }
+  return { userName, courseTitle };
+}
+
 // Create assignment
 router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   let { user_id, course_id, protocol_number, protocol_date, historical, test_date, next_test_date, certificate_number, score_percent } = req.body;
@@ -190,6 +204,11 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
       }
       try { await ensureIdCardForAssignment(result.rows[0].id); }
       catch (e) { console.error('Не удалось создать удостоверение (историческая запись)', result.rows[0].id, e.message); }
+      const nm = await auditNames(user_id, course_id);
+      await logAction(req, 'course_assigned', {
+        entityType: 'user', entityId: user_id, entityName: nm.userName,
+        details: { course: nm.courseTitle, course_id: Number(course_id), protocol_number, historical: true, external, assignment_id: result.rows[0].id }
+      });
       return res.json({ id: result.rows[0].id });
     }
 
@@ -197,6 +216,11 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
       INSERT INTO assignments (user_id, course_id, protocol_number, protocol_date, assigned_by)
       VALUES ($1, $2, $3, $4, $5) RETURNING id
     `, [user_id, course_id, protocol_number, protocol_date, req.user.id]);
+    const nm = await auditNames(user_id, course_id);
+    await logAction(req, 'course_assigned', {
+      entityType: 'user', entityId: user_id, entityName: nm.userName,
+      details: { course: nm.courseTitle, course_id: Number(course_id), protocol_number, historical: false, assignment_id: result.rows[0].id }
+    });
     res.json({ id: result.rows[0].id });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
@@ -280,6 +304,23 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (re
       catch (e) { console.error('Не удалось создать удостоверение (массовая историческая запись)', assignmentId, e.message); }
     }
 
+    try {
+      const courseRes = await query('SELECT title_ru FROM courses WHERE id = $1', [course_id]);
+      const namesRes = validIds.size
+        ? await query(`SELECT last_name, first_name FROM users WHERE id = ANY($1::bigint[]) ORDER BY last_name, first_name`, [[...validIds]])
+        : { rows: [] };
+      const names = namesRes.rows.map(r => `${r.last_name} ${r.first_name}`.trim());
+      await logAction(req, 'course_assigned_bulk', {
+        entityType: 'course', entityId: Number(course_id),
+        entityName: (courseRes.rows[0] && courseRes.rows[0].title_ru) || '',
+        details: {
+          course: (courseRes.rows[0] && courseRes.rows[0].title_ru) || '',
+          protocol_number, historical: !!historical, external,
+          created: createdIds.length, skipped: skippedIds.length,
+          employees: names.slice(0, 30), employees_total: names.length
+        }
+      });
+    } catch (logErr) { console.error('audit (bulk assign):', logErr.message); }
     res.json({ created: createdIds.length, ids: createdIds, skipped: skippedIds.length });
   } catch (e) {
     await client.query('ROLLBACK');
@@ -594,6 +635,16 @@ router.get('/:id/answers', authRequired, async (req, res) => {
 router.post('/:id/allow-retake', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
     await query(`UPDATE assignments SET retake_allowed = 1, status = 'pending' WHERE id = $1`, [req.params.id]);
+    try {
+      const a = await query('SELECT user_id, course_id FROM assignments WHERE id = $1', [req.params.id]);
+      if (a.rows[0]) {
+        const nm = await auditNames(a.rows[0].user_id, a.rows[0].course_id);
+        await logAction(req, 'retake_allowed', {
+          entityType: 'user', entityId: a.rows[0].user_id, entityName: nm.userName,
+          details: { course: nm.courseTitle, assignment_id: Number(req.params.id) }
+        });
+      }
+    } catch (logErr) { console.error('audit (retake):', logErr.message); }
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
@@ -604,7 +655,18 @@ router.post('/:id/allow-retake', authRequired, requireRole('admin', 'superadmin'
 // обычным админам это действие недоступно намеренно, п. запроса)
 router.delete('/:id', authRequired, requireRole('superadmin'), async (req, res) => {
   try {
+    let delInfo = null;
+    try {
+      const a = await query('SELECT user_id, course_id, protocol_number FROM assignments WHERE id = $1', [req.params.id]);
+      if (a.rows[0]) delInfo = { ...(await auditNames(a.rows[0].user_id, a.rows[0].course_id)), userId: a.rows[0].user_id, protocol_number: a.rows[0].protocol_number };
+    } catch (e) { /* ignore */ }
     await query('DELETE FROM assignments WHERE id = $1', [req.params.id]);
+    if (delInfo) {
+      await logAction(req, 'assignment_deleted', {
+        entityType: 'user', entityId: delInfo.userId, entityName: delInfo.userName,
+        details: { course: delInfo.courseTitle, protocol_number: delInfo.protocol_number, assignment_id: Number(req.params.id) }
+      });
+    }
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });

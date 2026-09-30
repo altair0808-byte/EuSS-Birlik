@@ -13,6 +13,7 @@ const { buildHistoricalFields } = require('./assignments');
 const { computeFioFields, transliterate } = require('../lib/fio');
 const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 const { COMMITTEE_ROLES } = require('../lib/committeeRoles');
+const { logAction, fullName } = require('../lib/audit');
 
 // Ищет уже существующего сотрудника с таким же ФИО (без учёта регистра/пробелов) —
 // п.9 запроса: "УТЯШЕВ АЛТАИР" / "утяшев алтаир" / "Утяшев Алтаир" — одна запись.
@@ -39,9 +40,15 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), a
     const { object, department, q } = req.query;
     // Администраторы не входят в список сотрудников и статистику: по умолчанию отдаём только
     // сотрудников. Список администраторов (?role=admin) — вкладка «Администраторы», только суперадмин.
-    const role = req.query.role === 'admin' ? 'admin' : 'employee';
-    if (role === 'admin' && req.user.role !== 'superadmin') {
-      return res.status(403).json({ error: 'forbidden_role', message: 'Список администраторов доступен только суперадмину' });
+    // ?role=staff — админы И ассистенты вместе (вкладка «Администраторы и ассистенты»);
+    // ?role=admin / ?role=assistant — только одна из этих ролей.
+    const roleParam = req.query.role;
+    const roles = roleParam === 'staff' ? ['admin', 'assistant']
+      : roleParam === 'admin' ? ['admin']
+      : roleParam === 'assistant' ? ['assistant']
+      : ['employee'];
+    if (roles[0] !== 'employee' && req.user.role !== 'superadmin') {
+      return res.status(403).json({ error: 'forbidden_role', message: 'Список администраторов и ассистентов доступен только суперадмину' });
     }
     // Кадровый статус: по умолчанию отдаём только действующих сотрудников (employment_status='active'),
     // как и раньше — уволенные/в декрете не должны неожиданно появляться в общем списке и статистике.
@@ -52,9 +59,9 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), a
     const statusFilter = req.query.status === 'archive' ? 'archive' : (req.query.status === 'all' ? 'all' : 'active');
     let sql = `SELECT id, last_name, first_name, object, department, position, login, role, active,
                       employment_status, status_date, created_at, permanent_certificate_number, tco_badge,
-                      committee_role, iin
-               FROM users WHERE role = $1`;
-    const params = [role];
+                      committee_role, iin, assistant_objects, assistant_departments
+               FROM users WHERE role = ANY($1::text[])`;
+    const params = [roles];
     if (statusesParam.length) {
       params.push(statusesParam);
       sql += ` AND employment_status = ANY($${params.length}::text[])`;
@@ -288,6 +295,10 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
       }
     }
 
+    await logAction(req, 'users_imported', {
+      entityType: 'user', entityName: String(req.file.originalname || ''),
+      details: { created, skipped, historyCreated, errors: errors.length }
+    });
     res.json({ created, skipped, historyCreated, errors });
   } catch (e) {
     console.error('Error importing users:', e);
@@ -397,7 +408,7 @@ router.get('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
     const result = await query(
       `SELECT id, last_name, first_name, object, department, position, login, role, active,
               employment_status, status_date, created_at, permanent_certificate_number, tco_badge,
-              committee_role, iin
+              committee_role, iin, public_uid, assistant_objects, assistant_departments
        FROM users WHERE id = $1 AND role != 'superadmin'`,
       [req.params.id]
     );
@@ -443,6 +454,10 @@ router.patch('/:id/employment-status', authRequired, requireRole('admin', 'super
       `UPDATE users SET employment_status = $1, status_date = $2, active = $3 WHERE id = $4`,
       [employment_status, employment_status === 'active' ? null : dateVal, active, id]
     );
+    await logAction(req, 'employment_status_changed', {
+      entityType: 'user', entityId: id, entityName: fullName(target),
+      details: { status: employment_status, date: employment_status === 'active' ? null : dateVal }
+    });
     res.json({ ok: true });
   } catch (e) {
     console.error('Error updating employment status:', e);
@@ -451,18 +466,31 @@ router.patch('/:id/employment-status', authRequired, requireRole('admin', 'super
 });
 
 // ТЗ: роли/ИИН/PDF=копия Word §2, §9 — admin и assistant не могут назначать роли вообще
-// (поле «Роль» видит только суперадмин, как и раньше); суперадмин может назначить
+// (поле «Роль» видит только суперадмин, как и раньше); ассистент может создавать только
+// обычных сотрудников (employee) в своей зоне; суперадмин может назначить
 // admin/assistant/employee (роль superadmin через этот эндпоинт не выдаётся никому).
 function validateRole(requesterRole, targetRole) {
-  if (requesterRole === 'admin') return targetRole === 'employee';
+  if (requesterRole === 'admin' || requesterRole === 'assistant') return targetRole === 'employee';
   if (requesterRole === 'superadmin') return ['admin', 'assistant', 'employee'].includes(targetRole);
   return false;
 }
 
-// Поля карточки сотрудника, которые роль 'assistant' вправе редактировать (ТЗ §3):
-// ФИО / Должность / № пропуска ТШО / ИИН — и ничего больше (объект/отдел, логин/пароль,
-// № сертификата, роль, статус — только admin/superadmin).
-const ASSISTANT_EDITABLE_FIELDS = ['last_name', 'first_name', 'position', 'tco_badge', 'iin'];
+// Поля карточки сотрудника, которые роль 'assistant' вправе редактировать:
+// ФИО / Объект / Отдел / Должность / № пропуска ТШО / ИИН. Объект и отдел — только внутри
+// своей зоны (см. valueInAssistantZone). Логин/пароль, № сертификата, роль, комиссия,
+// кадровый статус — по-прежнему только admin/superadmin.
+const ASSISTANT_EDITABLE_FIELDS = ['last_name', 'first_name', 'object', 'department', 'position', 'tco_badge', 'iin'];
+
+// Проверка, что значение объекта/отдела лежит в зоне ассистента (зона по этому измерению не
+// ограничена — значит любое значение допустимо).
+function valueInAssistantZone(reqUser, object, department) {
+  const zoneObjects = Array.isArray(reqUser.assistant_objects) ? reqUser.assistant_objects : [];
+  const zoneDepartments = Array.isArray(reqUser.assistant_departments) ? reqUser.assistant_departments : [];
+  if (!zoneObjects.length && !zoneDepartments.length) return false;
+  if (object !== undefined && zoneObjects.length && !zoneObjects.includes(object)) return false;
+  if (department !== undefined && zoneDepartments.length && !zoneDepartments.includes(department)) return false;
+  return true;
+}
 
 // ИИН (Казахстан) — ровно 12 цифр, без пробелов/дефисов. Пустое значение снимает поле.
 // Контрольную сумму по алгоритму РК на первом этапе не проверяем (ТЗ §6, №6 открытых вопросов).
@@ -510,7 +538,19 @@ function normalizeCommitteeRole(value) {
 // Create single user
 // Логин и пароль необязательны при создании — можно добавить сотрудника
 // только по ФИО и назначить ему доступ позже через редактирование карточки.
-router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.post('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
+  // Ассистент создаёт только сотрудников своей зоны: без логина/пароля, роли, № сертификата и
+  // комиссии — эти поля игнорируем, даже если их прислал фронтенд.
+  if (req.user.role === 'assistant') {
+    for (const f of ['login', 'password', 'role', 'permanent_certificate_number', 'committee_role', 'assistant_objects', 'assistant_departments']) {
+      delete req.body[f];
+    }
+    const o = String(req.body.object || '').trim();
+    const d = String(req.body.department || '').trim();
+    if (!valueInAssistantZone(req.user, o, d)) {
+      return res.status(403).json({ error: 'out_of_zone', message: 'Объект/отдел вне вашей зоны доступа' });
+    }
+  }
   const { last_name, first_name, object, department, position, login, password, role, permanent_certificate_number, tco_badge, committee_role, iin, assistant_objects, assistant_departments } = req.body;
   const targetRole = role || 'employee';
   const loginVal = login && String(login).trim() ? String(login).trim() : null;
@@ -570,6 +610,10 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
        String(tco_badge || '').trim() || null,
        normalized, translit, committeeRoleVal, iinVal, zoneObjects, zoneDepartments]
     );
+    await logAction(req, 'user_created', {
+      entityType: 'user', entityId: result.rows[0].id, entityName: `${last_name} ${first_name}`.trim(),
+      details: { role: targetRole, object: object || '', department: department || '', position: position || '' }
+    });
     res.json({ id: result.rows[0].id });
   } catch (e) {
     console.error('Error creating user:', e);
@@ -602,6 +646,9 @@ router.put('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
         if (req.body[f] !== undefined) filtered[f] = req.body[f];
       }
       req.body = filtered;
+      if (!valueInAssistantZone(req.user, filtered.object, filtered.department)) {
+        return res.status(403).json({ error: 'out_of_zone', message: 'Объект/отдел вне вашей зоны доступа' });
+      }
     }
 
     const { last_name, first_name, object, department, position, login, password, active, role, permanent_certificate_number, tco_badge, committee_role, iin, assistant_objects, assistant_departments } = req.body;
@@ -732,6 +779,44 @@ router.put('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
     params.push(id);
     await query(`UPDATE users SET ${fields.join(', ')} WHERE id = $${params.length}`, params);
 
+    // Журнал: только те поля, что реально изменились. Пароль и ИИН значениями не пишем.
+    try {
+      const b = req.body;
+      const changed = {};
+      const track = (key, oldV, newV) => {
+        if (newV === undefined) return;
+        if (String(oldV || '') !== String(newV || '')) changed[key] = { from: oldV || '', to: newV || '' };
+      };
+      track('last_name', target.last_name, b.last_name);
+      track('first_name', target.first_name, b.first_name);
+      track('object', target.object, b.object);
+      track('department', target.department, b.department);
+      track('position', target.position, b.position);
+      track('tco_badge', target.tco_badge, b.tco_badge);
+      track('permanent_certificate_number', target.permanent_certificate_number, b.permanent_certificate_number);
+      track('login', target.login, b.login);
+      track('committee_role', target.committee_role, b.committee_role);
+      if (req.user.role === 'superadmin') track('role', target.role, b.role);
+      if (b.iin !== undefined && String(target.iin || '') !== String(b.iin || '')) changed.iin = { changed: true };
+      if (b.password) changed.password = { changed: true };
+      if (b.active !== undefined && Number(target.active) !== (b.active ? 1 : 0)) changed.active = { from: Number(target.active), to: b.active ? 1 : 0 };
+      if (req.user.role === 'superadmin' && (b.assistant_objects !== undefined || b.assistant_departments !== undefined)) {
+        const oldZ = JSON.stringify([target.assistant_objects || [], target.assistant_departments || []]);
+        const newZ = JSON.stringify([
+          b.assistant_objects !== undefined ? (normalizeZoneArray(b.assistant_objects) || []) : (target.assistant_objects || []),
+          b.assistant_departments !== undefined ? (normalizeZoneArray(b.assistant_departments) || []) : (target.assistant_departments || [])
+        ]);
+        if (oldZ !== newZ) changed.zone = { changed: true };
+      }
+      if (Object.keys(changed).length) {
+        await logAction(req, 'user_updated', {
+          entityType: 'user', entityId: id,
+          entityName: fullName({ last_name: b.last_name !== undefined ? b.last_name : target.last_name, first_name: b.first_name !== undefined ? b.first_name : target.first_name }),
+          details: { role: target.role, changed }
+        });
+      }
+    } catch (logErr) { console.error('audit (user_updated):', logErr.message); }
+
     // Синхронизация номера сертификата с логином: если в этом запросе поменяли логин
     // и/или ручной «№ сертификата» — пересчитываем номер сертификата на всех уже
     // выданных сертификатах сотрудника (assignments.certificate_number), а не только
@@ -773,6 +858,9 @@ router.delete('/:id', authRequired, requireRole('superadmin'), async (req, res) 
       return res.status(403).json({ error: 'cannot_delete_superadmin' });
     }
     await query('DELETE FROM users WHERE id = $1', [id]);
+    await logAction(req, 'user_deleted', {
+      entityType: 'user', entityId: id, entityName: fullName(target), details: { role: target.role }
+    });
     res.json({ ok: true });
   } catch (e) {
     console.error('Error deleting user:', e);
