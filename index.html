@@ -1366,7 +1366,10 @@ async function loadTabContent() {
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
         <div class="flex justify-between items-center mb-6">
           <h2 class="text-lg font-bold text-slate-900">${t('courses_title')}</h2>
-          <button onclick="openCourseModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold">+ ${t('add_course')}</button>
+          <div class="flex flex-wrap gap-2">
+            <button onclick="openCoursePosModal()" class="px-4 py-2 bg-white border border-blue-600 text-blue-700 rounded-lg text-sm font-semibold">Курсы по должностям</button>
+            <button onclick="openCourseModal()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold">+ ${t('add_course')}</button>
+          </div>
         </div>
         ${orgNoteHtml(_L('Счётчики «не прошли обучение» посчитаны только по:', '«Оқымаған» есептегіштері тек мыналар бойынша:'))}
         <div class="flex flex-wrap items-center gap-2 mb-5">
@@ -1386,6 +1389,28 @@ async function loadTabContent() {
           <div class="flex justify-end pt-3 border-t mt-3" id="untrainedAssignAllRow">
             <button type="button" id="untrainedAssignAllBtn" onclick="assignCourseToUntrained()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700">Назначить курс всем из списка</button>
           </div>
+        </div>
+      </div>
+      <div id="coursePosModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+          <div class="flex justify-between items-start mb-2">
+            <h3 class="text-lg font-bold">Курсы по должностям</h3>
+            <button type="button" onclick="closeCoursePosModal()" class="text-slate-400 hover:text-slate-700 text-xl leading-none">&times;</button>
+          </div>
+          <p class="text-sm text-slate-600 mb-4">Excel-матрица: строки — «Объект / Отдел / Должность», колонки — курсы. «+» — курс обязателен для должности, пустая ячейка — не обязателен. Новые сотрудники (и те, кому сменили должность) автоматически записываются на курсы своей должности.</p>
+          <div class="flex flex-wrap gap-2 mb-4">
+            <button type="button" onclick="cpDownload('blank')" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-sm font-semibold">Скачать пустой бланк</button>
+            <button type="button" onclick="cpDownload('current')" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-sm font-semibold">Скачать текущую матрицу</button>
+          </div>
+          <div class="border rounded-lg p-3 space-y-3">
+            <input type="file" id="cpFile" accept=".xlsx" class="text-sm w-full">
+            <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="cpExisting"> Записать на новые курсы и уже работающих сотрудников</label>
+            <div class="flex gap-2">
+              <button type="button" id="cpCheckBtn" onclick="cpImport(true)" class="px-4 py-2 bg-white border border-blue-600 text-blue-700 rounded-lg text-sm font-semibold">Проверить</button>
+              <button type="button" id="cpApplyBtn" onclick="cpImport(false)" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold">Загрузить</button>
+            </div>
+          </div>
+          <div id="cpResult" class="mt-4 text-sm"></div>
         </div>
       </div>
       <div id="courseModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
@@ -3845,6 +3870,50 @@ function groupCoursesByCategory(items) {
 function courseTitleOf(c) { return (CURRENT_LANG === 'kz' ? c.title_kz : c.title_ru) || c.title_ru || c.title_kz || ''; }
 
 // --- COURSES LOGIC ---
+
+// ---------- Курсы по должностям (Excel-матрица) ----------
+function openCoursePosModal() {
+  document.getElementById('cpResult').innerHTML = '';
+  document.getElementById('cpFile').value = '';
+  document.getElementById('cpExisting').checked = false;
+  document.getElementById('coursePosModal').classList.remove('hidden');
+}
+function closeCoursePosModal() { document.getElementById('coursePosModal').classList.add('hidden'); }
+function cpDownload(mode) {
+  downloadAuthed('/api/course-positions/matrix.xlsx?mode=' + mode,
+    mode === 'blank' ? 'kursy_po_dolzhnostyam_blank.xlsx' : 'kursy_po_dolzhnostyam.xlsx');
+}
+async function cpImport(dry) {
+  const f = document.getElementById('cpFile').files[0];
+  const out = document.getElementById('cpResult');
+  if (!f) { out.innerHTML = '<p class="text-red-600">Выберите файл .xlsx</p>'; return; }
+  const btns = [document.getElementById('cpCheckBtn'), document.getElementById('cpApplyBtn')];
+  btns.forEach(b => b.disabled = true);
+  out.innerHTML = '<p class="text-slate-500">Обработка файла…</p>';
+  try {
+    const fd = new FormData();
+    fd.append('file', f);
+    const existing = document.getElementById('cpExisting').checked ? 1 : 0;
+    const r = await api.req('/api/course-positions/matrix/import?dry=' + (dry ? 1 : 0) + '&existing=' + existing, { method: 'POST', body: fd });
+    const list = (arr, cls) => arr && arr.length ? `<ul class="list-disc ml-5 text-xs ${cls} mt-1 space-y-0.5">${arr.map(x => '<li>' + esc(x) + '</li>').join('')}</ul>` : '';
+    const per = (r.per_course || []).map(c => `<li>${esc(c.course)}: +${c.added} / −${c.removed}</li>`).join('');
+    let html = `<div class="bg-slate-50 border rounded-lg p-3">
+      <p class="font-semibold">${dry ? 'Проверка (ничего не сохранено)' : 'Файл загружен'}</p>
+      <p>Строк: ${r.rows}, курсов: ${r.courses}. Добавится привязок: <b>${r.added}</b>, снимется: <b>${r.removed}</b>.</p>
+      ${per ? `<ul class="list-disc ml-5 text-xs mt-1">${per}</ul>` : ''}
+      <p class="mt-1">Работающих сотрудников к записи на курсы: <b>${r.existing_employees || 0}</b>${!dry && r.applied ? `, записано: <b>${r.applied.enrolled_existing}</b>` : ''}</p>
+    </div>`;
+    if (r.errors && r.errors.length) html += `<p class="font-semibold text-red-700 mt-3">Ошибки</p>${list(r.errors, 'text-red-700')}`;
+    if (r.warnings && r.warnings.length) html += `<p class="font-semibold text-amber-700 mt-3">Предупреждения</p>${list(r.warnings, 'text-amber-700')}`;
+    out.innerHTML = html;
+    if (!dry && typeof loadCoursesList === 'function') loadCoursesList();
+  } catch (e) {
+    out.innerHTML = '<p class="text-red-600">' + esc(e.message || 'Ошибка') + '</p>';
+  } finally {
+    btns.forEach(b => b.disabled = false);
+  }
+}
+
 async function loadCoursesList() {
   state.courses = await api.getCourses(orgParams());
   renderCoursesList();
