@@ -84,12 +84,29 @@ function orgParams(req) {
   return [splitMulti(req.query.object), splitMulti(req.query.department)];
 }
 
-// Для кого обязателен курс: 'all' (все) | 'employee' (сотрудники) | 'specialist' (специалисты) | 'manager' (руководители)
-const MANDATORY_FOR = ['all', 'employee', 'specialist', 'manager'];
+// Для кого обязателен курс: 'all' (все) | 'employee' (сотрудники) | 'specialist' (специалисты) | 'manager' (руководители) | 'matrix' (по должностям из матрицы)
+// 'matrix' — «согласно матрице»: обязателен только для должностей, отмеченных в «Курсы → Курсы по должностям»
+const MANDATORY_FOR = ['all', 'employee', 'specialist', 'manager', 'matrix'];
 function normalizeMandatoryFor(v) {
   if (v === undefined || v === null || v === '') return null;
   const s = String(v).trim().toLowerCase();
   return MANDATORY_FOR.includes(s) ? s : null;
+}
+
+// SQL-условие «курс c обязателен для сотрудника u». c и u — алиасы таблиц в запросе.
+// Для 'matrix' смотрим привязки курса к должностям (course_positions): объект/отдел/должность сотрудника
+// сравниваются без учёта регистра и лишних пробелов (одна и та же функция с обеих сторон, поэтому
+// результат не зависит от локали БД). Нет ни одной привязки — курс не обязателен никому.
+function mandatoryForSql(c, u) {
+  const n = (x) => `lower(btrim(regexp_replace(COALESCE(${x}, ''), '\\s+', ' ', 'g')))`;
+  return `(${c}.mandatory_for = 'all'
+      OR ${c}.mandatory_for = COALESCE(${u}.staff_category, 'employee')
+      OR (${c}.mandatory_for = 'matrix' AND EXISTS (
+            SELECT 1 FROM course_positions cp
+             WHERE cp.course_id = ${c}.id
+               AND ${n('cp.object')} = ${n(u + '.object')}
+               AND ${n('cp.department')} = ${n(u + '.department')}
+               AND ${n('cp.position')} = ${n(u + '.position')})))`;
 }
 
 router.get('/', authRequired, async (req, res) => {
@@ -103,7 +120,7 @@ router.get('/', authRequired, async (req, res) => {
         CASE WHEN c.is_mandatory THEN (
           SELECT COUNT(*)::int FROM users u
           WHERE u.role = 'employee' AND u.active = 1 AND ${ORG_SQL}
-            AND (c.mandatory_for = 'all' OR c.mandatory_for = COALESCE(u.staff_category, 'employee'))
+            AND ${mandatoryForSql('c', 'u')}
             AND NOT EXISTS (
               SELECT 1 FROM assignments a
               WHERE a.user_id = u.id AND a.course_id = c.id AND a.status = 'passed'
@@ -155,7 +172,7 @@ router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), a
         CASE WHEN c.is_mandatory THEN (
           SELECT COUNT(*)::int FROM users u
           WHERE u.role = 'employee' AND u.active = 1 AND ${ORG_SQL}
-            AND (c.mandatory_for = 'all' OR c.mandatory_for = COALESCE(u.staff_category, 'employee'))
+            AND ${mandatoryForSql('c', 'u')}
             AND NOT EXISTS (
               SELECT 1 FROM assignments a WHERE a.user_id = u.id AND a.course_id = c.id AND a.status = 'passed'
             )
@@ -173,7 +190,7 @@ router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), a
              AND EXISTS (
                SELECT 1 FROM courses c
                WHERE c.is_mandatory = true
-                 AND (c.mandatory_for = 'all' OR c.mandatory_for = COALESCE(u.staff_category, 'employee'))
+                 AND ${mandatoryForSql('c', 'u')}
                  AND NOT EXISTS (
                    SELECT 1 FROM assignments a
                    WHERE a.user_id = u.id AND a.course_id = c.id AND a.status = 'passed'
@@ -452,7 +469,7 @@ router.get('/:id/untrained', authRequired, requireRole('admin', 'superadmin'), a
       FROM users u
       WHERE u.role = 'employee' AND u.active = 1
         AND EXISTS (SELECT 1 FROM courses mc WHERE mc.id = $1
-                    AND (mc.mandatory_for = 'all' OR mc.mandatory_for = COALESCE(u.staff_category, 'employee')))
+                    AND ${mandatoryForSql('mc', 'u')})
         AND (cardinality($2::text[]) = 0 OR u.object = ANY($2::text[]))
         AND (cardinality($3::text[]) = 0 OR u.department = ANY($3::text[]))
         AND NOT EXISTS (
