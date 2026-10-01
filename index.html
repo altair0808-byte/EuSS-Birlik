@@ -1033,6 +1033,7 @@ function renderMain(app) {
             ${state.user.role === 'superadmin' ? `<button onclick="setTab('admins')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'admins' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Администраторы и ассистенты', 'Әкімшілер мен ассистенттер')}</button>` : ''}
             <button onclick="setTab('courses')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'courses' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_courses')}</button>
             <button onclick="setTab('assignments')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'assignments' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_assignments')}</button>
+            <button onclick="setTab('sessions')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'sessions' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Группы обучения', 'Оқыту топтары')}</button>
             <button onclick="setTab('protocols')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'protocols' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_protocols')}</button>
             <button onclick="setTab('certificates')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'certificates' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_certificates')}</button>
             <button onclick="setTab('calendar')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'calendar' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_calendar')}</button>
@@ -1856,6 +1857,11 @@ async function loadTabContent() {
       </div>
     `;
     loadMyCertificate();
+  }
+
+  if (state.tab === 'sessions') {
+    renderSessionsTab(container);
+    return;
   }
 
   if (state.tab === 'audit') {
@@ -3093,7 +3099,11 @@ const AUDIT_ACTION_LABELS = {
   course_assigned: ['📚', 'Назначил курс'],
   course_assigned_bulk: ['📚', 'Назначил курс группе'],
   retake_allowed: ['↻', 'Разрешил пересдачу'],
-  assignment_deleted: ['🗑', 'Удалил назначение']
+  assignment_deleted: ['🗑', 'Удалил назначение'],
+  training_session_created: ['👥', 'Создал группу обучения'],
+  training_session_completed: ['✅', 'Закрыл группу обучения (прошли)'],
+  training_session_reopened: ['↩️', 'Откатил закрытие группы обучения'],
+  training_session_deleted: ['🗑', 'Удалил группу обучения']
 };
 const AUDIT_FIELD_LABELS = {
   last_name: 'Фамилия', first_name: 'Имя', object: 'Объект', department: 'Отдел', position: 'Должность',
@@ -3139,6 +3149,18 @@ function auditDetailsHtml(row) {
     case 'assignment_deleted':
       parts.push(`курс: <b>${esc(d.course || '—')}</b>` + (d.protocol_number ? ` · протокол № ${esc(d.protocol_number)}` : '') + (d.historical ? ' · историческая запись' : ''));
       break;
+    case 'training_session_created':
+    case 'training_session_reopened':
+    case 'training_session_deleted':
+      parts.push(`курс: <b>${esc(d.course || '—')}</b>` + (d.planned_date ? ` · дата ${esc(d.planned_date)}` : '') + (d.employees_total ? ` · записано: ${esc(d.employees_total)}` : '') + (d.deleted ? ` · удалено записей: ${esc(d.deleted)}` : ''));
+      break;
+    case 'training_session_completed': {
+      const list = Array.isArray(d.employees) ? d.employees : [];
+      const more = (d.employees_total || 0) - list.length;
+      parts.push(`курс: <b>${esc(d.course || '—')}</b> · внесено: <b>${esc(d.created)}</b>` + (d.skipped ? ` (уже было ${esc(d.skipped)})` : '') + (d.protocol_number ? ` · протокол № ${esc(d.protocol_number)}` : ''));
+      if (list.length) parts.push(`<span class="text-slate-500">${esc(list.join(', '))}${more > 0 ? ' и ещё ' + more : ''}</span>`);
+      break;
+    }
     case 'course_assigned_bulk': {
       const list = Array.isArray(d.employees) ? d.employees : [];
       const more = (d.employees_total || 0) - list.length;
@@ -3690,6 +3712,433 @@ async function saveUserForm(e) {
   if (btn) btn.disabled = false;
   closeUserModal();
   loadUsersList();
+}
+
+// ===================== ГРУППЫ ОБУЧЕНИЯ =====================
+// Записать сразу много сотрудников на курс и разом отметить, что они прошли.
+// Работает для наших курсов (с протоколом), внешних и курсов БЕЗ протокола (там номер не нужен совсем).
+// Вкладка «Группы обучения»: «Заявки» (список и карточка заявки) и «Дашборд» (сводка).
+const SESSION_KIND_LABEL = { internal: 'Наш курс (с протоколом)', external: 'Внешний курс', no_protocol: 'Курс без протокола' };
+const SESSION_KIND_BADGE = {
+  internal: 'bg-blue-50 text-blue-700', external: 'bg-amber-50 text-amber-700', no_protocol: 'bg-emerald-50 text-emerald-700'
+};
+const sessionsState = { view: 'list', status: '', q: '', list: [], detail: null, selected: new Set(), stats: null, year: '', courses: null };
+
+function sessFmtDate(d) {
+  if (!d) return '—';
+  const m = String(d).slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : esc(d);
+}
+function sessKindBadge(kind) {
+  const k = kind || 'internal';
+  return `<span class="inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold ${SESSION_KIND_BADGE[k] || ''}">${esc(SESSION_KIND_LABEL[k] || k)}</span>`;
+}
+function sessStatusBadge(s) {
+  return s === 'completed'
+    ? '<span class="inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800">Проведена</span>'
+    : '<span class="inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700">Запланирована</span>';
+}
+function sessErr(e) { alert(e && e.message ? e.message : 'Ошибка запроса'); }
+
+function renderSessionsTab(container) {
+  const st = sessionsState;
+  const tabBtn = (v, label) => `<button onclick="sessionsSetView('${v}')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${st.view === v || (v === 'list' && st.view === 'detail') ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}">${label}</button>`;
+  container.innerHTML = `
+    <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+      <div class="flex flex-wrap justify-between items-center gap-3 mb-2">
+        <h2 class="text-lg font-bold text-slate-900">Группы обучения</h2>
+        <div class="flex gap-2">${tabBtn('list', 'Заявки')}${tabBtn('dashboard', 'Дашборд')}</div>
+      </div>
+      <p class="text-xs text-slate-500 mb-4">Запишите сразу много сотрудников на курс, а после занятия одной кнопкой отметьте всех, кто прошёл.
+        Для курса «без протокола» ничего, кроме даты, вводить не нужно — удостоверение не выпускается, но курс виден по QR и в статистике.</p>
+      <div id="sessionsBody"><div class="text-slate-400 text-sm">Загрузка…</div></div>
+    </div>`;
+  if (st.view === 'dashboard') return sessionsLoadDashboard();
+  if (st.view === 'detail' && st.detail) return sessionsRenderDetail();
+  st.view = 'list';
+  return sessionsLoadList();
+}
+function sessionsSetView(v) { sessionsState.view = v; sessionsState.selected = new Set(); renderSessionsTab(document.getElementById('tabContent')); }
+
+// ---------- список заявок ----------
+async function sessionsLoadList() {
+  const st = sessionsState;
+  const body = document.getElementById('sessionsBody');
+  if (!body) return;
+  try {
+    const qs = new URLSearchParams();
+    if (st.status) qs.set('status', st.status);
+    if (st.q) qs.set('q', st.q);
+    st.list = await api.req('/api/training-sessions' + (qs.toString() ? '?' + qs : ''));
+  } catch (e) { body.innerHTML = `<div class="text-red-600 text-sm">${esc(e.message)}</div>`; return; }
+  const rows = st.list.map((x) => `
+    <tr class="border-t hover:bg-slate-50 cursor-pointer" onclick="sessionsOpen(${x.id})">
+      <td class="py-2 pr-3 whitespace-nowrap">${sessFmtDate(x.status === 'completed' ? x.test_date : x.planned_date)}</td>
+      <td class="py-2 pr-3"><div class="font-semibold text-slate-900">${esc(x.course_title)}</div>${x.title ? `<div class="text-xs text-slate-500">${esc(x.title)}</div>` : ''}</td>
+      <td class="py-2 pr-3">${sessKindBadge(x.course_kind)}</td>
+      <td class="py-2 pr-3 tabular-nums text-right">${x.members_count}</td>
+      <td class="py-2 pr-3 tabular-nums text-right">${x.attended_count}</td>
+      <td class="py-2 pr-3">${sessStatusBadge(x.status)}</td>
+    </tr>`).join('');
+  body.innerHTML = `
+    <div class="flex flex-wrap items-center gap-2 mb-3">
+      <select onchange="sessionsState.status=this.value;sessionsLoadList()" class="border rounded-lg px-2 py-1.5 text-sm">
+        <option value="" ${!st.status ? 'selected' : ''}>Все заявки</option>
+        <option value="planned" ${st.status === 'planned' ? 'selected' : ''}>Запланированы</option>
+        <option value="completed" ${st.status === 'completed' ? 'selected' : ''}>Проведены</option>
+      </select>
+      <input type="text" value="${esc(st.q)}" placeholder="Поиск по курсу, названию, протоколу" onkeydown="if(event.key==='Enter'){sessionsState.q=this.value;sessionsLoadList()}" class="border rounded-lg px-3 py-1.5 text-sm w-72">
+      <div class="flex-1"></div>
+      <button onclick="sessionsOpenCreate()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700">+ Новая группа</button>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm text-left">
+        <thead class="text-xs text-slate-500 uppercase"><tr>
+          <th class="py-2 pr-3">Дата</th><th class="py-2 pr-3">Курс</th><th class="py-2 pr-3">Вид</th>
+          <th class="py-2 pr-3 text-right">Записано</th><th class="py-2 pr-3 text-right">Присутствовало</th><th class="py-2 pr-3">Статус</th>
+        </tr></thead>
+        <tbody>${rows || '<tr><td colspan="6" class="py-6 text-center text-slate-400">Заявок пока нет. Нажмите «+ Новая группа».</td></tr>'}</tbody>
+      </table>
+    </div>`;
+}
+
+async function sessionsEnsureCourses() {
+  if (!sessionsState.courses) sessionsState.courses = await api.getCourses({});
+  return sessionsState.courses;
+}
+
+// ---------- создание ----------
+function sessionsModalShell(id, innerHtml, widthCls = 'max-w-lg') {
+  let m = document.getElementById(id);
+  if (!m) {
+    m = document.createElement('div');
+    m.id = id;
+    m.className = 'fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50';
+    document.body.appendChild(m);
+  }
+  m.innerHTML = `<div class="bg-white rounded-xl shadow-2xl ${widthCls} w-full p-6 max-h-[90vh] overflow-y-auto">${innerHtml}</div>`;
+  return m;
+}
+function sessionsCloseModal(id) { const m = document.getElementById(id); if (m) m.remove(); }
+
+async function sessionsOpenCreate() {
+  let courses;
+  try { courses = await sessionsEnsureCourses(); } catch (e) { return sessErr(e); }
+  const opts = courses.map((c) => `<option value="${c.id}" data-kind="${esc(c.course_kind || 'internal')}">${esc(c.title_ru)} — ${esc(SESSION_KIND_LABEL[c.course_kind || 'internal'])}</option>`).join('');
+  sessionsModalShell('sessCreateModal', `
+    <div class="flex justify-between items-start mb-3"><h3 class="text-lg font-bold">Новая группа обучения</h3>
+      <button onclick="sessionsCloseModal('sessCreateModal')" class="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button></div>
+    <label class="block text-xs font-semibold text-slate-600 mb-1">Курс</label>
+    <select id="sessCourse" class="w-full border rounded-lg px-3 py-2 text-sm mb-3"><option value="">— выберите курс —</option>${opts}</select>
+    <label class="block text-xs font-semibold text-slate-600 mb-1">Дата проведения</label>
+    <input id="sessPlanned" type="date" class="w-full border rounded-lg px-3 py-2 text-sm mb-3">
+    <label class="block text-xs font-semibold text-slate-600 mb-1">Название (необязательно)</label>
+    <input id="sessTitle" type="text" placeholder="например, «Группа 1, смена Б»" class="w-full border rounded-lg px-3 py-2 text-sm mb-3">
+    <label class="block text-xs font-semibold text-slate-600 mb-1">Примечание (необязательно)</label>
+    <textarea id="sessNote" rows="2" class="w-full border rounded-lg px-3 py-2 text-sm mb-4"></textarea>
+    <div class="flex justify-end gap-2">
+      <button onclick="sessionsCloseModal('sessCreateModal')" class="px-4 py-2 text-sm rounded-lg bg-slate-100 hover:bg-slate-200">Отмена</button>
+      <button onclick="sessionsCreate()" class="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700">Создать и добавить людей</button>
+    </div>`);
+}
+async function sessionsCreate() {
+  const course_id = document.getElementById('sessCourse').value;
+  if (!course_id) return alert('Выберите курс');
+  try {
+    const r = await api.req('/api/training-sessions', { method: 'POST', body: {
+      course_id: Number(course_id),
+      planned_date: document.getElementById('sessPlanned').value || null,
+      title: document.getElementById('sessTitle').value,
+      note: document.getElementById('sessNote').value
+    }});
+    sessionsCloseModal('sessCreateModal');
+    await sessionsOpen(r.id, true);
+  } catch (e) { sessErr(e); }
+}
+
+// ---------- карточка заявки ----------
+async function sessionsOpen(id, openPicker = false) {
+  const st = sessionsState;
+  try { st.detail = await api.req('/api/training-sessions/' + id); } catch (e) { return sessErr(e); }
+  st.view = 'detail';
+  st.selected = new Set();
+  renderSessionsTab(document.getElementById('tabContent'));
+  if (openPicker && st.detail.status === 'planned') sessionsOpenPicker();
+}
+async function sessionsReloadDetail() {
+  const st = sessionsState;
+  if (!st.detail) return;
+  try { st.detail = await api.req('/api/training-sessions/' + st.detail.id); } catch (e) { return sessErr(e); }
+  sessionsRenderDetail();
+}
+function sessionsRenderDetail() {
+  const st = sessionsState, d = st.detail;
+  const body = document.getElementById('sessionsBody');
+  if (!body || !d) return;
+  const planned = d.status === 'planned';
+  const isSuper = state.user && state.user.role === 'superadmin';
+  const total = d.members.length;
+  const attended = d.members.filter((m) => m.attended).length;
+  const sel = st.selected;
+  const rows = d.members.map((m) => {
+    const fio = `${m.last_name || ''} ${m.first_name || ''}`.trim();
+    return `<tr class="border-t">
+      <td class="py-1.5 pr-2">${planned || isSuper ? `<input type="checkbox" ${sel.has(m.user_id) ? 'checked' : ''} onchange="sessionsToggleSel(${m.user_id}, this.checked)">` : ''}</td>
+      <td class="py-1.5 pr-3 font-medium">${esc(fio)}</td>
+      <td class="py-1.5 pr-3 text-slate-600">${esc(m.object || '')}${m.department ? ' · ' + esc(m.department) : ''}</td>
+      <td class="py-1.5 pr-3 text-slate-600">${esc(m.position || '')}</td>
+      <td class="py-1.5 pr-3 text-xs text-slate-500">${m.prev_test_date ? 'был: ' + sessFmtDate(m.prev_test_date) : ''}</td>
+      <td class="py-1.5">${d.status === 'completed'
+        ? (m.assignment_id ? '<span class="text-emerald-700 font-semibold">✓ прошёл</span>' : '<span class="text-slate-400">не присутствовал</span>')
+        : (m.attended ? '<span class="text-emerald-700 font-semibold">✓ присутствовал</span>' : '<span class="text-slate-400">—</span>')}</td>
+    </tr>`;
+  }).join('');
+  const isOwn = (d.course_kind || 'internal') === 'internal';
+  body.innerHTML = `
+    <button onclick="sessionsSetView('list')" class="text-sm text-blue-700 hover:underline mb-3">← К списку заявок</button>
+    <div class="flex flex-wrap items-center gap-2 mb-1">
+      <h3 class="text-base font-bold text-slate-900">${esc(d.course_title)}</h3>${sessKindBadge(d.course_kind)}${sessStatusBadge(d.status)}
+    </div>
+    <div class="text-sm text-slate-600 mb-3">${d.title ? esc(d.title) + ' · ' : ''}${planned ? 'Дата проведения: ' + sessFmtDate(d.planned_date) : 'Дата прохождения: ' + sessFmtDate(d.test_date) + (d.protocol_number ? ' · протокол № ' + esc(d.protocol_number) : '')}${d.note ? '<br><span class="text-slate-500">' + esc(d.note) + '</span>' : ''}</div>
+    <div class="flex flex-wrap items-center gap-2 mb-3">
+      ${planned ? `
+        <button onclick="sessionsOpenPicker()" class="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700">+ Добавить сотрудников</button>
+        <button onclick="sessionsMark(true, true)" class="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-semibold hover:bg-emerald-700">✓ Отметить ВСЕХ присутствующими</button>
+        <button onclick="sessionsMark(true)" class="px-3 py-1.5 bg-emerald-50 text-emerald-800 rounded-lg text-xs font-semibold hover:bg-emerald-100">✓ Отметить выбранных</button>
+        <button onclick="sessionsMark(false)" class="px-3 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-200">Снять отметку у выбранных</button>
+        <button onclick="sessionsRemoveSelected()" class="px-3 py-1.5 bg-red-50 text-red-700 rounded-lg text-xs font-semibold hover:bg-red-100">Убрать выбранных</button>
+      ` : `<button onclick="sessionsOpenPicker()" class="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700">+ Добавить опоздавшего (сразу будет внесено прохождение)</button>
+        ${isSuper ? `<button onclick="sessionsRemoveSelected()" class="px-3 py-1.5 bg-red-50 text-red-700 rounded-lg text-xs font-semibold hover:bg-red-100">Убрать выбранных</button>` : ''}`}
+    </div>
+    <div class="text-xs text-slate-500 mb-2">Всего: <b>${total}</b> · присутствовало: <b>${attended}</b>${planned ? ' · выбрано: <b>' + sel.size + '</b>' : ''}</div>
+    <div class="overflow-x-auto mb-4">
+      <table class="w-full text-sm text-left">
+        <thead class="text-xs text-slate-500 uppercase"><tr><th class="py-2 pr-2 w-8">${planned || isSuper ? '<input type="checkbox" onchange="sessionsToggleAll(this.checked)">' : ''}</th><th class="py-2 pr-3">ФИО</th><th class="py-2 pr-3">Объект / отдел</th><th class="py-2 pr-3">Должность</th><th class="py-2 pr-3">Прошлое обучение</th><th class="py-2">Статус</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="6" class="py-6 text-center text-slate-400">Сотрудников нет. Нажмите «+ Добавить сотрудников».</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div class="flex flex-wrap gap-2 border-t pt-3">
+      ${planned ? `
+        <button onclick="sessionsOpenComplete()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-semibold hover:bg-emerald-700">Закрыть заявку и внести «прошли» присутствующим (${attended})</button>
+        <button onclick="sessionsOpenEdit()" class="px-4 py-2 bg-slate-100 rounded-lg text-sm font-semibold hover:bg-slate-200">Изменить данные</button>
+        <button onclick="sessionsDelete()" class="px-4 py-2 bg-red-50 text-red-700 rounded-lg text-sm font-semibold hover:bg-red-100">Удалить заявку</button>
+      ` : `
+        ${isSuper ? `<button onclick="sessionsReopen()" class="px-4 py-2 bg-amber-50 text-amber-800 rounded-lg text-sm font-semibold hover:bg-amber-100">Откатить закрытие (удалит внесённые записи)</button>` : ''}
+        <span class="text-xs text-slate-500 self-center">Прохождение внесено${isOwn ? ', сертификаты и удостоверения выпущены' : '; удостоверение для этого вида курса не выпускается — курс виден по QR и в статистике'}.</span>
+      `}
+    </div>`;
+}
+function sessionsToggleSel(uid, on) { on ? sessionsState.selected.add(uid) : sessionsState.selected.delete(uid); sessionsRenderDetail(); }
+function sessionsToggleAll(on) {
+  const st = sessionsState;
+  st.selected = on ? new Set(st.detail.members.map((m) => m.user_id)) : new Set();
+  sessionsRenderDetail();
+}
+async function sessionsMark(attended, all = false) {
+  const st = sessionsState, d = st.detail;
+  if (!all && !st.selected.size) return alert('Отметьте галочками сотрудников в списке');
+  try {
+    await api.req(`/api/training-sessions/${d.id}/members`, { method: 'PATCH', body: all ? { all: true, attended } : { user_ids: [...st.selected], attended } });
+    await sessionsReloadDetail();
+  } catch (e) { sessErr(e); }
+}
+async function sessionsRemoveSelected() {
+  const st = sessionsState, d = st.detail;
+  if (!st.selected.size) return alert('Отметьте галочками сотрудников в списке');
+  const closed = d.status === 'completed';
+  if (!confirm(`Убрать из заявки: ${st.selected.size} чел.?` + (closed ? ' У них будет удалена внесённая запись о прохождении.' : ''))) return;
+  try {
+    for (const uid of [...st.selected]) await api.req(`/api/training-sessions/${d.id}/members/${uid}`, { method: 'DELETE' });
+    st.selected = new Set();
+    await sessionsReloadDetail();
+  } catch (e) { sessErr(e); await sessionsReloadDetail(); }
+}
+async function sessionsDelete() {
+  const d = sessionsState.detail;
+  if (!confirm('Удалить заявку? Записи обучения у сотрудников не создавались, поэтому ничего не пропадёт.')) return;
+  try { await api.req('/api/training-sessions/' + d.id, { method: 'DELETE' }); sessionsState.detail = null; sessionsSetView('list'); } catch (e) { sessErr(e); }
+}
+async function sessionsReopen() {
+  const d = sessionsState.detail;
+  if (!confirm('Откатить закрытие? Все записи о прохождении, созданные этой заявкой, будут удалены.')) return;
+  try { const r = await api.req(`/api/training-sessions/${d.id}/reopen`, { method: 'POST' }); alert('Удалено записей: ' + r.deleted); await sessionsReloadDetail(); } catch (e) { sessErr(e); }
+}
+
+// ---------- изменить данные ----------
+function sessionsOpenEdit() {
+  const d = sessionsState.detail;
+  const own = (d.course_kind || 'internal') === 'internal';
+  sessionsModalShell('sessEditModal', `
+    <h3 class="text-lg font-bold mb-3">Данные заявки</h3>
+    <label class="block text-xs font-semibold text-slate-600 mb-1">Дата проведения</label>
+    <input id="seDate" type="date" value="${esc(d.planned_date || '')}" class="w-full border rounded-lg px-3 py-2 text-sm mb-3">
+    <label class="block text-xs font-semibold text-slate-600 mb-1">Название</label>
+    <input id="seTitle" type="text" value="${esc(d.title || '')}" class="w-full border rounded-lg px-3 py-2 text-sm mb-3">
+    <label class="block text-xs font-semibold text-slate-600 mb-1">Примечание</label>
+    <textarea id="seNote" rows="2" class="w-full border rounded-lg px-3 py-2 text-sm mb-4">${esc(d.note || '')}</textarea>
+    <div class="flex justify-end gap-2">
+      <button onclick="sessionsCloseModal('sessEditModal')" class="px-4 py-2 text-sm rounded-lg bg-slate-100">Отмена</button>
+      <button onclick="sessionsSaveEdit()" class="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white font-semibold">Сохранить</button>
+    </div>`);
+}
+async function sessionsSaveEdit() {
+  const d = sessionsState.detail;
+  try {
+    await api.req('/api/training-sessions/' + d.id, { method: 'PUT', body: {
+      planned_date: document.getElementById('seDate').value || null,
+      title: document.getElementById('seTitle').value, note: document.getElementById('seNote').value
+    }});
+    sessionsCloseModal('sessEditModal'); await sessionsReloadDetail();
+  } catch (e) { sessErr(e); }
+}
+
+// ---------- закрыть заявку (массово «прошли») ----------
+function sessionsOpenComplete() {
+  const d = sessionsState.detail;
+  const attended = d.members.filter((m) => m.attended).length;
+  if (!attended) return alert('Сначала отметьте присутствующих (кнопка «Отметить ВСЕХ присутствующими» или галочки + «Отметить выбранных»).');
+  const kind = d.course_kind || 'internal';
+  const absent = d.members.length - attended;
+  const protoField = kind === 'no_protocol' ? '' : `
+    <label class="block text-xs font-semibold text-slate-600 mb-1">${kind === 'internal' ? '№ протокола *' : '№ протокола другой организации (необязательно)'}</label>
+    <input id="scProto" type="text" value="${esc(d.protocol_number || '')}" class="w-full border rounded-lg px-3 py-2 text-sm mb-3">
+    ${kind === 'internal' ? `<label class="block text-xs font-semibold text-slate-600 mb-1">Дата протокола (если пусто — дата прохождения)</label>
+    <input id="scProtoDate" type="date" value="${esc(d.protocol_date || '')}" class="w-full border rounded-lg px-3 py-2 text-sm mb-3">` : ''}`;
+  sessionsModalShell('sessCompleteModal', `
+    <h3 class="text-lg font-bold mb-1">Внести прохождение</h3>
+    <p class="text-sm text-slate-600 mb-3">Будет отмечено «прошли»: <b>${attended}</b> чел.${absent ? ` Не присутствовали (${absent}) — запись им не вносится.` : ''}</p>
+    <label class="block text-xs font-semibold text-slate-600 mb-1">Дата прохождения *</label>
+    <input id="scDate" type="date" value="${esc(d.test_date || d.planned_date || '')}" class="w-full border rounded-lg px-3 py-2 text-sm mb-3">
+    ${protoField}
+    <label class="block text-xs font-semibold text-slate-600 mb-1">Следующее прохождение (если пусто — по сроку действия курса)</label>
+    <input id="scNext" type="date" value="${esc(d.next_test_date || '')}" class="w-full border rounded-lg px-3 py-2 text-sm mb-3">
+    <label class="block text-xs font-semibold text-slate-600 mb-1">Результат, % (необязательно)</label>
+    <input id="scScore" type="number" min="0" max="100" value="${d.score_percent == null ? '' : esc(d.score_percent)}" class="w-full border rounded-lg px-3 py-2 text-sm mb-4">
+    <div class="flex justify-end gap-2">
+      <button onclick="sessionsCloseModal('sessCompleteModal')" class="px-4 py-2 text-sm rounded-lg bg-slate-100">Отмена</button>
+      <button id="scBtn" onclick="sessionsComplete()" class="px-4 py-2 text-sm rounded-lg bg-emerald-600 text-white font-semibold">Внести прохождение (${attended})</button>
+    </div>`);
+}
+async function sessionsComplete() {
+  const d = sessionsState.detail;
+  const val = (id) => { const el = document.getElementById(id); return el ? el.value : undefined; };
+  const body = { test_date: val('scDate'), next_test_date: val('scNext'), score_percent: val('scScore') };
+  if (val('scProto') !== undefined) body.protocol_number = val('scProto');
+  if (val('scProtoDate') !== undefined) body.protocol_date = val('scProtoDate');
+  const btn = document.getElementById('scBtn'); if (btn) btn.disabled = true;
+  try {
+    const r = await api.req(`/api/training-sessions/${d.id}/complete`, { method: 'POST', body });
+    sessionsCloseModal('sessCompleteModal');
+    alert(`Готово. Внесено: ${r.created}` + (r.already_had ? `, уже было: ${r.already_had}` : '') + (r.documents_failed ? `. Не удалось выпустить документы у ${r.documents_failed} (можно повторить из карточки сотрудника)` : ''));
+    await sessionsReloadDetail();
+  } catch (e) { if (btn) btn.disabled = false; sessErr(e); }
+}
+
+// ---------- выбор сотрудников ----------
+const sessPick = { users: [], q: '', object: '', department: '', selected: new Set() };
+async function sessionsOpenPicker() {
+  sessPick.q = ''; sessPick.object = ''; sessPick.department = ''; sessPick.selected = new Set();
+  if (!state.metaLoaded) { try { await refreshOrgMeta(); } catch (e) { /* список объектов не критичен */ } }
+  sessionsModalShell('sessPickModal', '<div class="text-slate-400 text-sm">Загрузка…</div>', 'max-w-3xl');
+  await sessionsPickLoad();
+}
+async function sessionsPickLoad() {
+  const qs = new URLSearchParams();
+  if (sessPick.q) qs.set('q', sessPick.q);
+  if (sessPick.object) qs.set('object', sessPick.object);
+  if (sessPick.department) qs.set('department', sessPick.department);
+  try { sessPick.users = await api.req('/api/users' + (qs.toString() ? '?' + qs : '')); } catch (e) { return sessErr(e); }
+  sessionsPickRender();
+}
+function sessionsPickRender() {
+  const d = sessionsState.detail;
+  const inSession = new Set(d.members.map((m) => m.user_id));
+  const meta = state.meta || {};
+  const objOpts = ['<option value="">Все объекты</option>'].concat((meta.objects || []).map((o) => `<option ${sessPick.object === o ? 'selected' : ''}>${esc(o)}</option>`)).join('');
+  const depOpts = ['<option value="">Все отделы</option>'].concat((meta.departments || []).map((o) => `<option ${sessPick.department === o ? 'selected' : ''}>${esc(o)}</option>`)).join('');
+  const free = sessPick.users.filter((u) => !inSession.has(u.id));
+  const rows = sessPick.users.map((u) => {
+    const already = inSession.has(u.id);
+    return `<label class="flex items-center gap-2 py-1.5 border-t ${already ? 'opacity-40' : 'cursor-pointer hover:bg-slate-50'}">
+      <input type="checkbox" ${already ? 'disabled checked' : ''} ${sessPick.selected.has(u.id) ? 'checked' : ''} onchange="sessionsPickToggle(${u.id}, this.checked)">
+      <span class="font-medium text-sm">${esc(u.last_name || '')} ${esc(u.first_name || '')}</span>
+      <span class="text-xs text-slate-500">${esc(u.position || '')}${u.department ? ' · ' + esc(u.department) : ''}</span>
+      ${already ? '<span class="ml-auto text-xs text-slate-400">уже в заявке</span>' : ''}
+    </label>`;
+  }).join('');
+  sessionsModalShell('sessPickModal', `
+    <div class="flex justify-between items-start mb-3"><h3 class="text-lg font-bold">Добавить сотрудников</h3>
+      <button onclick="sessionsCloseModal('sessPickModal')" class="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button></div>
+    <div class="flex flex-wrap gap-2 mb-2">
+      <input id="spQ" type="text" value="${esc(sessPick.q)}" placeholder="Поиск по ФИО / логину" onkeydown="if(event.key==='Enter'){sessPick.q=this.value;sessionsPickLoad()}" class="border rounded-lg px-3 py-1.5 text-sm flex-1 min-w-[160px]">
+      <select onchange="sessPick.object=this.value;sessionsPickLoad()" class="border rounded-lg px-2 py-1.5 text-sm">${objOpts}</select>
+      <select onchange="sessPick.department=this.value;sessionsPickLoad()" class="border rounded-lg px-2 py-1.5 text-sm">${depOpts}</select>
+    </div>
+    <div class="flex flex-wrap items-center gap-2 mb-2 text-xs">
+      <button onclick="sessionsPickAll()" class="px-3 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 font-semibold">Выбрать всех найденных (${free.length})</button>
+      <button onclick="sessPick.selected=new Set();sessionsPickRender()" class="px-3 py-1 rounded-lg bg-slate-100 hover:bg-slate-200">Снять выбор</button>
+      <span class="text-slate-500">Найдено: ${sessPick.users.length} · выбрано: <b>${sessPick.selected.size}</b></span>
+    </div>
+    <div class="max-h-[50vh] overflow-y-auto border rounded-lg px-3 mb-4">${rows || '<div class="py-6 text-center text-slate-400 text-sm">Никого не найдено</div>'}</div>
+    <div class="flex justify-end gap-2">
+      <button onclick="sessionsCloseModal('sessPickModal')" class="px-4 py-2 text-sm rounded-lg bg-slate-100">Отмена</button>
+      <button onclick="sessionsPickApply()" class="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white font-semibold">Добавить в заявку (${sessPick.selected.size})</button>
+    </div>`, 'max-w-3xl');
+}
+function sessionsPickToggle(uid, on) { on ? sessPick.selected.add(uid) : sessPick.selected.delete(uid); sessionsPickRender(); }
+function sessionsPickAll() {
+  const inSession = new Set(sessionsState.detail.members.map((m) => m.user_id));
+  sessPick.users.forEach((u) => { if (!inSession.has(u.id)) sessPick.selected.add(u.id); });
+  sessionsPickRender();
+}
+async function sessionsPickApply() {
+  if (!sessPick.selected.size) return alert('Никого не выбрано');
+  const d = sessionsState.detail;
+  try {
+    const r = await api.req(`/api/training-sessions/${d.id}/members`, { method: 'POST', body: { user_ids: [...sessPick.selected] } });
+    sessionsCloseModal('sessPickModal');
+    if (r.already) alert(`Добавлено: ${r.added}. Уже были в заявке: ${r.already}`);
+    await sessionsReloadDetail();
+  } catch (e) { sessErr(e); }
+}
+
+// ---------- дашборд ----------
+async function sessionsLoadDashboard() {
+  const st = sessionsState;
+  const body = document.getElementById('sessionsBody');
+  if (!body) return;
+  try { st.stats = await api.req('/api/training-sessions/stats' + (st.year ? '?year=' + encodeURIComponent(st.year) : '')); }
+  catch (e) { body.innerHTML = `<div class="text-red-600 text-sm">${esc(e.message)}</div>`; return; }
+  const s = st.stats, t0 = s.totals || {};
+  const card = (label, val, cls) => `<div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm"><div class="text-xs font-bold text-slate-500 uppercase leading-tight min-h-[2em]">${label}</div><div class="text-2xl font-black ${cls} mt-1 tabular-nums">${val || 0}</div></div>`;
+  const thisYear = new Date().getFullYear();
+  const yearOpts = ['<option value="">Все годы</option>'].concat([thisYear + 1, thisYear, thisYear - 1, thisYear - 2].map((y) => `<option value="${y}" ${String(st.year) === String(y) ? 'selected' : ''}>${y}</option>`)).join('');
+  const courseRows = (s.by_course || []).map((c) => `<tr class="border-t"><td class="py-2 pr-3 font-medium">${esc(c.course_title)}</td><td class="py-2 pr-3">${sessKindBadge(c.course_kind)}</td>
+    <td class="py-2 pr-3 text-right tabular-nums">${c.sessions_planned}</td><td class="py-2 pr-3 text-right tabular-nums">${c.sessions_completed}</td>
+    <td class="py-2 pr-3 text-right tabular-nums text-amber-700">${c.enrolled}</td><td class="py-2 pr-3 text-right tabular-nums text-emerald-700 font-semibold">${c.passed}</td><td class="py-2 text-right tabular-nums text-slate-500">${c.absent}</td></tr>`).join('');
+  const objRows = (s.by_object || []).map((o) => `<tr class="border-t"><td class="py-2 pr-3">${esc(o.object)}</td><td class="py-2 pr-3 text-right tabular-nums text-amber-700">${o.enrolled}</td><td class="py-2 text-right tabular-nums text-emerald-700 font-semibold">${o.passed}</td></tr>`).join('');
+  const li = (x, extra) => `<div class="flex justify-between gap-3 py-1.5 border-t text-sm cursor-pointer hover:bg-slate-50" onclick="sessionsOpen(${x.id})"><span><b>${esc(x.course_title)}</b>${x.title ? ' · ' + esc(x.title) : ''}</span><span class="text-slate-500 whitespace-nowrap">${extra}</span></div>`;
+  body.innerHTML = `
+    <div class="flex items-center gap-2 mb-4"><span class="text-xs text-slate-500">Период:</span>
+      <select onchange="sessionsState.year=this.value;sessionsLoadDashboard()" class="border rounded-lg px-2 py-1 text-sm">${yearOpts}</select></div>
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+      ${card('Заявок запланировано', t0.planned_sessions, 'text-slate-900')}
+      ${card('Записано на обучение', t0.people_enrolled, 'text-amber-600')}
+      ${card('Заявок проведено', t0.completed_sessions, 'text-slate-900')}
+      ${card('Прошли (по группам)', t0.people_passed, 'text-emerald-600')}
+      ${card('Не присутствовали', t0.people_absent, 'text-slate-500')}
+    </div>
+    <h3 class="text-sm font-bold mb-2">По курсам</h3>
+    <div class="overflow-x-auto mb-6"><table class="w-full text-sm text-left"><thead class="text-xs text-slate-500 uppercase"><tr>
+      <th class="py-2 pr-3">Курс</th><th class="py-2 pr-3">Вид</th><th class="py-2 pr-3 text-right">Заявок ждут</th><th class="py-2 pr-3 text-right">Проведено</th><th class="py-2 pr-3 text-right">Записано</th><th class="py-2 pr-3 text-right">Прошли</th><th class="py-2 text-right">Не были</th></tr></thead>
+      <tbody>${courseRows || '<tr><td colspan="7" class="py-4 text-center text-slate-400">Данных пока нет</td></tr>'}</tbody></table></div>
+    <div class="grid md:grid-cols-2 gap-6 mb-6">
+      <div><h3 class="text-sm font-bold mb-2">Ближайшие заявки</h3>${(s.upcoming || []).map((x) => li(x, `${sessFmtDate(x.planned_date)} · ${x.members_count} чел.`)).join('') || '<div class="text-slate-400 text-sm">Нет запланированных</div>'}</div>
+      <div><h3 class="text-sm font-bold mb-2">Недавно проведённые</h3>${(s.recent || []).map((x) => li(x, `${sessFmtDate(x.test_date)} · прошли ${x.passed_count}`)).join('') || '<div class="text-slate-400 text-sm">Пока нет</div>'}</div>
+    </div>
+    <h3 class="text-sm font-bold mb-2">По объектам</h3>
+    <div class="overflow-x-auto"><table class="w-full text-sm text-left max-w-xl"><thead class="text-xs text-slate-500 uppercase"><tr><th class="py-2 pr-3">Объект</th><th class="py-2 pr-3 text-right">Записано</th><th class="py-2 text-right">Прошли</th></tr></thead>
+      <tbody>${objRows || '<tr><td colspan="3" class="py-4 text-center text-slate-400">Данных пока нет</td></tr>'}</tbody></table></div>`;
 }
 
 // ===================== МАССОВОЕ ОБНОВЛЕНИЕ ЧЕРЕЗ EXCEL =====================

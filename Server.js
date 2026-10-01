@@ -39,6 +39,8 @@ app.use('/api/courses', require('./routes/courses'));
 app.use('/api/assignments', require('./routes/assignments'));
 // Массовое обновление через Excel: выгрузка сотрудников -> новое обучение -> загрузка обратно
 app.use('/api/bulk-training', require('./routes/bulkTraining'));
+// Группы обучения: записать сразу много сотрудников на курс и разом отметить, что они прошли (в т.ч. курс без протокола)
+app.use('/api/training-sessions', require('./routes/trainingSessions'));
 app.use('/api/protocols', require('./routes/protocols'));
 // Курсы по должностям: привязка курсов к должностям, Excel-матрица, автозапись
 app.use('/api/course-positions', require('./routes/coursePositions'));

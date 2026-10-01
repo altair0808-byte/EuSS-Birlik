@@ -363,6 +363,39 @@ async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
   `);
 
+  // ГРУППЫ ОБУЧЕНИЯ: заявка на курс, который проходят много людей сразу (см. routes/trainingSessions.js).
+  // Пока заявка 'planned' — это просто список; при закрытии всем присутствующим разом вносится прохождение
+  // (обычные записи в assignments). Для курса «без протокола» номер протокола не нужен.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS training_sessions (
+      id BIGSERIAL PRIMARY KEY,
+      course_id BIGINT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+      title TEXT NOT NULL DEFAULT '',
+      note TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'completed')),
+      planned_date DATE,
+      protocol_number TEXT NOT NULL DEFAULT '',
+      protocol_date DATE,
+      test_date DATE,
+      next_test_date DATE,
+      score_percent INT,
+      created_by BIGINT,
+      completed_by BIGINT,
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS training_session_members (
+      session_id BIGINT NOT NULL REFERENCES training_sessions(id) ON DELETE CASCADE,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      attended BOOLEAN NOT NULL DEFAULT FALSE,
+      assignment_id BIGINT REFERENCES assignments(id) ON DELETE SET NULL,
+      PRIMARY KEY (session_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_training_sessions_course ON training_sessions(course_id);
+    CREATE INDEX IF NOT EXISTS idx_training_sessions_status ON training_sessions(status);
+    CREATE INDEX IF NOT EXISTS idx_training_session_members_user ON training_session_members(user_id);
+  `);
+
   await pool.query(`
     ALTER TABLE questions ADD COLUMN IF NOT EXISTS variant_number INT NOT NULL DEFAULT 1;
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS video_path TEXT;
