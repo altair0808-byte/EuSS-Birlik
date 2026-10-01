@@ -412,18 +412,28 @@ router.get('/import-template.xlsx', authRequired, requireRole('admin', 'superadm
 });
 
 // Meta
-router.get('/meta/objects', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.get('/meta/objects', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   try {
     const objRes = await query(`SELECT DISTINCT object FROM users WHERE object != '' AND role = 'employee' ORDER BY object`);
     const depRes = await query(`SELECT DISTINCT department FROM users WHERE department != '' AND role = 'employee' ORDER BY department`);
     // pairs — реальные сочетания «объект → отдел», чтобы в фильтре список отделов
     // сужался после выбора объекта (единый фильтр по объекту/отделу на всех вкладках).
     const pairRes = await query(`SELECT DISTINCT object, department FROM users WHERE role = 'employee' AND (object != '' OR department != '')`);
-    res.json({
-      objects: objRes.rows.map(r => r.object),
-      departments: depRes.rows.map(r => r.department),
-      pairs: pairRes.rows
-    });
+    let objects = objRes.rows.map(r => r.object);
+    let departments = depRes.rows.map(r => r.department);
+    let pairs = pairRes.rows;
+    // Ассистент видит в фильтре только объекты/отделы своей зоны.
+    if (req.user.role === 'assistant') {
+      const zoneObjects = Array.isArray(req.user.assistant_objects) ? req.user.assistant_objects : [];
+      const zoneDepartments = Array.isArray(req.user.assistant_departments) ? req.user.assistant_departments : [];
+      if (!zoneObjects.length && !zoneDepartments.length) {
+        return res.json({ objects: [], departments: [], pairs: [] });
+      }
+      pairs = pairs.filter(p => isInAssistantScope(req.user, p));
+      objects = [...new Set(pairs.map(p => p.object).filter(Boolean))].sort();
+      departments = [...new Set(pairs.map(p => p.department).filter(Boolean))].sort();
+    }
+    res.json({ objects, departments, pairs });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }

@@ -368,7 +368,7 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), a
   try {
     const { status, user_id, course_id, object, department, q, date_from, date_to, active_only } = req.query;
     let sql = `
-      SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position,
+      SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position, u.public_uid,
              c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.no_expiry, c.pass_score_percent, c.is_external
       FROM assignments a
       JOIN users u ON u.id = a.user_id
@@ -453,7 +453,7 @@ router.get('/certificates', authRequired, requireRole('admin', 'assistant', 'sup
     const { object, department, q } = req.query;
     let sql = `
       SELECT a.id, a.certificate_number, a.test_date, a.next_test_date, a.protocol_number, a.status,
-             u.id AS user_id, u.last_name, u.first_name, u.object, u.department, u.position,
+             u.id AS user_id, u.last_name, u.first_name, u.object, u.department, u.position, u.public_uid,
              c.title_ru, c.title_kz, c.no_expiry
       FROM assignments a
       JOIN users u ON u.id = a.user_id
