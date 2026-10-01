@@ -92,6 +92,80 @@ function normalizeDateOnly(v) {
   return s;
 }
 
+// ===================== Вахта (заезд / отъезд) =====================
+// Вахта хранится в users: rotation_arrival (заезд), rotation_days (срок: 14 / 21 / 28 или любой),
+// rotation_departure (отъезд = заезд + срок, можно поправить вручную). Статус «на вахте / дома»
+// в БД не хранится — считается на лету по сегодняшней дате (Атырау, UTC+5): с дня заезда по день
+// отъезда включительно сотрудник «на вахте», до заезда и после отъезда — «дома».
+const ROT_TODAY_SQL = `(NOW() AT TIME ZONE 'Asia/Atyrau')::date`;
+const ROT_ON_SQL = `(rotation_arrival IS NOT NULL AND rotation_arrival <= ${ROT_TODAY_SQL} AND (rotation_departure IS NULL OR rotation_departure >= ${ROT_TODAY_SQL}))`;
+const ROTATION_SELECT = `to_char(rotation_arrival, 'YYYY-MM-DD') AS rotation_arrival,
+                      rotation_days,
+                      to_char(rotation_departure, 'YYYY-MM-DD') AS rotation_departure,
+                      CASE WHEN rotation_arrival IS NULL THEN NULL WHEN ${ROT_ON_SQL} THEN 'on_shift' ELSE 'home' END AS rotation_status,
+                      CASE WHEN ${ROT_ON_SQL} AND rotation_departure IS NOT NULL THEN rotation_departure - ${ROT_TODAY_SQL} END AS rotation_days_left,
+                      CASE WHEN rotation_arrival > ${ROT_TODAY_SQL} THEN rotation_arrival - ${ROT_TODAY_SQL} END AS rotation_days_to_arrival`;
+
+function addDaysIso(iso, n) {
+  const d = new Date(iso + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function diffDaysIso(a, b) {
+  return Math.round((new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 86400000);
+}
+
+// Значение ячейки Excel / строки → 'YYYY-MM-DD' (или null, если пусто). Понимает дату-ячейку Excel,
+// число-серийник Excel, «2026-10-01» и «01.10.2026». Некорректное значение → ошибка invalid_date.
+function parseRotationDate(v) {
+  if (v === undefined || v === null || v === '') return null;
+  let d = null;
+  if (v instanceof Date) {
+    // +12 ч гасит сдвиг часового пояса, с которым библиотека чтения Excel создаёт даты
+    d = new Date(v.getTime() + 12 * 3600 * 1000);
+  } else if (typeof v === 'number') {
+    d = new Date(Math.round((v - 25569) * 86400 * 1000));
+  } else {
+    const s = String(v).trim();
+    if (!s) return null;
+    let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    else if ((m = s.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})$/))) d = new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));
+    else if (/^\d+(\.\d+)?$/.test(s)) d = new Date(Math.round((Number(s) - 25569) * 86400 * 1000));
+  }
+  if (!d || isNaN(d.getTime())) throw new Error('invalid_date');
+  const iso = d.toISOString().slice(0, 10);
+  if (iso < '2000-01-01' || iso > '2100-01-01') throw new Error('invalid_date');
+  return iso;
+}
+
+// Заезд + срок + отъезд → согласованная тройка. Нет заезда → вахта снимается (все поля null).
+// Нет отъезда — считаем заезд + срок; нет срока — считаем по отъезду.
+function computeRotation(arrival, days, departure) {
+  if (!arrival) return { arrival: null, days: null, departure: null };
+  let d = null;
+  if (days !== undefined && days !== null && String(days).trim() !== '') {
+    d = Number(String(days).trim().replace(',', '.'));
+    if (!Number.isInteger(d) || d < 1 || d > 365) throw new Error('invalid_rotation_days');
+  }
+  let dep = departure || null;
+  if (dep && dep < arrival) throw new Error('invalid_rotation_range');
+  if (!dep && d) dep = addDaysIso(arrival, d);
+  if (!dep) throw new Error('rotation_days_required');
+  if (!d) d = Math.max(1, diffDaysIso(arrival, dep));
+  return { arrival, days: d, departure: dep };
+}
+
+function rotationErrorMessage(code) {
+  switch (code) {
+    case 'invalid_date': return 'Некорректная дата (нужен формат ГГГГ-ММ-ДД или ДД.ММ.ГГГГ)';
+    case 'invalid_rotation_days': return 'Срок вахты — целое число дней от 1 до 365 (обычно 14, 21 или 28)';
+    case 'invalid_rotation_range': return 'Дата отъезда раньше даты заезда';
+    case 'rotation_days_required': return 'Укажите срок вахты (дней) или дату отъезда';
+    default: return code;
+  }
+}
+
 const upload = makeUploader('imports');
 
 // List users (суперадмин скрыт из списка)
@@ -126,7 +200,8 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), a
                       leave_reason, leave_note,
                       staff_category, to_char(hire_date, 'YYYY-MM-DD') AS hire_date,
                       created_at, permanent_certificate_number, tco_badge,
-                      committee_role, iin, assistant_objects, assistant_departments
+                      committee_role, iin, assistant_objects, assistant_departments,
+                      ${ROTATION_SELECT}
                FROM users WHERE role = ANY($1::text[])`;
     const params = [roles];
     if (statusesParam.length) {
@@ -146,6 +221,11 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), a
     if (objects.length) { params.push(objects); sql += ` AND object = ANY($${params.length}::text[])`; }
     if (departments.length) { params.push(departments); sql += ` AND department = ANY($${params.length}::text[])`; }
     if (positions.length) { params.push(positions); sql += ` AND position = ANY($${params.length}::text[])`; }
+    // Вахта: ?rotation=on_shift (на вахте) | home (дома) | unset (вахта не указана)
+    const rotFilter = String(req.query.rotation || '');
+    if (rotFilter === 'on_shift') sql += ` AND ${ROT_ON_SQL}`;
+    else if (rotFilter === 'home') sql += ` AND rotation_arrival IS NOT NULL AND NOT ${ROT_ON_SQL}`;
+    else if (rotFilter === 'unset') sql += ` AND rotation_arrival IS NULL`;
     if (q) {
       // Поиск одновременно по русскому написанию и по английской транслитерации
       // (п.9 запроса): "Утяшев", "Altair", "Utyashev", "Алтаир" должны находить
@@ -209,7 +289,14 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
     'балл': 'score_percent',
     '№ пропуска тшо': 'tco_badge',
     'пропуск тшо': 'tco_badge',
-    'tco badge': 'tco_badge'
+    'tco badge': 'tco_badge',
+    // Вахта (необязательно): заезд / срок / отъезд
+    'заезд': 'rotation_arrival',
+    'дата заезда': 'rotation_arrival',
+    'срок вахты': 'rotation_days',
+    'срок вахты (дней)': 'rotation_days',
+    'отъезд': 'rotation_departure',
+    'дата отъезда': 'rotation_departure'
   };
 
   // Excel хранит даты как объекты Date — приводим к формату YYYY-MM-DD,
@@ -319,6 +406,17 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
           userId = userResult.rows[0].id;
           created++;
           await enrollNewUser(userId, req.user.id);
+          // Вахта (если указан заезд): заезд + срок (или отъезд) → карточка сотрудника
+          const rawRot = (f) => (f in colByField ? row[colByField[f]] : '');
+          if (rawRot('rotation_arrival') !== '' && rawRot('rotation_arrival') != null) {
+            try {
+              const rot = computeRotation(parseRotationDate(rawRot('rotation_arrival')), rawRot('rotation_days'), parseRotationDate(rawRot('rotation_departure')));
+              await query('UPDATE users SET rotation_arrival = $1, rotation_days = $2, rotation_departure = $3 WHERE id = $4',
+                [rot.arrival, rot.days, rot.departure, userId]);
+            } catch (rotErr) {
+              errors.push(`Строка ${rowNum}: сотрудник создан, но вахта не внесена — ${rotationErrorMessage(rotErr.message)}`);
+            }
+          }
         }
 
         // Если в строке указан курс — параллельно заносим уже пройденное ранее
@@ -406,16 +504,22 @@ router.get('/import-template.xlsx', authRequired, requireRole('admin', 'superadm
       { header: 'Дата прохождения', key: 'test_date', width: 18 },
       { header: '№ сертификата', key: 'certificate_number', width: 18 },
       { header: 'Действителен до', key: 'next_test_date', width: 18 },
-      { header: 'Результат %', key: 'score_percent', width: 14 }
+      { header: 'Результат %', key: 'score_percent', width: 14 },
+      { header: 'Заезд', key: 'rotation_arrival', width: 14 },
+      { header: 'Срок вахты (дней)', key: 'rotation_days', width: 18 },
+      { header: 'Отъезд', key: 'rotation_departure', width: 14 }
     ];
     ws.getRow(1).font = { bold: true };
+    ws.getColumn('rotation_arrival').numFmt = 'yyyy-mm-dd';
+    ws.getColumn('rotation_departure').numFmt = 'yyyy-mm-dd';
     ws.getColumn('protocol_date').numFmt = 'yyyy-mm-dd';
     ws.getColumn('test_date').numFmt = 'yyyy-mm-dd';
     ws.getColumn('next_test_date').numFmt = 'yyyy-mm-dd';
     ws.addRow({
       last_name: 'Иванов', first_name: 'Иван', object: 'Объект 1', department: 'Отдел ОТ',
       position: 'Инженер', login: '', password: '',
-      course: '', protocol_number: '', protocol_date: '', test_date: '', certificate_number: '', next_test_date: '', score_percent: ''
+      course: '', protocol_number: '', protocol_date: '', test_date: '', certificate_number: '', next_test_date: '', score_percent: '',
+      rotation_arrival: '2026-10-01', rotation_days: 14, rotation_departure: ''
     });
     ws.addRow({
       last_name: 'Петрова', first_name: 'Анна', object: 'Объект 2', department: 'Производство',
@@ -449,7 +553,11 @@ router.get('/import-template.xlsx', authRequired, requireRole('admin', 'superadm
       '9. Даты указывайте в формате ГГГГ-ММ-ДД (например, 2026-01-15) либо как дату в ячейке Excel.',
       '10. Такому сотруднику обучение будет сразу отмечено как пройденное — статус "СДАЛ", без прохождения теста в системе.',
       '11. Удалите строки-примеры перед загрузкой своего списка.',
-      '12. Загрузите готовый файл на вкладке "Сотрудники" кнопкой "Импорт из Excel (.xlsx)".'
+      '12. Загрузите готовый файл на вкладке "Сотрудники" кнопкой "Импорт из Excel (.xlsx)".',
+      '',
+      'Колонки Заезд / Срок вахты (дней) / Отъезд — необязательные (вахтовый метод). Заезд — дата заезда на вахту,',
+      'срок обычно 14, 21 или 28 дней; Отъезд, если пусто, считается как Заезд + Срок. Для уже существующих',
+      'сотрудников вахту удобнее загружать отдельным файлом — кнопка "Бланк вахты" / "Загрузить вахту".'
     ].forEach(line => notes.addRow([line]));
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -458,6 +566,285 @@ router.get('/import-template.xlsx', authRequired, requireRole('admin', 'superadm
     res.end();
   } catch (e) {
     res.status(500).json({ error: 'template_failed', details: e.message });
+  }
+});
+
+// ===================== ВАХТА: выгрузка, бланк, массовая загрузка, ручной ввод =====================
+// Все маршруты /rotations/* объявлены раньше '/:id', иначе Express примет «rotations» за id.
+
+// Строки для выгрузки: действующие сотрудники с учётом фильтров (объект / отдел / должность / вахта / поиск)
+// и зоны ассистента.
+async function fetchRotationRows(req) {
+  const scope = scopedFilter(req.user, splitMulti(req.query.object), splitMulti(req.query.department));
+  if (scope.noAccess) return [];
+  const positions = splitMulti(req.query.position);
+  const params = [];
+  let sql = `SELECT last_name, first_name, iin, object, department, position, ${ROTATION_SELECT}
+             FROM users WHERE role = 'employee' AND employment_status = 'active'`;
+  if (scope.objects.length) { params.push(scope.objects); sql += ` AND object = ANY($${params.length}::text[])`; }
+  if (scope.departments.length) { params.push(scope.departments); sql += ` AND department = ANY($${params.length}::text[])`; }
+  if (positions.length) { params.push(positions); sql += ` AND position = ANY($${params.length}::text[])`; }
+  const rotFilter = String(req.query.rotation || '');
+  if (rotFilter === 'on_shift') sql += ` AND ${ROT_ON_SQL}`;
+  else if (rotFilter === 'home') sql += ` AND rotation_arrival IS NOT NULL AND NOT ${ROT_ON_SQL}`;
+  else if (rotFilter === 'unset') sql += ` AND rotation_arrival IS NULL`;
+  if (req.query.q) {
+    params.push(`%${req.query.q}%`);
+    sql += ` AND (last_name ILIKE $${params.length} OR first_name ILIKE $${params.length}
+                  OR full_name_translit ILIKE $${params.length} OR full_name_normalized ILIKE $${params.length})`;
+  }
+  sql += ' ORDER BY object, department, last_name, first_name';
+  return (await query(sql, params)).rows;
+}
+
+const ROT_STATUS_TEXT = { on_shift: '👷 На вахте', home: '🏠 Дома' };
+function isoToExcelDate(iso) { return iso ? new Date(iso + 'T00:00:00Z') : null; }
+
+// Выгрузка в Excel: кто когда заезжает / уезжает и кто сейчас на работе. Файл можно отредактировать
+// (колонки «Заезд», «Срок вахты», «Отъезд») и загрузить обратно кнопкой «Загрузить вахту».
+router.get('/rotations/export.xlsx', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
+  try {
+    const rows = await fetchRotationRows(req);
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Вахта');
+    ws.columns = [
+      { header: '№', key: 'n', width: 5 },
+      { header: 'Фамилия', key: 'last_name', width: 20 },
+      { header: 'Имя', key: 'first_name', width: 18 },
+      { header: 'ИИН', key: 'iin', width: 15 },
+      { header: 'Объект', key: 'object', width: 18 },
+      { header: 'Отдел', key: 'department', width: 22 },
+      { header: 'Должность', key: 'position', width: 24 },
+      { header: 'Статус', key: 'status', width: 15 },
+      { header: 'Заезд', key: 'arrival', width: 13 },
+      { header: 'Срок вахты (дней)', key: 'days', width: 13 },
+      { header: 'Отъезд', key: 'departure', width: 13 },
+      { header: 'Осталось на вахте (дн.)', key: 'left', width: 16 },
+      { header: 'До заезда (дн.)', key: 'to_arrival', width: 14 }
+    ];
+    const head = ws.getRow(1);
+    head.font = { bold: true };
+    head.alignment = { vertical: 'middle', wrapText: true };
+    head.height = 32;
+    head.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } }; });
+    ws.getColumn('arrival').numFmt = 'dd.mm.yyyy';
+    ws.getColumn('departure').numFmt = 'dd.mm.yyyy';
+    ws.getColumn('iin').numFmt = '@';
+    rows.forEach((u, i) => {
+      const row = ws.addRow({
+        n: i + 1, last_name: u.last_name, first_name: u.first_name, iin: u.iin || '',
+        object: u.object || '', department: u.department || '', position: u.position || '',
+        status: ROT_STATUS_TEXT[u.rotation_status] || 'Не указано',
+        arrival: isoToExcelDate(u.rotation_arrival), days: u.rotation_days || null,
+        departure: isoToExcelDate(u.rotation_departure),
+        left: u.rotation_days_left, to_arrival: u.rotation_days_to_arrival
+      });
+      const cell = row.getCell('status');
+      if (u.rotation_status === 'on_shift') cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1FAE5' } };
+      else if (u.rotation_status === 'home') cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDBEAFE' } };
+    });
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+    ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 13 } };
+
+    // Сводка по отделам: сколько человек сейчас на вахте / дома / не указано
+    const sum = wb.addWorksheet('Сводка');
+    sum.columns = [
+      { header: 'Объект', key: 'o', width: 20 }, { header: 'Отдел', key: 'd', width: 26 },
+      { header: '👷 На вахте', key: 'on', width: 14 }, { header: '🏠 Дома', key: 'home', width: 12 },
+      { header: 'Не указано', key: 'unset', width: 13 }, { header: 'Всего', key: 'all', width: 10 }
+    ];
+    sum.getRow(1).font = { bold: true };
+    const groups = new Map();
+    rows.forEach(u => {
+      const k = (u.object || '—') + '\u0000' + (u.department || '—');
+      if (!groups.has(k)) groups.set(k, { o: u.object || '—', d: u.department || '—', on: 0, home: 0, unset: 0, all: 0 });
+      const g = groups.get(k);
+      if (u.rotation_status === 'on_shift') g.on++; else if (u.rotation_status === 'home') g.home++; else g.unset++;
+      g.all++;
+    });
+    const tot = { o: 'ИТОГО', d: '', on: 0, home: 0, unset: 0, all: 0 };
+    [...groups.values()].forEach(g => { sum.addRow(g); tot.on += g.on; tot.home += g.home; tot.unset += g.unset; tot.all += g.all; });
+    sum.addRow(tot).font = { bold: true };
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="rotation.xlsx"');
+    await wb.xlsx.write(res);
+    res.end();
+  } catch (e) {
+    console.error('Error exporting rotations:', e);
+    res.status(500).json({ error: 'export_failed', message: 'Не удалось сформировать файл: ' + e.message, details: e.message });
+  }
+});
+
+// Бланк для массовой загрузки вахты
+router.get('/rotations/template.xlsx', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
+  try {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Вахта');
+    ws.columns = [
+      { header: 'Фамилия', key: 'last_name', width: 20 },
+      { header: 'Имя', key: 'first_name', width: 18 },
+      { header: 'ИИН', key: 'iin', width: 15 },
+      { header: 'Заезд', key: 'arrival', width: 14 },
+      { header: 'Срок вахты (дней)', key: 'days', width: 18 },
+      { header: 'Отъезд', key: 'departure', width: 14 }
+    ];
+    ws.getRow(1).font = { bold: true };
+    ws.getColumn('iin').numFmt = '@';
+    ws.getColumn('arrival').numFmt = 'dd.mm.yyyy';
+    ws.getColumn('departure').numFmt = 'dd.mm.yyyy';
+    ws.addRow({ last_name: 'Иванов', first_name: 'Иван', iin: '', arrival: new Date(Date.UTC(2026, 9, 1)), days: 14, departure: null });
+    ws.addRow({ last_name: 'Петров', first_name: 'Пётр', iin: '', arrival: new Date(Date.UTC(2026, 9, 5)), days: 28, departure: null });
+    ws.dataValidations.add('E2:E2000', { type: 'list', allowBlank: true, formulae: ['"14,21,28"'], showErrorMessage: false });
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+
+    const notes = wb.addWorksheet('Инструкция');
+    notes.columns = [{ key: 'a', width: 110 }];
+    [
+      'Инструкция по заполнению файла «Вахта»:',
+      '1. Одна строка — один сотрудник. Сотрудник должен уже быть в системе (во вкладке «Сотрудники»).',
+      '2. Сотрудник ищется по ИИН (если указан), иначе по Фамилии и Имени.',
+      '3. Заезд — дата заезда на вахту (например, 01.10.2026 или 2026-10-01).',
+      '4. Срок вахты (дней) — обычно 14, 21 или 28. Можно указать любое число от 1 до 365.',
+      '5. Отъезд — необязательно: если пусто, считается Заезд + Срок вахты. Если указать и срок, и отъезд — берутся оба как есть.',
+      '   Если указан только Отъезд (без срока) — срок посчитается сам.',
+      '6. С даты заезда по дату отъезда включительно сотрудник отображается «на вахте» (👷), в остальное время — «дома» (🏠).',
+      '7. Строки с пустой датой заезда пропускаются — в системе у этих сотрудников ничего не меняется.',
+      '8. Загрузите готовый файл во вкладке «Сотрудники» кнопкой «Загрузить вахту».',
+      '9. Удобнее всего: нажмите «Выгрузить вахту», впишите даты в нужные строки и загрузите этот же файл обратно.',
+      '10. Удалите строки-примеры (Иванов, Петров) перед загрузкой.'
+    ].forEach(line => notes.addRow([line]));
+    notes.getRow(1).font = { bold: true };
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="rotation_template.xlsx"');
+    await wb.xlsx.write(res);
+    res.end();
+  } catch (e) {
+    res.status(500).json({ error: 'template_failed', details: e.message });
+  }
+});
+
+// Массовая загрузка вахты из Excel (файл из «Выгрузить вахту» или чистый бланк).
+// Админ/суперадмин — любые сотрудники; ассистент — только сотрудники своей зоны.
+router.post('/rotations/import', authRequired, requireRole('admin', 'assistant', 'superadmin'), upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'no_file', message: 'Файл не выбран' });
+  if (!String(req.file.originalname || '').toLowerCase().endsWith('.xlsx')) {
+    return res.status(400).json({ error: 'invalid_format', message: 'Поддерживается только формат .xlsx. Откройте файл в Excel и сохраните как «Книга Excel (.xlsx)».' });
+  }
+  const headerMap = {
+    'фамилия': 'last_name', 'имя': 'first_name', 'иин': 'iin',
+    'заезд': 'arrival', 'дата заезда': 'arrival', 'приезд': 'arrival', 'дата приезда': 'arrival',
+    'срок вахты': 'days', 'срок вахты (дней)': 'days', 'срок': 'days', 'дней': 'days', 'вахта (дней)': 'days',
+    'отъезд': 'departure', 'дата отъезда': 'departure', 'выезд': 'departure'
+  };
+  let sheetRows;
+  try {
+    const wb = XLSX.readFile(req.file.path, { cellDates: true, raw: true });
+    const sheetName = wb.SheetNames[0];
+    if (!sheetName) return res.status(400).json({ error: 'empty_file', message: 'В файле нет ни одного листа с данными.' });
+    sheetRows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '', raw: true });
+  } catch (readErr) {
+    console.error('Error reading rotations file:', readErr);
+    return res.status(400).json({ error: 'invalid_file', message: 'Не удалось прочитать файл. Убедитесь, что это корректный .xlsx без пароля.' });
+  }
+  try {
+    if (!sheetRows.length) return res.status(400).json({ error: 'empty_file', message: 'В файле нет данных.' });
+    const col = {};
+    sheetRows[0].forEach((v, i) => {
+      const key = String(v || '').trim().toLowerCase();
+      if (headerMap[key] && !(headerMap[key] in col)) col[headerMap[key]] = i;
+    });
+    const hasName = col.last_name >= 0 && col.first_name >= 0;
+    if (!(col.arrival >= 0) || (!hasName && !(col.iin >= 0))) {
+      return res.status(400).json({ error: 'missing_columns', message: 'В файле должны быть колонки: Фамилия, Имя (или ИИН) и Заезд. Также: Срок вахты (дней), Отъезд. Скачайте бланк кнопкой «Бланк вахты».' });
+    }
+    const raw = (row, f) => (f in col ? row[col[f]] : '');
+    const txt = (row, f) => String(raw(row, f) ?? '').trim();
+
+    let updated = 0, emptyRows = 0;
+    const errors = [];
+    for (let r = 1; r < sheetRows.length; r++) {
+      const row = sheetRows[r];
+      const rowNum = r + 1;
+      const last_name = txt(row, 'last_name'), first_name = txt(row, 'first_name'), iin = txt(row, 'iin').replace(/\s+/g, '');
+      if (!last_name && !first_name && !iin) continue;
+      const label = `${last_name} ${first_name}`.trim() || `ИИН ${iin}`;
+      try {
+        if (raw(row, 'arrival') === '' || raw(row, 'arrival') === null) { emptyRows++; continue; }
+        const rot = computeRotation(parseRotationDate(raw(row, 'arrival')), raw(row, 'days'), parseRotationDate(raw(row, 'departure')));
+
+        let found = [];
+        if (iin) found = (await query(`SELECT * FROM users WHERE role = 'employee' AND iin = $1`, [iin])).rows;
+        if (!found.length && last_name && first_name) {
+          const norm = computeFioFields(last_name, first_name).normalized;
+          if (norm) found = (await query(`SELECT * FROM users WHERE role = 'employee' AND full_name_normalized = $1`, [norm])).rows;
+        }
+        if (found.length > 1) {
+          const act = found.filter(u => u.employment_status === 'active');
+          if (act.length === 1) found = act;
+        }
+        if (!found.length) { errors.push(`Строка ${rowNum}: сотрудник «${label}» не найден в системе`); continue; }
+        if (found.length > 1) { errors.push(`Строка ${rowNum}: найдено несколько сотрудников «${label}» — укажите ИИН`); continue; }
+        const target = found[0];
+        if (!isInAssistantScope(req.user, target)) { errors.push(`Строка ${rowNum}: «${label}» вне вашей зоны доступа`); continue; }
+
+        await query(
+          `UPDATE users SET rotation_arrival = $1, rotation_days = $2, rotation_departure = $3 WHERE id = $4`,
+          [rot.arrival, rot.days, rot.departure, target.id]
+        );
+        updated++;
+      } catch (rowErr) {
+        errors.push(`Строка ${rowNum}: ${rotationErrorMessage(rowErr.message)}`);
+      }
+    }
+    await logAction(req, 'rotations_imported', {
+      entityType: 'user', entityName: String(req.file.originalname || ''),
+      details: { updated, empty: emptyRows, errors: errors.length }
+    });
+    res.json({ updated, emptyRows, errors });
+  } catch (e) {
+    console.error('Error importing rotations:', e);
+    res.status(500).json({ error: 'import_failed', message: 'Не удалось выполнить загрузку: ' + e.message, details: e.message });
+  }
+});
+
+// Вахта одного сотрудника: заезд / срок / отъезд (из карточки профиля или из списка).
+// Пустой заезд снимает вахту. Ассистент — только сотрудников своей зоны.
+router.patch('/:id/rotation', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
+  const id = Number(req.params.id);
+  let rot;
+  try {
+    rot = computeRotation(
+      parseRotationDate(req.body.rotation_arrival),
+      req.body.rotation_days,
+      parseRotationDate(req.body.rotation_departure)
+    );
+  } catch (e) {
+    return res.status(400).json({ error: e.message, message: rotationErrorMessage(e.message) });
+  }
+  try {
+    const target = (await query('SELECT * FROM users WHERE id = $1', [id])).rows[0];
+    if (!target) return res.status(404).json({ error: 'not_found' });
+    if (target.role !== 'employee') {
+      return res.status(400).json({ error: 'not_employee', message: 'Вахта указывается только для сотрудников' });
+    }
+    if (!isInAssistantScope(req.user, target)) {
+      return res.status(403).json({ error: 'forbidden', message: 'Сотрудник вне вашей зоны доступа' });
+    }
+    await query(
+      `UPDATE users SET rotation_arrival = $1, rotation_days = $2, rotation_departure = $3 WHERE id = $4`,
+      [rot.arrival, rot.days, rot.departure, id]
+    );
+    await logAction(req, 'rotation_set', {
+      entityType: 'user', entityId: id, entityName: fullName(target),
+      details: { arrival: rot.arrival, days: rot.days, departure: rot.departure }
+    });
+    const out = (await query(`SELECT ${ROTATION_SELECT} FROM users WHERE id = $1`, [id])).rows[0];
+    res.json({ ok: true, ...out });
+  } catch (e) {
+    console.error('Error saving rotation:', e);
+    res.status(500).json({ error: 'db_error', details: e.message });
   }
 });
 
@@ -515,7 +902,8 @@ router.get('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
               leave_reason, leave_note,
               staff_category, to_char(hire_date, 'YYYY-MM-DD') AS hire_date,
               created_at, permanent_certificate_number, tco_badge,
-              committee_role, iin, public_uid, assistant_objects, assistant_departments
+              committee_role, iin, public_uid, assistant_objects, assistant_departments,
+              ${ROTATION_SELECT}
        FROM users WHERE id = $1 AND role != 'superadmin'`,
       [req.params.id]
     );
