@@ -412,7 +412,7 @@ const state = {
   activeTest: null,
   testTimer: null,
   timeLeft: 0,
-  usersFilter: { q: '', object: '', department: '', role: '', positions: [], statuses: [] },
+  usersFilter: { q: '', object: '', department: '', role: '', positions: [], statuses: [], rotation: '' },
   auditFilter: { actor_id: '', action: '', date_from: '', date_to: '', q: '' },
   auditRows: [], auditTotal: 0,
   assignFilter: { status: '', object: '', department: '', q: '', date_from: '', date_to: '' },
@@ -488,6 +488,7 @@ const api = {
   saveUser(data, id) { return this.req(id ? '/api/users/' + id : '/api/users', { method: id ? 'PUT' : 'POST', body: data }); },
   deleteUser(id) { return this.req('/api/users/' + id, { method: 'DELETE' }); },
   setEmploymentStatus(id, employment_status, status_date, status_date_end, leave_reason, leave_note) { return this.req('/api/users/' + id + '/employment-status', { method: 'PATCH', body: { employment_status, status_date, status_date_end, leave_reason, leave_note } }); },
+  setRotation(id, data) { return this.req('/api/users/' + id + '/rotation', { method: 'PATCH', body: data }); },
   getMyWork() { return this.req('/api/users/me/work'); },
   getCourses(filter = {}) { return this.req('/api/courses' + qs(filter)); },
   getCourse(id) { return this.req('/api/courses/' + id); },
@@ -1178,6 +1179,10 @@ async function loadTabContent() {
             <button onclick="document.getElementById('importFile').click()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">📥 ${t('import_excel')}</button>
             <button onclick="exportUsersForTraining()" title="${_L('Выгрузить всех сотрудников, внести новое обучение в Excel и загрузить обратно', 'Қызметкерлерді Excel-ге шығару')}" class="px-4 py-2 border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-sm font-semibold rounded-lg">📤 ${_L('Выгрузить в Excel для обучения', 'Оқыту үшін Excel-ге шығару')}</button>
             <button onclick="openBulkTrainingModal()" class="px-4 py-2 border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-sm font-semibold rounded-lg">📥 ${_L('Загрузить обновлённый Excel', 'Жаңартылған Excel жүктеу')}</button>`}
+            ${isAdminsTab || isArchiveTab ? '' : `<input type="file" id="rotImportFile" accept=".xlsx" class="hidden" onchange="handleRotationImport(this)">
+            <button onclick="downloadRotationTemplate()" title="${_L('Пустой Excel-бланк для загрузки заездов и отъездов', 'Келу мен кету күндерін жүктеуге арналған бос Excel бланкі')}" class="px-4 py-2 border border-sky-300 text-sky-700 hover:bg-sky-50 text-sm font-semibold rounded-lg">⬇ 👷 ${_L('Бланк вахты', 'Вахта бланкі')}</button>
+            <button onclick="exportRotations()" title="${_L('Список: кто когда заезжает / уезжает и кто сейчас на вахте. Учитывает выбранные фильтры', 'Тізім: кім қашан келеді / кетеді. Таңдалған сүзгілерді ескереді')}" class="px-4 py-2 border border-sky-300 text-sky-700 hover:bg-sky-50 text-sm font-semibold rounded-lg">📤 👷 ${_L('Выгрузить вахту', 'Вахтаны шығару')}</button>
+            <button onclick="document.getElementById('rotImportFile').click()" class="px-4 py-2 border border-sky-300 text-sky-700 hover:bg-sky-50 text-sm font-semibold rounded-lg">📥 👷 ${_L('Загрузить вахту', 'Вахтаны жүктеу')}</button>`}
             ${isArchiveTab ? '' : isAdminsTab ? `<button onclick="openUserModal(null, 'assistant')" class="px-4 py-2 border border-blue-300 text-blue-700 hover:bg-blue-50 text-sm font-semibold rounded-lg">+ ${_L('Добавить ассистента', 'Ассистент қосу')}</button>
             <button onclick="openUserModal(null, 'admin')" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${_L('Добавить администратора', 'Әкімші қосу')}</button>` : `<button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${t('add_user')}</button>`}
           </div>
@@ -1187,6 +1192,7 @@ async function loadTabContent() {
         <div class="flex flex-wrap items-center gap-2 mb-4">
           <input id="uFilterQ" type="text" placeholder="${t('search_placeholder')}" value="${esc(state.usersFilter.q)}" oninput="onUsersFilterChange()" class="flex-1 min-w-[200px] border border-slate-300 rounded-lg px-3 py-2 text-sm">
           ${!isAdminsTab ? usersFilterDropdownHtml('positions', _L('Все должности', 'Барлық лауазымдар'), (state.dictionaries.positions || []).map(p => p.ru), posLabel) : ''}
+          ${!isAdminsTab && !isArchiveTab ? rotationFilterSelectHtml() : ''}
           ${isArchiveTab ? usersFilterDropdownHtml('statuses', _L('Все статусы', 'Барлық мәртебелер'), ['fired', 'maternity'], v => v === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В отпуске', 'Демалыста')) : ''}
           ${!isAdminsTab && !isArchiveTab && !isObserverUser() ? `<button type="button" id="bulkAssignBtn" onclick="openAssignModal(null, [...bulkSelectedUserIds])" class="hidden px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg whitespace-nowrap">${_L('Назначить выбранным', 'Таңдалғандарға тағайындау')} (<span id="bulkAssignCount">0</span>)</button>` : ''}
         </div>
@@ -1199,12 +1205,13 @@ async function loadTabContent() {
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">Логин</th>
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">Объект / Отдел</th>
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">Должность</th>
+                ${!isAdminsTab && !isArchiveTab ? `<th class="px-4 py-3 text-left font-semibold text-slate-600">${_L('Вахта', 'Вахта')}</th>` : ''}
                 ${!isAdminsTab ? `<th class="px-4 py-3 text-left font-semibold text-slate-600">ИИН</th>` : ''}
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">${isArchiveTab ? _L('Статус', 'Мәртебе') : 'Роль'}</th>
                 <th class="px-4 py-3 text-right font-semibold text-slate-600">${t('actions')}</th>
               </tr>
             </thead>
-            <tbody id="usersTable" class="divide-y divide-slate-100"><tr><td colspan="${(!isAdminsTab && !isArchiveTab && !isObserverUser() ? 7 : 6) + (!isAdminsTab ? 1 : 0)}" class="p-4 text-center text-slate-400">Загрузка...</td></tr></tbody>
+            <tbody id="usersTable" class="divide-y divide-slate-100"><tr><td colspan="${(!isAdminsTab && !isArchiveTab && !isObserverUser() ? 7 : 6) + (!isAdminsTab ? 1 : 0) + (!isAdminsTab && !isArchiveTab ? 1 : 0)}" class="p-4 text-center text-slate-400">Загрузка...</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -3392,6 +3399,8 @@ const AUDIT_ACTION_LABELS = {
   user_deleted: ['🗑', 'Удалил пользователя'],
   employment_status_changed: ['📁', 'Изменил кадровый статус'],
   users_imported: ['📥', 'Импорт сотрудников из Excel'],
+  rotation_set: ['👷', 'Указал вахту (заезд / отъезд)'],
+  rotations_imported: ['📥', 'Загрузка вахты из Excel'],
   training_excel_update: ['📊', 'Обновление обучения через Excel'],
   course_assigned: ['📚', 'Назначил курс'],
   course_assigned_bulk: ['📚', 'Назначил курс группе'],
@@ -3434,6 +3443,12 @@ function auditDetailsHtml(row) {
       break;
     case 'employment_status_changed':
       parts.push(esc(statusLbl[d.status] || d.status || '') + (d.date ? ' · ' + esc(fmtDate(d.date)) + (d.date_end ? ' — ' + esc(fmtDate(d.date_end)) : '') : '') + (d.leave_reason ? ' · ' + esc(leaveReasonText({ leave_reason: d.leave_reason, leave_note: d.leave_note })) : ''));
+      break;
+    case 'rotation_set':
+      parts.push(d.arrival ? `${esc(fmtDate(d.arrival))} → ${esc(fmtDate(d.departure))}${d.days ? ' (' + esc(d.days) + ' дн.)' : ''}` : 'вахта снята');
+      break;
+    case 'rotations_imported':
+      parts.push(`обновлено: ${esc(d.updated)}, без даты заезда: ${esc(d.empty)}${d.errors ? ', ошибок: ' + esc(d.errors) : ''}`);
       break;
     case 'users_imported':
       parts.push(`создано: ${esc(d.created)}, пропущено: ${esc(d.skipped)}, обучение внесено: ${esc(d.historyCreated)}${d.errors ? ', ошибок: ' + esc(d.errors) : ''}`);
@@ -3593,6 +3608,7 @@ async function loadUsersList() {
       ...(isAdminsTab ? { role: 'staff' } : orgParams()),
       status: isArchiveTab ? 'archive' : 'active',
       ...(state.usersFilter.positions.length ? { position: state.usersFilter.positions.join(',') } : {}),
+      ...(!isAdminsTab && !isArchiveTab && state.usersFilter.rotation ? { rotation: state.usersFilter.rotation } : {}),
       ...(isArchiveTab && state.usersFilter.statuses.length ? { statuses: state.usersFilter.statuses.join(',') } : {})
     });
   } catch (e) {
@@ -3604,7 +3620,8 @@ async function loadUsersList() {
   const isArchiveTab = state.tab === 'archive';
   const isAdminsTab = state.tab === 'admins';
   const showCheckbox = !isAdminsTab && !isArchiveTab && !isObserverUser();
-  const colspan = (showCheckbox ? 7 : 6) + (!isAdminsTab ? 1 : 0);
+  const showRot = !isAdminsTab && !isArchiveTab;
+  const colspan = (showCheckbox ? 7 : 6) + (!isAdminsTab ? 1 : 0) + (showRot ? 1 : 0);
   if (!state.users.length) {
     tbody.innerHTML = `<tr><td colspan="${colspan}" class="p-4 text-center text-slate-400">${t('no_data')}</td></tr>`;
     updateBulkAssignButton();
@@ -3619,11 +3636,12 @@ async function loadUsersList() {
     <tr class="hover:bg-slate-50">
       ${showCheckbox && !isObserver ? `<td class="px-4 py-3"><input type="checkbox" data-uid="${u.id}" ${bulkSelectedUserIds.has(u.id) ? 'checked' : ''} onchange="toggleBulkSelect(${u.id}, this.checked)" class="rounded text-blue-600"></td>` : ''}
       <td class="px-4 py-3 font-medium text-slate-900">
-        ${(u.role === 'admin' || u.role === 'assistant') ? `${esc(u.last_name)} ${esc(u.first_name)}` : `<button onclick="openUserProfile(${u.id})" class="hover:text-blue-600 hover:underline text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>${u.staff_category === 'manager' ? `<span class="ml-1.5 align-middle text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">${_L('Руководитель', 'Басшы')}</span>` : u.staff_category === 'specialist' ? `<span class="ml-1.5 align-middle text-[10px] font-bold px-1.5 py-0.5 rounded bg-teal-100 text-teal-700">${_L('Специалист', 'Маман')}</span>` : ''}`}
+        ${showRot ? rotIconHtml(u) : ''}${(u.role === 'admin' || u.role === 'assistant') ? `${esc(u.last_name)} ${esc(u.first_name)}` : `<button onclick="openUserProfile(${u.id})" class="hover:text-blue-600 hover:underline text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>${u.staff_category === 'manager' ? `<span class="ml-1.5 align-middle text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">${_L('Руководитель', 'Басшы')}</span>` : u.staff_category === 'specialist' ? `<span class="ml-1.5 align-middle text-[10px] font-bold px-1.5 py-0.5 rounded bg-teal-100 text-teal-700">${_L('Специалист', 'Маман')}</span>` : ''}`}
       </td>
       <td class="px-4 py-3 font-mono text-slate-600">${u.login ? esc(u.login) : '<span class="text-slate-400 italic font-sans">не назначен</span>'}</td>
       <td class="px-4 py-3 text-slate-600">${u.role === 'assistant' ? assistantZoneCellHtml(u) : `${esc(u.object || '—')} / ${esc(u.department || '—')}`}</td>
       <td class="px-4 py-3 text-slate-600">${esc(posLabel(u.position) || '—')}</td>
+      ${showRot ? `<td class="px-4 py-3 text-xs">${rotationCellHtml(u)}</td>` : ''}
       ${!isAdminsTab ? `<td class="px-4 py-3 text-xs text-slate-600">${iinCellHtml(u.iin)}</td>` : ''}
       <td class="px-4 py-3">
         ${isArchiveTab
@@ -3658,6 +3676,230 @@ async function loadUsersList() {
     // это нормально (их выбор просто не виден, пока фильтр не сброшен), поэтому Set не чистим
     updateBulkAssignButton();
   }
+}
+
+// ===================== ВАХТА: заезд / отъезд, «на вахте» / «дома» =====================
+// Статус считает сервер по сегодняшней дате (routes/users.js: ROTATION_SELECT) — здесь только показ.
+// Символы можно поменять в одном месте:
+const ROT_ICON = { on_shift: '👷', home: '🏠' };
+function rotStatusLabel(st) {
+  return st === 'on_shift' ? _L('На вахте', 'Вахтада') : st === 'home' ? _L('Дома', 'Үйде') : _L('Не указано', 'Көрсетілмеген');
+}
+function rotBadgeClass(st) {
+  return st === 'on_shift' ? 'bg-emerald-100 text-emerald-700' : 'bg-sky-100 text-sky-700';
+}
+// Значок слева от ФИО в списке
+function rotIconHtml(u) {
+  if (!u || !u.rotation_status) return '';
+  return `<span class="mr-1.5 align-middle" title="${esc(rotStatusLabel(u.rotation_status))}">${ROT_ICON[u.rotation_status]}</span>`;
+}
+// Короткая пометка: «осталось 5 дн.» / «заезд через 3 дн.»
+function rotNoteText(u) {
+  if (u.rotation_status === 'on_shift' && u.rotation_days_left != null) {
+    return u.rotation_days_left === 0 ? _L('отъезд сегодня', 'бүгін кетеді') : `${_L('осталось', 'қалды')} ${u.rotation_days_left} ${_L('дн.', 'күн')}`;
+  }
+  if (u.rotation_status === 'home' && u.rotation_days_to_arrival != null) {
+    return `${_L('заезд через', 'келуге')} ${u.rotation_days_to_arrival} ${_L('дн.', 'күн қалды')}`;
+  }
+  return '';
+}
+// Ячейка колонки «Вахта» в списке сотрудников (клик — открыть окно заезда/отъезда)
+function rotationCellHtml(u) {
+  if (u.role !== 'employee') return '';
+  if (!u.rotation_status) {
+    return `<button onclick="openRotationModal(${u.id})" class="text-slate-400 hover:text-blue-600 hover:underline">＋ ${_L('Указать', 'Көрсету')}</button>`;
+  }
+  const note = rotNoteText(u);
+  return `<button onclick="openRotationModal(${u.id})" class="text-left hover:opacity-80" title="${_L('Изменить заезд / отъезд', 'Келу / кетуді өзгерту')}">
+      <span class="inline-block font-semibold px-2 py-0.5 rounded ${rotBadgeClass(u.rotation_status)}">${ROT_ICON[u.rotation_status]} ${esc(rotStatusLabel(u.rotation_status))}</span>
+      <div class="text-[11px] text-slate-500 mt-0.5 whitespace-nowrap">${_L('заезд', 'келу')} ${fmtDate(u.rotation_arrival)} · ${_L('отъезд', 'кету')} ${fmtDate(u.rotation_departure)}</div>
+      ${note ? `<div class="text-[11px] text-slate-400">${esc(note)}</div>` : ''}
+    </button>`;
+}
+// Блок «Вахта» в карточке сотрудника
+function rotationProfileHtml(user) {
+  if (!user || user.role !== 'employee') return '';
+  const btn = `<button onclick="openRotationModal(${user.id})" class="text-blue-600 hover:underline font-semibold">${user.rotation_status ? _L('Изменить', 'Өзгерту') : '＋ ' + _L('Указать заезд / отъезд', 'Келу / кетуді көрсету')}</button>`;
+  if (!user.rotation_status) {
+    return `<p class="text-xs text-slate-400 mt-1">${_L('Вахта', 'Вахта')}: <span class="italic">${_L('не указана', 'көрсетілмеген')}</span> · ${btn}</p>`;
+  }
+  const note = rotNoteText(user);
+  return `<div class="text-xs text-slate-500 mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span class="font-semibold px-2 py-0.5 rounded ${rotBadgeClass(user.rotation_status)}">${ROT_ICON[user.rotation_status]} ${esc(rotStatusLabel(user.rotation_status))}</span>
+      <span>${_L('Заезд', 'Келу')}: <b class="text-slate-700">${fmtDate(user.rotation_arrival)}</b></span>
+      <span>${_L('Срок', 'Мерзімі')}: <b class="text-slate-700">${user.rotation_days || '—'} ${_L('дн.', 'күн')}</b></span>
+      <span>${_L('Отъезд', 'Кету')}: <b class="text-slate-700">${fmtDate(user.rotation_departure)}</b></span>
+      ${note ? `<span class="text-slate-400">· ${esc(note)}</span>` : ''}
+      <span>· ${btn}</span>
+    </div>`;
+}
+// Фильтр «Вахта: все / на вахте / дома / не указана» над таблицей
+function rotationFilterSelectHtml() {
+  const v = state.usersFilter.rotation || '';
+  const opt = (val, label) => `<option value="${val}" ${v === val ? 'selected' : ''}>${label}</option>`;
+  return `<select onchange="onRotationFilterChange(this.value)" class="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white">
+      ${opt('', '👷🏠 ' + _L('Вахта: все', 'Вахта: барлығы'))}
+      ${opt('on_shift', ROT_ICON.on_shift + ' ' + _L('На вахте', 'Вахтада'))}
+      ${opt('home', ROT_ICON.home + ' ' + _L('Дома', 'Үйде'))}
+      ${opt('unset', _L('Вахта не указана', 'Вахта көрсетілмеген'))}
+    </select>`;
+}
+function onRotationFilterChange(v) {
+  state.usersFilter.rotation = v || '';
+  loadUsersList();
+}
+
+function rotAddDays(iso, n) {
+  const d = new Date(iso + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function rotDiffDays(a, b) {
+  return Math.round((new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 86400000);
+}
+
+// Окно «Заезд / отъезд»: ассистент указывает дату заезда и срок (14 / 21 / 28 или своё) — отъезд считается сам
+async function openRotationModal(userId) {
+  let u;
+  try { u = await api.getUser(userId); } catch (e) { alert(e.message || t('error_generic')); return; }
+  let m = document.getElementById('rotModal');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'rotModal';
+    m.className = 'fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50';
+    document.body.appendChild(m);
+  }
+  const hasRot = !!u.rotation_arrival;
+  const arrival = hasRot ? u.rotation_arrival : toLocalDateStr(new Date());
+  const days = hasRot ? (u.rotation_days || 14) : 14;
+  const departure = hasRot && u.rotation_departure ? u.rotation_departure : rotAddDays(arrival, days);
+  m.innerHTML = `
+    <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6">
+      <h3 class="text-lg font-bold">👷 ${_L('Вахта: заезд / отъезд', 'Вахта: келу / кету')}</h3>
+      <p class="text-xs text-slate-500 mt-1 mb-4">${esc(u.last_name)} ${esc(u.first_name)}</p>
+      <form onsubmit="submitRotationForm(event, ${u.id})" class="space-y-3">
+        <div>
+          <label class="text-xs font-semibold text-slate-600">${_L('Дата заезда на вахту', 'Вахтаға келген күні')}</label>
+          <input type="date" id="rotArrival" required value="${esc(arrival)}" oninput="rotRecalc('arrival')" class="w-full border p-2 rounded text-sm">
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-slate-600">${_L('Срок вахты (дней)', 'Вахта мерзімі (күн)')}</label>
+          <div class="flex items-center gap-2 mt-1">
+            ${[14, 21, 28].map(n => `<button type="button" data-rot-preset="${n}" onclick="rotPickDays(${n})" class="px-3 py-1.5 border rounded-lg text-sm font-semibold hover:bg-slate-50">${n}</button>`).join('')}
+            <input type="number" id="rotDays" min="1" max="365" value="${days}" oninput="rotRecalc('days')" class="w-24 border p-2 rounded text-sm" placeholder="${_L('другое', 'басқа')}">
+          </div>
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-slate-600">${_L('Дата отъезда', 'Кету күні')}</label>
+          <input type="date" id="rotDeparture" value="${esc(departure)}" oninput="rotRecalc('departure')" class="w-full border p-2 rounded text-sm">
+          <p class="text-[11px] text-slate-400 mt-1">${_L('Считается сама: заезд + срок. Можно поправить вручную. По день отъезда включительно сотрудник отображается «на вахте» 👷, потом — «дома» 🏠.', 'Өзі есептеледі: келу + мерзім. Қолмен түзетуге болады.')}</p>
+        </div>
+        <div class="flex flex-wrap justify-between items-center gap-2 pt-3 border-t">
+          <div>${hasRot ? `<button type="button" onclick="clearRotation(${u.id})" class="text-xs text-red-600 hover:underline">${_L('Снять вахту', 'Вахтаны алып тастау')}</button>` : ''}</div>
+          <div class="space-x-2">
+            <button type="button" onclick="closeRotationModal()" class="px-4 py-2 border rounded-lg text-sm">${_L('Отмена', 'Болдырмау')}</button>
+            <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">${_L('Сохранить', 'Сақтау')}</button>
+          </div>
+        </div>
+      </form>
+    </div>`;
+  rotHighlightPreset();
+}
+function closeRotationModal() {
+  const m = document.getElementById('rotModal');
+  if (m) m.remove();
+}
+function rotHighlightPreset() {
+  const cur = Number((document.getElementById('rotDays') || {}).value);
+  document.querySelectorAll('#rotModal [data-rot-preset]').forEach(b => {
+    const on = Number(b.dataset.rotPreset) === cur;
+    b.classList.toggle('bg-blue-600', on);
+    b.classList.toggle('text-white', on);
+    b.classList.toggle('border-blue-600', on);
+  });
+}
+function rotPickDays(n) {
+  document.getElementById('rotDays').value = n;
+  rotRecalc('days');
+}
+// Отъезд = заезд + срок; если поправили отъезд руками — срок пересчитывается по нему
+function rotRecalc(changed) {
+  const a = document.getElementById('rotArrival').value;
+  const dEl = document.getElementById('rotDays');
+  const depEl = document.getElementById('rotDeparture');
+  if (changed === 'departure') {
+    if (a && depEl.value) dEl.value = Math.max(1, rotDiffDays(a, depEl.value));
+  } else if (a && Number(dEl.value) >= 1) {
+    depEl.value = rotAddDays(a, Number(dEl.value));
+  }
+  rotHighlightPreset();
+}
+async function submitRotationForm(e, id) {
+  e.preventDefault();
+  const arrival = document.getElementById('rotArrival').value;
+  const days = document.getElementById('rotDays').value;
+  const departure = document.getElementById('rotDeparture').value;
+  if (!arrival) return;
+  if (departure && departure < arrival) {
+    alert(_L('Дата отъезда раньше даты заезда.', 'Кету күні келу күнінен ерте.'));
+    return;
+  }
+  const btn = e.target.querySelector('button[type=submit]');
+  if (btn) btn.disabled = true;
+  try {
+    await api.setRotation(id, { rotation_arrival: arrival, rotation_days: days || null, rotation_departure: departure || null });
+  } catch (err) {
+    alert(_L('Не удалось сохранить вахту: ', 'Вахтаны сақтау мүмкін болмады: ') + (err.message || ''));
+    if (btn) btn.disabled = false;
+    return;
+  }
+  closeRotationModal();
+  refreshAfterRotationChange();
+}
+async function clearRotation(id) {
+  if (!confirm(_L('Снять вахту у сотрудника? Даты заезда и отъезда будут очищены.', 'Қызметкерден вахтаны алып тастау керек пе?'))) return;
+  try {
+    await api.setRotation(id, { rotation_arrival: null, rotation_days: null, rotation_departure: null });
+  } catch (err) {
+    alert(err.message || t('error_generic'));
+    return;
+  }
+  closeRotationModal();
+  refreshAfterRotationChange();
+}
+function refreshAfterRotationChange() {
+  if (state.tab === 'user_profile' && state.profileUserId) loadUserProfile(state.profileUserId);
+  else loadUsersList();
+}
+
+// Excel: выгрузка (с учётом фильтров), бланк и массовая загрузка
+function exportRotations() {
+  const p = { ...orgParams() };
+  if (state.usersFilter.positions.length) p.position = state.usersFilter.positions.join(',');
+  if (state.usersFilter.rotation) p.rotation = state.usersFilter.rotation;
+  if (state.usersFilter.q) p.q = state.usersFilter.q;
+  const q = new URLSearchParams(p).toString();
+  downloadAuthed('/api/users/rotations/export.xlsx' + (q ? '?' + q : ''), 'rotation_' + toLocalDateStr(new Date()) + '.xlsx');
+}
+function downloadRotationTemplate() {
+  downloadAuthed('/api/users/rotations/template.xlsx', 'rotation_template.xlsx');
+}
+async function handleRotationImport(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await api.req('/api/users/rotations/import', { method: 'POST', body: fd });
+    let msg = `${_L('Вахта обновлена у сотрудников', 'Вахта жаңартылды')}: ${res.updated}.`;
+    if (res.emptyRows) msg += ` ${_L('Без даты заезда (пропущено)', 'Келу күнінсіз (өткізілді)')}: ${res.emptyRows}.`;
+    if (res.errors && res.errors.length) msg += `\n\n${_L('Ошибки', 'Қателер')} (${res.errors.length}):\n` + res.errors.slice(0, 20).join('\n') + (res.errors.length > 20 ? '\n…' : '');
+    alert(msg);
+  } catch (e) {
+    alert(_L('Ошибка загрузки: ', 'Жүктеу қатесі: ') + (e.message || ''));
+  }
+  input.value = '';
+  loadUsersList();
 }
 
 // --- Причины отпуска (хранятся в users.leave_reason) ---
@@ -6917,7 +7159,7 @@ async function loadUserProfile(userId) {
             <p class="text-xs text-slate-400 mt-1">ИИН: ${iinCellHtml(user.iin)}</p>
             ${user.role === 'employee' ? `<p class="text-xs text-slate-400 mt-1">${_L('Категория', 'Санаты')}: <span class="font-semibold text-slate-600">${user.staff_category === 'manager' ? _L('Руководитель', 'Басшы') : user.staff_category === 'specialist' ? _L('Специалист', 'Маман') : _L('Сотрудник', 'Қызметкер')}</span></p>
             <p class="text-xs text-slate-400 mt-1">${_L('В компании с', 'Компанияда')}: ${user.hire_date ? `<span class="font-semibold text-slate-600">${fmtDate(user.hire_date)}</span> · ${esc(tenureText(user.hire_date))}` : `<span class="italic">${_L('дата начала работы не указана', 'жұмыс басталған күні көрсетілмеген')}</span>`}</p>
-            ${user.employment_status === 'maternity' && user.status_date ? `<p class="text-xs text-purple-600 mt-1">${_L('Отпуск', 'Демалыс')}: ${fmtDate(user.status_date)}${user.status_date_end ? ' — ' + fmtDate(user.status_date_end) : ''}${user.leave_reason ? ' · ' + esc(leaveReasonText(user)) : ''}</p>` : ''}` : ''}
+            ${user.employment_status === 'maternity' && user.status_date ? `<p class="text-xs text-purple-600 mt-1">${_L('Отпуск', 'Демалыс')}: ${fmtDate(user.status_date)}${user.status_date_end ? ' — ' + fmtDate(user.status_date_end) : ''}${user.leave_reason ? ' · ' + esc(leaveReasonText(user)) : ''}</p>` : ''}${rotationProfileHtml(user)}` : ''}
           </div>
           <div class="flex flex-wrap gap-2 justify-end">
             ${isObserverUser() ? `
