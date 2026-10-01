@@ -144,6 +144,15 @@ async function initDb() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS leave_reason TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS leave_note TEXT;
 
+    -- Вахтовый метод работы: текущая вахта сотрудника.
+    -- rotation_arrival — дата заезда на вахту, rotation_days — срок вахты (14 / 21 / 28 или любой),
+    -- rotation_departure — дата отъезда (по умолчанию заезд + срок, можно поправить вручную).
+    -- Статус «на вахте / дома» нигде не хранится — он считается на лету по сегодняшней дате
+    -- (см. routes/users.js: ROTATION_SELECT), поэтому сам переключается в день заезда и после отъезда.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS rotation_arrival DATE;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS rotation_days INTEGER;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS rotation_departure DATE;
+
     -- Защита от дублей сотрудников (п.9 запроса): "УТЯШЕВ АЛТАИР" / "утяшев алтаир" /
     -- "Утяшев Алтаир" должны считаться одной записью, а поиск должен работать и по
     -- русскому написанию, и по английской транслитерации (Altair/Utyashev).
