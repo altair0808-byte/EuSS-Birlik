@@ -1240,9 +1240,10 @@ async function loadTabContent() {
                 <label class="text-xs font-semibold text-slate-600">Категория</label>
                 <select id="uCategory" class="w-full border p-2 rounded text-sm">
                   <option value="employee">Сотрудник</option>
+                  <option value="specialist">Специалист</option>
                   <option value="manager">Руководитель</option>
                 </select>
-                <p class="text-[11px] text-slate-400 mt-1">Руководитель — руководящая должность. Кабинет тот же, отличаются только обязательные курсы.</p>
+                <p class="text-[11px] text-slate-400 mt-1">Специалист и Руководитель — отдельные категории. Кабинет тот же, отличаются только обязательные курсы.</p>
               </div>
               <div>
                 <label class="text-xs font-semibold text-slate-600">Дата начала работы в компании</label>
@@ -1468,8 +1469,9 @@ async function loadTabContent() {
             <div id="cMandatoryForWrap" class="hidden -mt-1 ml-6">
               <label class="text-xs font-semibold text-slate-600">Обязателен для</label>
               <select id="cMandatoryFor" class="w-full border p-2 rounded text-sm">
-                <option value="all">Всех (сотрудников и руководителей)</option>
+                <option value="all">Всех (сотрудников, специалистов и руководителей)</option>
                 <option value="employee">Сотрудников</option>
+                <option value="specialist">Специалистов</option>
                 <option value="manager">Руководителей</option>
               </select>
             </div>
@@ -3598,7 +3600,7 @@ async function loadUsersList() {
     <tr class="hover:bg-slate-50">
       ${showCheckbox && !isObserver ? `<td class="px-4 py-3"><input type="checkbox" data-uid="${u.id}" ${bulkSelectedUserIds.has(u.id) ? 'checked' : ''} onchange="toggleBulkSelect(${u.id}, this.checked)" class="rounded text-blue-600"></td>` : ''}
       <td class="px-4 py-3 font-medium text-slate-900">
-        ${(u.role === 'admin' || u.role === 'assistant') ? `${esc(u.last_name)} ${esc(u.first_name)}` : `<button onclick="openUserProfile(${u.id})" class="hover:text-blue-600 hover:underline text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>${u.staff_category === 'manager' ? `<span class="ml-1.5 align-middle text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">${_L('Руководитель', 'Басшы')}</span>` : ''}`}
+        ${(u.role === 'admin' || u.role === 'assistant') ? `${esc(u.last_name)} ${esc(u.first_name)}` : `<button onclick="openUserProfile(${u.id})" class="hover:text-blue-600 hover:underline text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>${u.staff_category === 'manager' ? `<span class="ml-1.5 align-middle text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">${_L('Руководитель', 'Басшы')}</span>` : u.staff_category === 'specialist' ? `<span class="ml-1.5 align-middle text-[10px] font-bold px-1.5 py-0.5 rounded bg-teal-100 text-teal-700">${_L('Специалист', 'Маман')}</span>` : ''}`}
       </td>
       <td class="px-4 py-3 font-mono text-slate-600">${u.login ? esc(u.login) : '<span class="text-slate-400 italic font-sans">не назначен</span>'}</td>
       <td class="px-4 py-3 text-slate-600">${u.role === 'assistant' ? assistantZoneCellHtml(u) : `${esc(u.object || '—')} / ${esc(u.department || '—')}`}</td>
@@ -4968,7 +4970,7 @@ function onCourseMandatoryToggle() {
 
 // Для кого обязателен курс — подпись
 function mandatoryForLabel(v) {
-  return v === 'manager' ? _L('руководителей', 'басшылар үшін') : v === 'employee' ? _L('сотрудников', 'қызметкерлер үшін') : _L('всех', 'барлығы үшін');
+  return v === 'manager' ? _L('руководителей', 'басшылар үшін') : v === 'specialist' ? _L('специалистов', 'мамандар үшін') : v === 'employee' ? _L('сотрудников', 'қызметкерлер үшін') : _L('всех', 'барлығы үшін');
 }
 
 // Стаж в компании: «2 года 3 месяца 5 дней» (по дате начала работы YYYY-MM-DD)
@@ -5012,7 +5014,7 @@ async function loadMyTenure() {
   if (!box) return;
   try {
     const w = await api.getMyWork();
-    const cat = w.staff_category === 'manager' ? `<span class="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">${_L('Руководитель', 'Басшы')}</span>` : '';
+    const cat = w.staff_category === 'manager' ? `<span class="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">${_L('Руководитель', 'Басшы')}</span>` : w.staff_category === 'specialist' ? `<span class="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded bg-teal-100 text-teal-700">${_L('Специалист', 'Маман')}</span>` : '';
     box.innerHTML = tenureBannerHtml(w.hire_date) || '';
     if (cat && box.firstElementChild) box.firstElementChild.insertAdjacentHTML('beforeend', cat);
   } catch (e) { /* стаж — вспомогательная информация, ошибку не показываем */ }
@@ -6813,7 +6815,7 @@ async function loadUserProfile(userId) {
             <p class="text-xs text-slate-400 mt-1">${t('login_field')}: <span class="font-mono">${user.login ? esc(user.login) : 'не назначен'}</span> · ${esc(roleName)}</p>
             <p class="text-xs text-slate-400 mt-1">№ сертификата: <span class="font-mono font-semibold text-slate-600">${user.permanent_certificate_number ? esc(user.permanent_certificate_number) : 'не присвоен'}</span></p>
             <p class="text-xs text-slate-400 mt-1">ИИН: ${iinCellHtml(user.iin)}</p>
-            ${user.role === 'employee' ? `<p class="text-xs text-slate-400 mt-1">${_L('Категория', 'Санаты')}: <span class="font-semibold text-slate-600">${user.staff_category === 'manager' ? _L('Руководитель', 'Басшы') : _L('Сотрудник', 'Қызметкер')}</span></p>
+            ${user.role === 'employee' ? `<p class="text-xs text-slate-400 mt-1">${_L('Категория', 'Санаты')}: <span class="font-semibold text-slate-600">${user.staff_category === 'manager' ? _L('Руководитель', 'Басшы') : user.staff_category === 'specialist' ? _L('Специалист', 'Маман') : _L('Сотрудник', 'Қызметкер')}</span></p>
             <p class="text-xs text-slate-400 mt-1">${_L('В компании с', 'Компанияда')}: ${user.hire_date ? `<span class="font-semibold text-slate-600">${fmtDate(user.hire_date)}</span> · ${esc(tenureText(user.hire_date))}` : `<span class="italic">${_L('дата начала работы не указана', 'жұмыс басталған күні көрсетілмеген')}</span>`}</p>
             ${user.employment_status === 'maternity' && user.status_date ? `<p class="text-xs text-purple-600 mt-1">${_L('Отпуск', 'Демалыс')}: ${fmtDate(user.status_date)}${user.status_date_end ? ' — ' + fmtDate(user.status_date_end) : ''}</p>` : ''}` : ''}
           </div>
