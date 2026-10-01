@@ -84,8 +84,8 @@ function orgParams(req) {
   return [splitMulti(req.query.object), splitMulti(req.query.department)];
 }
 
-// Для кого обязателен курс: 'all' (все) | 'employee' (сотрудники) | 'manager' (руководители)
-const MANDATORY_FOR = ['all', 'employee', 'manager'];
+// Для кого обязателен курс: 'all' (все) | 'employee' (сотрудники) | 'specialist' (специалисты) | 'manager' (руководители)
+const MANDATORY_FOR = ['all', 'employee', 'specialist', 'manager'];
 function normalizeMandatoryFor(v) {
   if (v === undefined || v === null || v === '') return null;
   const s = String(v).trim().toLowerCase();
