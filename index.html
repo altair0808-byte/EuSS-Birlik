@@ -13,6 +13,38 @@
   .idqr svg { width: 100%; height: auto; display: block; }
   .fade-in { animation: fadeIn .2s ease-out; }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  /* ===== Телефоны (до 768px): таблицы → карточки, крупные поля, удобное меню ===== */
+  html { -webkit-text-size-adjust: 100%; }
+  @media (max-width: 767px) {
+    /* iOS увеличивает страницу при фокусе на поле со шрифтом < 16px — убираем */
+    input:not([type=checkbox]):not([type=radio]):not([type=file]), select, textarea { font-size: 16px !important; }
+    /* Меню вкладок: кнопки не переносятся на 2 строки, прокрутка пальцем без полосы */
+    nav > div { scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+    nav > div::-webkit-scrollbar { display: none; }
+    nav button, nav a { white-space: nowrap; flex-shrink: 0; padding-top: .55rem !important; padding-bottom: .55rem !important; }
+    /* Кнопки действий вверху вкладки — одна прокручиваемая строка, а не 8 рядов */
+    .toolbar-scroll { flex-wrap: nowrap !important; overflow-x: auto; width: 100%; padding-bottom: 4px; scrollbar-width: none; }
+    .toolbar-scroll::-webkit-scrollbar { display: none; }
+    .toolbar-scroll > button, .toolbar-scroll > label, .toolbar-scroll > a { white-space: nowrap; flex-shrink: 0; }
+    /* Крупнее зона нажатия у кнопок в таблицах и карточках */
+    #tabContent button { min-height: 36px; }
+    /* Таблицы-списки → карточки (подписи колонок подставляет JS: data-label) */
+    .overflow-x-auto { overflow-x: visible; }
+    table.rt, table.rt tbody, table.rt tr, table.rt td { display: block; width: 100%; max-width: none; }
+    table.rt thead { display: none; }
+    table.rt tr { border: 1px solid #e2e8f0 !important; border-radius: 12px; margin-bottom: 10px; padding: 6px 12px; background: #fff; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+    table.rt td { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 6px 0 !important; border: 0 !important; text-align: right !important; word-break: break-word; }
+    table.rt td::before { content: attr(data-label); font-weight: 600; font-size: 12px; color: #64748b; text-align: left; flex: 0 0 38%; max-width: 38%; }
+    table.rt td[data-label=""]::before { display: none; }
+    table.rt td[data-label=""] { justify-content: flex-start; text-align: left !important; }
+    table.rt td[colspan] { display: block; text-align: center !important; }
+    table.rt td[colspan]::before { display: none; }
+    table.rt td:last-child { border-top: 1px dashed #e2e8f0 !important; margin-top: 4px; padding-top: 10px !important; flex-wrap: wrap; justify-content: flex-end; }
+    table.rt td:last-child::before { flex-basis: 100%; max-width: 100%; }
+    /* Карточки и окна — меньше отступы */
+    #tabContent .p-6 { padding: 1rem; }
+    .fixed .max-h-\[90vh\] { max-height: 92vh; }
+  }
   .test-scroll {
     min-height: 0;
     overflow-y: auto;
@@ -898,6 +930,38 @@ function resetOrg() {
 }
 
 // --- RENDER APP ---
+// ===================== Телефоны: таблицы → карточки =====================
+// На узком экране CSS (table.rt) превращает строки в карточки. Подписи для карточек берутся
+// из заголовков колонок (thead) и ставятся в data-label ячеек автоматически — после любой
+// перерисовки вкладки (загрузка списка, фильтр, смена вкладки).
+function labelResponsiveTables(root) {
+  (root || document).querySelectorAll('#tabContent table.divide-y, #tabContent table.rt').forEach(tb => {
+    const heads = tb.querySelectorAll('thead th');
+    if (heads.length < 3) return;
+    tb.classList.add('rt');
+    const labels = Array.from(heads).map(th => (th.textContent || '').replace(/\s+/g, ' ').trim());
+    tb.querySelectorAll('tbody tr').forEach(tr => {
+      let i = 0;
+      Array.from(tr.children).forEach(td => {
+        if (td.tagName !== 'TD') { i += 1; return; }
+        const span = Number(td.getAttribute('colspan') || 1);
+        if (span === 1 && td.dataset.label === undefined) td.dataset.label = labels[i] || '';
+        i += span;
+      });
+    });
+  });
+}
+(function initResponsiveTables() {
+  let pending = false;
+  const run = () => { pending = false; try { labelResponsiveTables(); } catch (e) {} };
+  const start = () => {
+    new MutationObserver(() => { if (!pending) { pending = true; requestAnimationFrame(run); } })
+      .observe(document.body, { childList: true, subtree: true });
+    run();
+  };
+  if (document.body) start(); else document.addEventListener('DOMContentLoaded', start);
+})();
+
 function render() {
   const app = document.getElementById('app');
   if (!state.token || !state.user) {
@@ -1173,7 +1237,7 @@ async function loadTabContent() {
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
         <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
           <h2 class="text-lg font-bold text-slate-900">${isArchiveTab ? _L('Архив', 'Мұрағат') : isAdminsTab ? _L('Администраторы и ассистенты', 'Әкімшілер мен ассистенттер') : t('users_title')}</h2>
-          <div class="flex flex-wrap gap-2">
+          <div class="flex flex-wrap gap-2 toolbar-scroll">
             ${isAdminsTab || isArchiveTab || isObserverUser() ? '' : `<input type="file" id="importFile" accept=".xlsx" class="hidden" onchange="handleImportFile(this)">
             <button onclick="downloadUsersTemplate()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">⬇ Скачать бланк</button>
             <button onclick="document.getElementById('importFile').click()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">📥 ${t('import_excel')}</button>
@@ -3769,7 +3833,7 @@ async function openRotationModal(userId) {
   const days = hasRot ? (u.rotation_days || 14) : 14;
   const departure = hasRot && u.rotation_departure ? u.rotation_departure : rotAddDays(arrival, days);
   m.innerHTML = `
-    <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6">
+    <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 max-h-[92vh] overflow-y-auto">
       <h3 class="text-lg font-bold">👷 ${_L('Вахта: заезд / отъезд', 'Вахта: келу / кету')}</h3>
       <p class="text-xs text-slate-500 mt-1 mb-4">${esc(u.last_name)} ${esc(u.first_name)}</p>
       <form onsubmit="submitRotationForm(event, ${u.id})" class="space-y-3">
@@ -4381,7 +4445,7 @@ async function sessionsLoadList() {
       <button onclick="sessionsOpenCreate()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700">+ Новая группа</button>
     </div>
     <div class="overflow-x-auto">
-      <table class="w-full text-sm text-left">
+      <table class="w-full text-sm text-left rt">
         <thead class="text-xs text-slate-500 uppercase"><tr>
           <th class="py-2 pr-3">Дата</th><th class="py-2 pr-3">Курс</th><th class="py-2 pr-3">Вид</th>
           <th class="py-2 pr-3 text-right">Записано</th><th class="py-2 pr-3 text-right">Присутствовало</th><th class="py-2 pr-3">Статус</th>
@@ -4502,7 +4566,7 @@ function sessionsRenderDetail() {
     </div>
     <div class="text-xs text-slate-500 mb-2">Всего: <b>${total}</b> · присутствовало: <b>${attended}</b>${planned ? ' · выбрано: <b>' + sel.size + '</b>' : ''}</div>
     <div class="overflow-x-auto mb-4">
-      <table class="w-full text-sm text-left">
+      <table class="w-full text-sm text-left rt">
         <thead class="text-xs text-slate-500 uppercase"><tr><th class="py-2 pr-2 w-8">${planned || isSuper ? '<input type="checkbox" onchange="sessionsToggleAll(this.checked)">' : ''}</th><th class="py-2 pr-3">ФИО</th><th class="py-2 pr-3">Объект / отдел</th><th class="py-2 pr-3">Должность</th><th class="py-2 pr-3">Прошлое обучение</th><th class="py-2">Статус</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="6" class="py-6 text-center text-slate-400">Сотрудников нет. Нажмите «+ Добавить сотрудников».</td></tr>'}</tbody>
       </table>
