@@ -6,7 +6,7 @@ const { Pool, types } = require('pg');
 // гарантированно помещаются в Number).
 types.setTypeParser(20, v => (v === null ? null : parseInt(v, 10)));
 const bcrypt = require('bcryptjs');
-const { computeFioFields } = require('./lib/fio');
+const { computeFioFields } = require('./lib/fio.js');
 const { generatePublicUid } = require('./lib/publicUid');
 const { CARD_COLOR_PALETTE } = require('./lib/cardColors');
 const { SEED_OBJECT, DEPARTMENT_RENAMES, SEED_STRUCTURE } = require('./lib/orgSeed');
@@ -138,6 +138,11 @@ async function initDb() {
     -- status_date = начало отпуска, status_date_end = конец отпуска (после неё сотрудник
     -- автоматически возвращается из архива в штат).
     ALTER TABLE users ADD COLUMN IF NOT EXISTS status_date_end DATE;
+    -- Причина отпуска: sick (больничный), maternity (декрет — беременность и роды),
+    -- childcare (по уходу за ребёнком), annual (ежегодный), unpaid (без сохранения зарплаты),
+    -- study (учебный), other (другое — тогда пояснение в leave_note).
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS leave_reason TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS leave_note TEXT;
 
     -- Защита от дублей сотрудников (п.9 запроса): "УТЯШЕВ АЛТАИР" / "утяшев алтаир" /
     -- "Утяшев Алтаир" должны считаться одной записью, а поиск должен работать и по
@@ -792,7 +797,8 @@ async function migrateOrgStructure() {
 async function restoreExpiredLeaves() {
   try {
     const r = await pool.query(
-      `UPDATE users SET employment_status = 'active', active = 1, status_date = NULL, status_date_end = NULL
+      `UPDATE users SET employment_status = 'active', active = 1, status_date = NULL, status_date_end = NULL,
+              leave_reason = NULL, leave_note = NULL
        WHERE employment_status = 'maternity' AND status_date_end IS NOT NULL AND status_date_end < CURRENT_DATE
        RETURNING id`
     );

@@ -456,8 +456,10 @@ const api = {
     if (!res.ok) {
       const raw = await res.text().catch(() => '');
       let detail = '';
+      let parsedBody = null;
       try {
         const parsed = JSON.parse(raw);
+        parsedBody = parsed;
         // parsed.message — понятный пользователю текст (если сервер его прислал, например
         // "Укажите фамилию и имя"); parsed.details — исходный текст ошибки БД (поле
         // `details` в { error: 'db_error', details: e.message }, см. routes/*.js).
@@ -470,6 +472,7 @@ const api = {
       const err = new Error(detail || 'Ошибка запроса');
       err.status = res.status;
       err.url = url;
+      err.data = parsedBody; // тело ответа сервера (код ошибки, existing_user и т.д.)
       throw err;
     }
     const ct = res.headers.get('content-type');
@@ -484,7 +487,7 @@ const api = {
   getUsersMeta() { return this.req('/api/users/meta/objects'); },
   saveUser(data, id) { return this.req(id ? '/api/users/' + id : '/api/users', { method: id ? 'PUT' : 'POST', body: data }); },
   deleteUser(id) { return this.req('/api/users/' + id, { method: 'DELETE' }); },
-  setEmploymentStatus(id, employment_status, status_date, status_date_end) { return this.req('/api/users/' + id + '/employment-status', { method: 'PATCH', body: { employment_status, status_date, status_date_end } }); },
+  setEmploymentStatus(id, employment_status, status_date, status_date_end, leave_reason, leave_note) { return this.req('/api/users/' + id + '/employment-status', { method: 'PATCH', body: { employment_status, status_date, status_date_end, leave_reason, leave_note } }); },
   getMyWork() { return this.req('/api/users/me/work'); },
   getCourses(filter = {}) { return this.req('/api/courses' + qs(filter)); },
   getCourse(id) { return this.req('/api/courses/' + id); },
@@ -960,7 +963,7 @@ async function handleLogin(e) {
 // Упрощённый дашборд ("наблюдатель"): роль assistant, либо любой пользователь
 // с назначенной ролью в комиссии (committee_role), кроме superadmin — ему всегда
 // показываем полный интерфейс. См. ТЗ §5.
-const OBSERVER_TABS = ['users', 'training', 'protocols', 'user_profile'];
+const OBSERVER_TABS = ['users', 'archive', 'training', 'protocols', 'user_profile'];
 // Удаление сотрудников, курсов и протоколов, а также изменение номера/дат протокола и
 // системных настроек — только у суперадмина (то же ограничено и на сервере).
 function isSuperadminUser() { return !!(state.user && state.user.role === 'superadmin'); }
@@ -1026,6 +1029,7 @@ function renderMain(app) {
             <button onclick="setTab('my_certificate')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'my_certificate' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Сертификаты БиОТ', 'БиОТ сертификаттары')}</button>
           ` : isObserver ? `
             <button onclick="setTab('users')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_users')}</button>
+            <button onclick="setTab('archive')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'archive' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Архив', 'Мұрағат')}</button>
             <button onclick="setTab('training')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'training' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Обучение', 'Оқыту')}</button>
             <button onclick="setTab('protocols')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'protocols' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_protocols')}</button>
             <a href="#" onclick="openExportModal();return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-emerald-700 hover:bg-emerald-50">📥 ${t('nav_export')}</a>
@@ -1324,6 +1328,19 @@ async function loadTabContent() {
             <div id="statusDateEndWrap" class="hidden">
               <label class="text-xs font-semibold text-slate-600" id="statusDateEndLabel">Отпуск по</label>
               <input type="date" id="statusDateEnd" class="w-full border p-2 rounded text-sm">
+            </div>
+            <div id="statusReasonWrap" class="hidden space-y-2">
+              <div>
+                <label class="text-xs font-semibold text-slate-600">Причина отпуска</label>
+                <select id="statusReason" onchange="onStatusReasonChange()" class="w-full border p-2 rounded text-sm">
+                  <option value="">— выберите причину —</option>
+                  ${LEAVE_REASON_KEYS.map(k => `<option value="${k}">${esc(leaveReasonLabel(k))}</option>`).join('')}
+                </select>
+              </div>
+              <div id="statusNoteWrap" class="hidden">
+                <label class="text-xs font-semibold text-slate-600">Пояснение</label>
+                <input type="text" id="statusNote" maxlength="200" placeholder="Например: учебный сбор, командировка…" class="w-full border p-2 rounded text-sm">
+              </div>
             </div>
             <div class="flex justify-end space-x-2 pt-3 border-t">
               <button type="button" onclick="closeStatusModal()" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
@@ -3414,7 +3431,7 @@ function auditDetailsHtml(row) {
       });
       break;
     case 'employment_status_changed':
-      parts.push(esc(statusLbl[d.status] || d.status || '') + (d.date ? ' · ' + esc(fmtDate(d.date)) + (d.date_end ? ' — ' + esc(fmtDate(d.date_end)) : '') : ''));
+      parts.push(esc(statusLbl[d.status] || d.status || '') + (d.date ? ' · ' + esc(fmtDate(d.date)) + (d.date_end ? ' — ' + esc(fmtDate(d.date_end)) : '') : '') + (d.leave_reason ? ' · ' + esc(leaveReasonText({ leave_reason: d.leave_reason, leave_note: d.leave_note })) : ''));
       break;
     case 'users_imported':
       parts.push(`создано: ${esc(d.created)}, пропущено: ${esc(d.skipped)}, обучение внесено: ${esc(d.historyCreated)}${d.errors ? ', ошибок: ' + esc(d.errors) : ''}`);
@@ -3608,13 +3625,17 @@ async function loadUsersList() {
       ${!isAdminsTab ? `<td class="px-4 py-3 text-xs text-slate-600">${iinCellHtml(u.iin)}</td>` : ''}
       <td class="px-4 py-3">
         ${isArchiveTab
-          ? `<span class="text-xs font-semibold px-2 py-0.5 rounded ${u.employment_status === 'fired' ? 'bg-red-100 text-red-700' : 'bg-purple-100 text-purple-700'}">${statusLabel(u.employment_status)}</span>${u.status_date ? `<div class="text-[11px] text-slate-400 mt-0.5">${fmtDate(u.status_date)}${u.status_date_end ? ' — ' + fmtDate(u.status_date_end) : ''}</div>` : ''}`
+          ? `<span class="text-xs font-semibold px-2 py-0.5 rounded ${u.employment_status === 'fired' ? 'bg-red-100 text-red-700' : 'bg-purple-100 text-purple-700'}">${statusLabel(u.employment_status)}</span>${u.status_date ? `<div class="text-[11px] text-slate-400 mt-0.5">${fmtDate(u.status_date)}${u.status_date_end ? ' — ' + fmtDate(u.status_date_end) : ''}</div>` : ''}${u.employment_status === 'maternity' && u.leave_reason ? `<div class="text-[11px] text-purple-600 mt-0.5">${esc(leaveReasonText(u))}</div>` : ''}`
           : `<span class="text-xs font-semibold px-2 py-0.5 rounded ${u.role === 'superadmin' ? 'bg-purple-100 text-purple-700' : u.role === 'admin' ? 'bg-blue-100 text-blue-700' : u.role === 'assistant' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'}">${esc(t('role_' + u.role) || u.role)}</span>`}
       </td>
       <td class="px-4 py-3 text-right space-x-2 whitespace-nowrap">
         ${isObserver ? `
           <button onclick="openUserProfile(${u.id})" class="text-blue-600 hover:underline text-xs">${_L('Открыть', 'Ашу')}</button>
           ${u.role === 'employee' ? `<button onclick="editUser(${u.id})" class="text-emerald-700 hover:underline text-xs font-semibold">${_L('Изменить', 'Өзгерту')}</button>` : ''}
+          ${u.role === 'employee' ? (isArchiveTab
+            ? `<button onclick="openStatusModal(${u.id}, 'active')" class="text-emerald-700 hover:underline text-xs">${_L('Восстановить', 'Қалпына келтіру')}</button>`
+            : `<button onclick="openStatusModal(${u.id}, 'fired')" class="text-amber-700 hover:underline text-xs">${_L('Уволить', 'Жұмыстан босату')}</button>
+               <button onclick="openStatusModal(${u.id}, 'maternity')" class="text-purple-700 hover:underline text-xs">${_L('В отпуск', 'Демалысқа')}</button>`) : ''}
         ` : isArchiveTab ? `
           <button onclick="openStatusModal(${u.id}, 'active')" class="text-emerald-700 hover:underline text-xs">${_L('Восстановить', 'Қалпына келтіру')}</button>
           ${isSuperadminUser() ? `<button onclick="delUser(${u.id})" class="text-red-600 hover:underline text-xs">Удалить</button>` : ''}
@@ -3637,7 +3658,42 @@ async function loadUsersList() {
   }
 }
 
-// --- Кадровый статус: уволен / в декрете / вернуть в штат (вкладки "Сотрудники" ⇄ "Архив") ---
+// --- Причины отпуска (хранятся в users.leave_reason) ---
+const LEAVE_REASON_KEYS = ['sick', 'maternity', 'childcare', 'annual', 'unpaid', 'study', 'other'];
+function leaveReasonLabel(k) {
+  const m = {
+    sick: _L('Больничный', 'Науқастану демалысы'),
+    maternity: _L('Декрет (беременность и роды)', 'Декреттік демалыс'),
+    childcare: _L('По уходу за ребёнком', 'Бала күтімі бойынша'),
+    annual: _L('Ежегодный отпуск', 'Жыл сайынғы демалыс'),
+    unpaid: _L('Без сохранения зарплаты', 'Ақысыз демалыс'),
+    study: _L('Учебный отпуск', 'Оқу демалысы'),
+    other: _L('Другое', 'Басқа')
+  };
+  return m[k] || '';
+}
+// Текст причины для таблиц/карточки: «Больничный» или «Другое: учебный сбор»
+function leaveReasonText(u) {
+  if (!u || !u.leave_reason) return '';
+  const base = leaveReasonLabel(u.leave_reason);
+  return u.leave_reason === 'other' && u.leave_note ? `${base}: ${u.leave_note}` : (u.leave_note ? `${base} (${u.leave_note})` : base);
+}
+function onStatusReasonChange() {
+  const r = document.getElementById('statusReason');
+  const w = document.getElementById('statusNoteWrap');
+  if (r && w) w.classList.toggle('hidden', r.value !== 'other');
+}
+// Причина отпуска из окна статуса; null — если не заполнена (и показано сообщение)
+function readLeaveReasonFields(status) {
+  if (status !== 'maternity') return { reason: null, note: null };
+  const reason = document.getElementById('statusReason').value;
+  const note = (document.getElementById('statusNote').value || '').trim();
+  if (!reason) { alert(_L('Выберите причину отпуска (больничный, декрет и т.д.).', 'Демалыс себебін таңдаңыз.')); return null; }
+  if (reason === 'other' && !note) { alert(_L('Для причины «Другое» напишите пояснение.', '«Басқа» себебі үшін түсініктеме жазыңыз.')); return null; }
+  return { reason, note: note || null };
+}
+
+// --- Кадровый статус: уволен / в отпуске / вернуть в штат (вкладки "Сотрудники" ⇄ "Архив") ---
 function openStatusModal(id, status) {
   document.getElementById('statusUserId').value = id;
   document.getElementById('statusValue').value = status;
@@ -3662,6 +3718,13 @@ function openStatusModal(id, status) {
   const isLeave = status === 'maternity';
   if (endWrap) endWrap.classList.toggle('hidden', !isLeave);
   if (endInput) { endInput.value = ''; endInput.required = isLeave; }
+  const reasonWrap = document.getElementById('statusReasonWrap');
+  if (reasonWrap) reasonWrap.classList.toggle('hidden', !isLeave);
+  const reasonSel = document.getElementById('statusReason');
+  if (reasonSel) reasonSel.value = '';
+  const noteInp = document.getElementById('statusNote');
+  if (noteInp) noteInp.value = '';
+  onStatusReasonChange();
   if (status === 'active') {
     dateLabel.textContent = _L('Дата возврата (необязательно)', 'Оралу күні');
     dateInput.required = false;
@@ -3691,10 +3754,12 @@ async function submitStatusForm(e) {
     alert(_L('Дата окончания отпуска раньше даты начала.', 'Демалыс аяқталу күні басталу күнінен ерте.'));
     return;
   }
+  const leaveF = readLeaveReasonFields(status);
+  if (!leaveF) return;
   const btn = e.target.querySelector('button[type=submit]');
   if (btn) btn.disabled = true;
   try {
-    await api.setEmploymentStatus(id, status, date, dateEnd);
+    await api.setEmploymentStatus(id, status, date, dateEnd, leaveF.reason, leaveF.note);
   } catch (err) {
     alert('Не удалось изменить статус: ' + (err.message || 'ошибка сервера'));
     if (btn) btn.disabled = false;
@@ -3720,10 +3785,12 @@ async function submitProfileStatusForm(e, userId) {
     alert(_L('Дата окончания отпуска раньше даты начала.', 'Демалыс аяқталу күні басталу күнінен ерте.'));
     return;
   }
+  const leaveF = readLeaveReasonFields(status);
+  if (!leaveF) return;
   const btn = e.target.querySelector('button[type=submit]');
   if (btn) btn.disabled = true;
   try {
-    await api.setEmploymentStatus(userId, status, date, dateEnd);
+    await api.setEmploymentStatus(userId, status, date, dateEnd, leaveF.reason, leaveF.note);
   } catch (err) {
     alert('Не удалось изменить статус: ' + (err.message || 'ошибка сервера'));
     if (btn) btn.disabled = false;
@@ -3971,6 +4038,10 @@ async function saveUserForm(e) {
   try {
     await api.saveUser(data, id);
   } catch (err) {
+    if (await handleDuplicateError(err, {
+      close: closeUserModal,
+      resend: async () => { await api.saveUser({ ...data, confirm_not_duplicate: true }, id); closeUserModal(); loadUsersList(); }
+    })) { if (btn) btn.disabled = false; return; }
     // раньше ошибка сервера терялась молча — окно оставалось открытым и «кнопка не работала»
     const map = {
       login_taken: 'Такой логин уже занят',
@@ -6754,6 +6825,29 @@ async function editUserFromProfile(id) {
   }
 }
 
+// Ответ сервера «такой сотрудник уже есть / очень похожий уже есть» (защита от дублей).
+// Точный дубль — сообщение + предложение открыть существующую карточку.
+// Похожий — админ может подтвердить «это другой человек» и сохранить; ассистент — только сообщение.
+// Возвращает true, если ошибка обработана здесь.
+async function handleDuplicateError(err, opts) {
+  const d = err && err.data;
+  if (!d || (d.error !== 'duplicate_employee' && d.error !== 'possible_duplicate')) return false;
+  const ex = d.existing_user;
+  if (d.error === 'possible_duplicate' && d.can_confirm) {
+    const ok = confirm(d.message + '\n\n' + _L('Это ДРУГОЙ человек (однофамилец)?\nОК — всё равно сохранить, Отмена — не сохранять.', 'Бұл БАСҚА адам ба?\nОК — сақтау, Болдырмау — сақтамау.'));
+    if (ok && opts && opts.resend) {
+      try { await opts.resend(); } catch (e2) { alert(_L('Не удалось сохранить: ', 'Сақтау мүмкін болмады: ') + (e2.message || '')); }
+    }
+    return true;
+  }
+  alert(d.message || err.message);
+  if (d.error === 'duplicate_employee' && ex && ex.id && confirm(_L('Открыть карточку существующего сотрудника?', 'Бар қызметкердің карточкасын ашу керек пе?'))) {
+    if (opts && opts.close) opts.close();
+    openUserProfile(ex.id);
+  }
+  return true;
+}
+
 // Облегчённое редактирование карточки для роли «Ассистент» — только 4 поля,
 // разрешённые бэкендом (ФИО, Должность, № пропуска ТШО, ИИН), см. ТЗ §3/§10.
 async function editAssistantFields(id) {
@@ -6787,6 +6881,10 @@ async function submitAssistantFieldsForm(e) {
     document.getElementById('assistantEditModal').classList.add('hidden');
     loadUserProfile(id);
   } catch (err) {
+    if (await handleDuplicateError(err, {
+      close: () => document.getElementById('assistantEditModal').classList.add('hidden'),
+      resend: async () => { await api.saveUser({ ...data, confirm_not_duplicate: true }, id); document.getElementById('assistantEditModal').classList.add('hidden'); loadUserProfile(id); }
+    })) return;
     alert('Не удалось сохранить: ' + (err.message === 'invalid_iin' ? 'ИИН должен состоять ровно из 12 цифр' : err.message === 'out_of_zone' ? 'Этот объект/отдел вне вашей зоны доступа' : err.message === 'duplicate_employee' ? 'Сотрудник с таким ФИО уже есть' : (err.message || 'ошибка сервера')));
   } finally {
     if (btn) btn.disabled = false;
@@ -6817,13 +6915,19 @@ async function loadUserProfile(userId) {
             <p class="text-xs text-slate-400 mt-1">ИИН: ${iinCellHtml(user.iin)}</p>
             ${user.role === 'employee' ? `<p class="text-xs text-slate-400 mt-1">${_L('Категория', 'Санаты')}: <span class="font-semibold text-slate-600">${user.staff_category === 'manager' ? _L('Руководитель', 'Басшы') : user.staff_category === 'specialist' ? _L('Специалист', 'Маман') : _L('Сотрудник', 'Қызметкер')}</span></p>
             <p class="text-xs text-slate-400 mt-1">${_L('В компании с', 'Компанияда')}: ${user.hire_date ? `<span class="font-semibold text-slate-600">${fmtDate(user.hire_date)}</span> · ${esc(tenureText(user.hire_date))}` : `<span class="italic">${_L('дата начала работы не указана', 'жұмыс басталған күні көрсетілмеген')}</span>`}</p>
-            ${user.employment_status === 'maternity' && user.status_date ? `<p class="text-xs text-purple-600 mt-1">${_L('Отпуск', 'Демалыс')}: ${fmtDate(user.status_date)}${user.status_date_end ? ' — ' + fmtDate(user.status_date_end) : ''}</p>` : ''}` : ''}
+            ${user.employment_status === 'maternity' && user.status_date ? `<p class="text-xs text-purple-600 mt-1">${_L('Отпуск', 'Демалыс')}: ${fmtDate(user.status_date)}${user.status_date_end ? ' — ' + fmtDate(user.status_date_end) : ''}${user.leave_reason ? ' · ' + esc(leaveReasonText(user)) : ''}</p>` : ''}` : ''}
           </div>
           <div class="flex flex-wrap gap-2 justify-end">
             ${isObserverUser() ? `
               ${user.role === 'employee' && user.public_uid ? `<a href="/p/${encodeURIComponent(user.public_uid)}" target="_blank" rel="noopener" class="px-4 py-2 border border-indigo-300 text-indigo-700 rounded-lg text-sm font-semibold hover:bg-indigo-50">🪪 ${_L('Единое удостоверение', 'Бірыңғай куәлік')}</a>` : ''}
               <button onclick="editAssistantFields(${user.id})" class="px-4 py-2 border rounded-lg text-sm font-semibold hover:bg-slate-50">${t('edit')}</button>
               ${user.role === 'employee' ? `<a href="#" onclick="exportUserJournal(${user.id}, '${jsAttrEsc((user.last_name || '') + '_' + (user.first_name || ''))}');return false;" title="${_L('Выгрузка обучения этого сотрудника', 'Осы қызметкердің оқуын жүктеу')}" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold">📥 ${t('download_report')}</a>` : ''}
+              ${user.role === 'employee' ? (
+                user.employment_status && user.employment_status !== 'active'
+                  ? `<button onclick="openProfileStatusModal(${user.id}, 'active')" class="px-4 py-2 border border-emerald-300 text-emerald-700 rounded-lg text-sm font-semibold hover:bg-emerald-50">${_L('Восстановить', 'Қалпына келтіру')}</button>`
+                  : `<button onclick="openProfileStatusModal(${user.id}, 'fired')" class="px-4 py-2 border border-amber-300 text-amber-700 rounded-lg text-sm font-semibold hover:bg-amber-50">${_L('Уволить', 'Жұмыстан босату')}</button>
+                     <button onclick="openProfileStatusModal(${user.id}, 'maternity')" class="px-4 py-2 border border-purple-300 text-purple-700 rounded-lg text-sm font-semibold hover:bg-purple-50">${_L('В отпуск', 'Демалысқа')}</button>`
+              ) : ''}
             ` : `
               ${user.role === 'employee' && user.public_uid ? `<a href="/p/${encodeURIComponent(user.public_uid)}" target="_blank" rel="noopener" class="px-4 py-2 border border-indigo-300 text-indigo-700 rounded-lg text-sm font-semibold hover:bg-indigo-50">🪪 ${_L('Единое удостоверение', 'Бірыңғай куәлік')}</a>` : ''}
               <button onclick="openAssignModal(${user.id})" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold">+ Назначить курс</button>
@@ -6877,6 +6981,19 @@ async function loadUserProfile(userId) {
             <div id="statusDateEndWrap" class="hidden">
               <label class="text-xs font-semibold text-slate-600" id="statusDateEndLabel">Отпуск по</label>
               <input type="date" id="statusDateEnd" class="w-full border p-2 rounded text-sm">
+            </div>
+            <div id="statusReasonWrap" class="hidden space-y-2">
+              <div>
+                <label class="text-xs font-semibold text-slate-600">Причина отпуска</label>
+                <select id="statusReason" onchange="onStatusReasonChange()" class="w-full border p-2 rounded text-sm">
+                  <option value="">— выберите причину —</option>
+                  ${LEAVE_REASON_KEYS.map(k => `<option value="${k}">${esc(leaveReasonLabel(k))}</option>`).join('')}
+                </select>
+              </div>
+              <div id="statusNoteWrap" class="hidden">
+                <label class="text-xs font-semibold text-slate-600">Пояснение</label>
+                <input type="text" id="statusNote" maxlength="200" placeholder="Например: учебный сбор, командировка…" class="w-full border p-2 rounded text-sm">
+              </div>
             </div>
             <div class="flex justify-end space-x-2 pt-3 border-t">
               <button type="button" onclick="closeStatusModal()" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
