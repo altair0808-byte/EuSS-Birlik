@@ -272,8 +272,8 @@ router.post('/', ...adminOnly, async (req, res) => {
     const userIds = ids(b.user_ids);
     if (userIds.length) {
       await client.query(
-        `INSERT INTO training_session_members (session_id, user_id)
-         SELECT $1, id FROM users WHERE id = ANY($2::bigint[]) AND role = 'employee'
+        `INSERT INTO training_session_members (session_id, user_id, attended)
+         SELECT $1, id, TRUE FROM users WHERE id = ANY($2::bigint[]) AND role = 'employee'
          ON CONFLICT DO NOTHING`,
         [sid, userIds]
       );
@@ -348,8 +348,8 @@ router.post('/:id/members', ...adminOnly, async (req, res) => {
     const sr = await client.query('SELECT id, status FROM training_sessions WHERE id = $1 FOR UPDATE', [req.params.id]);
     if (!sr.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'not_found' }); }
     const ins = await client.query(
-      `INSERT INTO training_session_members (session_id, user_id)
-       SELECT $1, id FROM users WHERE id = ANY($2::bigint[]) AND role = 'employee'
+      `INSERT INTO training_session_members (session_id, user_id, attended)
+       SELECT $1, id, TRUE FROM users WHERE id = ANY($2::bigint[]) AND role = 'employee'
        ON CONFLICT DO NOTHING RETURNING user_id`,
       [req.params.id, userIds]
     );
@@ -375,6 +375,8 @@ router.post('/:id/members', ...adminOnly, async (req, res) => {
   }
 });
 
+// Записанные в заявку по умолчанию считаются присутствующими (attended = TRUE): не пришедшего убирают из заявки
+// («Убрать выбранных») или снимают с него отметку, а при закрытии прохождение вносится всем, кто остался.
 // ---------- отметить присутствие ----------
 router.patch('/:id/members', ...adminOnly, async (req, res) => {
   try {
