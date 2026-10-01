@@ -23,7 +23,7 @@ const XLSX = require('xlsx');
 const { query } = require('../db');
 const { authRequired, requireRole } = require('./auth');
 const { makeMemoryUploader } = require('../upload');
-const { computeFioFields } = require('../lib/fio');
+const { computeFioFields, compareFio } = require('../lib/fio.js');
 const { splitMulti } = require('../lib/multiFilter');
 const { logAction } = require('../lib/audit');
 const { buildHistoricalFields } = require('./assignments');
@@ -307,7 +307,14 @@ async function buildPlan(buffer) {
     if (!normalized) return null;
     if (userCache.has(`n:${normalized}`)) return userCache.get(`n:${normalized}`);
     const r = await query(`SELECT * FROM users WHERE role = 'employee' AND full_name_normalized = $1 LIMIT 1`, [normalized]);
-    const u = r.rows[0] || null;
+    let u = r.rows[0] || null;
+    if (!u) {
+      // Точного совпадения нет — ищем того же человека в другом написании («Иван Иванов» / «Ivanov Ivan»).
+      // Берём только уверенное совпадение и только если оно единственное, чтобы не привязать обучение не к тому.
+      const all = (await query(`SELECT * FROM users WHERE role = 'employee'`)).rows;
+      const strong = all.filter((x) => compareFio({ last_name: lastName, first_name: firstName }, x) === 'strong');
+      if (strong.length === 1) u = strong[0];
+    }
     userCache.set(`n:${normalized}`, u);
     return u;
   };
@@ -360,10 +367,10 @@ async function buildPlan(buffer) {
     if (('last_name' in emp.changes) || ('first_name' in emp.changes)) {
       const ln = emp.changes.last_name ? emp.changes.last_name.to : user.last_name;
       const fn = emp.changes.first_name ? emp.changes.first_name.to : user.first_name;
-      const { normalized } = computeFioFields(ln, fn);
-      const dup = await query(`SELECT id FROM users WHERE role = 'employee' AND full_name_normalized = $1 AND id <> $2 LIMIT 1`, [normalized, user.id]);
-      if (dup.rows.length) {
-        plan.errors.push(`Строка ${rowNum}: сотрудник с ФИО «${ln} ${fn}» уже есть в системе — ФИО не изменено.`);
+      const others = (await query(`SELECT id, last_name, first_name FROM users WHERE role = 'employee' AND id <> $1`, [user.id])).rows;
+      const dupRow = others.find((x) => compareFio({ last_name: ln, first_name: fn }, x));
+      if (dupRow) {
+        plan.errors.push(`Строка ${rowNum}: сотрудник с ФИО «${ln} ${fn}» уже есть в системе («${dupRow.last_name} ${dupRow.first_name}») — ФИО не изменено.`);
         delete emp.changes.last_name; delete emp.changes.first_name;
       }
     }

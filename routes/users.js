@@ -11,25 +11,67 @@ const { query, pool, restoreExpiredLeaves } = require('../db');
 const { authRequired, requireRole } = require('./auth');
 const { makeUploader } = require('../upload');
 const { buildHistoricalFields } = require('./assignments');
-const { computeFioFields, transliterate } = require('../lib/fio');
+const { computeFioFields, transliterate, compareFio } = require('../lib/fio.js');
 const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 const { COMMITTEE_ROLES } = require('../lib/committeeRoles');
 const { logAction, fullName } = require('../lib/audit');
 const driveSync = require('../driveSync');
 
-// Ищет уже существующего сотрудника с таким же ФИО (без учёта регистра/пробелов) —
-// п.9 запроса: "УТЯШЕВ АЛТАИР" / "утяшев алтаир" / "Утяшев Алтаир" — одна запись.
+// Защита от дублей: ищет среди ВСЕХ сотрудников (в т.ч. уволенных и в отпуске) того, кто уже
+// есть в системе под другим написанием: порядок Ф/И, регистр, русский/английский/казахский,
+// ё/е, лишнее отчество, опечатка в 1–2 символа. Объект/отдел/должность не учитываются —
+// человек мог перейти в другой отдел. Если у обоих указан ИИН, он решает: одинаковый ИИН —
+// это один человек, разный ИИН — разные люди (однофамильцы).
+// Возвращает null или { ...сотрудник, level: 'strong' | 'possible', reason }.
+//   strong   — почти наверняка тот же человек (создание блокируется);
+//   possible — очень похож (админ может подтвердить, что это другой человек).
 // excludeId — id сотрудника, которого не нужно считать дублем самого себя (при редактировании).
-async function findDuplicateEmployee(lastName, firstName, excludeId) {
-  const { normalized } = computeFioFields(lastName, firstName);
-  if (!normalized) return null;
-  const params = [normalized];
-  let sql = `SELECT id, last_name, first_name, object, department, position, active
-             FROM users WHERE role = 'employee' AND full_name_normalized = $1`;
+async function findDuplicateEmployee(lastName, firstName, excludeId, iin) {
+  if (!computeFioFields(lastName, firstName).normalized) return null;
+  const params = [];
+  let sql = `SELECT id, last_name, first_name, object, department, position, active, employment_status, iin
+             FROM users WHERE role = 'employee'`;
   if (excludeId) { params.push(excludeId); sql += ` AND id != $${params.length}`; }
-  sql += ' LIMIT 1';
-  const res = await query(sql, params);
-  return res.rows[0] || null;
+  const rows = (await query(sql, params)).rows;
+  const cand = { last_name: lastName, first_name: firstName };
+  const myIin = iin ? String(iin).trim() : '';
+  let strong = null, possible = null;
+  for (const row of rows) {
+    if (myIin && row.iin) {
+      if (row.iin === myIin) return { ...row, level: 'strong', reason: 'iin' };
+      continue; // разные ИИН — разные люди, даже если ФИО похожи
+    }
+    const level = compareFio(cand, row);
+    // при нескольких совпадениях показываем в сообщении действующего сотрудника, а не архивного
+    if (level === 'strong' && (!strong || (strong.employment_status !== 'active' && row.employment_status === 'active'))) strong = { ...row, level, reason: 'name' };
+    if (level === 'possible' && !possible) possible = { ...row, level, reason: 'name' };
+  }
+  return strong || possible;
+}
+
+// Человекочитаемое описание найденного дубля для сообщения об ошибке
+function describeDuplicate(dup) {
+  const place = [dup.object, dup.department].filter(Boolean).join(' / ');
+  const st = dup.employment_status === 'fired' ? 'уволен (в архиве)' : dup.employment_status === 'maternity' ? 'в отпуске (в архиве)' : '';
+  const extra = [place, st].filter(Boolean).join(', ');
+  return `${dup.last_name} ${dup.first_name}${extra ? ' — ' + extra : ''}`;
+}
+
+// Единый ответ на дубль. Возвращает true, если ответ отправлен (операцию нужно прервать).
+// «Возможный» дубль админ/суперадмин может пропустить, передав confirm_not_duplicate: true;
+// ассистент — нет (обратиться к администратору). «Точный» дубль не пропускается никем.
+function rejectDuplicate(req, res, dup) {
+  if (!dup) return false;
+  const existing = { id: dup.id, last_name: dup.last_name, first_name: dup.first_name, object: dup.object, department: dup.department, position: dup.position, employment_status: dup.employment_status };
+  if (dup.level === 'strong') {
+    const why = dup.reason === 'iin' ? 'Сотрудник с таким ИИН уже есть в системе' : 'Такой сотрудник уже есть в системе (то же ФИО: порядок слов, регистр, язык написания и отдел не важны)';
+    res.status(409).json({ error: 'duplicate_employee', level: 'strong', message: `${why}: ${describeDuplicate(dup)}. Используйте существующую карточку${dup.employment_status !== 'active' ? ' (во вкладке «Архив» её можно восстановить)' : ''}.`, existing_user: existing });
+    return true;
+  }
+  const canConfirm = req.user.role === 'admin' || req.user.role === 'superadmin';
+  if (canConfirm && req.body && req.body.confirm_not_duplicate === true) return false;
+  res.status(409).json({ error: 'possible_duplicate', level: 'possible', can_confirm: canConfirm, message: `Очень похожий сотрудник уже есть: ${describeDuplicate(dup)}.${canConfirm ? '' : ' Если это действительно другой человек — обратитесь к администратору.'}`, existing_user: existing });
+  return true;
 }
 
 
@@ -81,6 +123,7 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), a
     let sql = `SELECT id, last_name, first_name, object, department, position, login, role, active,
                       employment_status, to_char(status_date, 'YYYY-MM-DD') AS status_date,
                       to_char(status_date_end, 'YYYY-MM-DD') AS status_date_end,
+                      leave_reason, leave_note,
                       staff_category, to_char(hire_date, 'YYYY-MM-DD') AS hire_date,
                       created_at, permanent_certificate_number, tco_badge,
                       committee_role, iin, assistant_objects, assistant_departments
@@ -250,6 +293,13 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
         // же, если указано, привязывается историческая запись об обучении из строки.
         const dup = await findDuplicateEmployee(last_name, first_name);
         let userId;
+        if (dup && dup.level === 'possible') {
+          // Очень похожее ФИО (опечатка / другое написание): автоматически не создаём и не привязываем —
+          // в импорте некому подтвердить, что это другой человек. Добавьте вручную в карточке, если это не дубль.
+          errors.push(`Строка ${rowNum}: «${last_name} ${first_name}» очень похож на уже существующего: ${describeDuplicate(dup)} — строка пропущена. Если это другой человек, добавьте его вручную.`);
+          skipped++;
+          continue;
+        }
         if (dup) {
           userId = dup.id;
           errors.push(`Строка ${rowNum}: сотрудник "${last_name} ${first_name}" уже есть в системе — новая карточка не создана, используется существующая`);
@@ -462,6 +512,7 @@ router.get('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
       `SELECT id, last_name, first_name, object, department, position, login, role, active,
               employment_status, to_char(status_date, 'YYYY-MM-DD') AS status_date,
               to_char(status_date_end, 'YYYY-MM-DD') AS status_date_end,
+              leave_reason, leave_note,
               staff_category, to_char(hire_date, 'YYYY-MM-DD') AS hire_date,
               created_at, permanent_certificate_number, tco_badge,
               committee_role, iin, public_uid, assistant_objects, assistant_departments
@@ -480,16 +531,25 @@ router.get('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
   }
 });
 
-// Кадровый статус сотрудника: уволен / в декрете / вернуть в штат (п. "Архив" запроса).
+// Кадровый статус сотрудника: уволен / в отпуске / вернуть в штат (вкладка «Архив»).
 // Отдельный лёгкий эндпоинт — вызывается прямо из списка сотрудников/архива одной кнопкой,
 // без открытия полной формы редактирования. Доступен только для role='employee' —
 // у администраторов такого статуса нет.
+// Администратор и суперадмин — для любого сотрудника; ассистент — только для сотрудников
+// своей зоны (объекты/отделы). Значение 'maternity' сохранено для совместимости со старыми
+// данными: в интерфейсе это «Отпуск», а причина хранится в leave_reason.
 const EMPLOYMENT_STATUSES = ['active', 'fired', 'maternity'];
-router.patch('/:id/employment-status', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+// Может ли ассистент возвращать сотрудников из архива в штат (false — только админ/суперадмин)
+const ASSISTANT_CAN_RESTORE = true;
+const LEAVE_REASONS = ['sick', 'maternity', 'childcare', 'annual', 'unpaid', 'study', 'other'];
+router.patch('/:id/employment-status', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   const id = Number(req.params.id);
   const { employment_status } = req.body;
   if (!EMPLOYMENT_STATUSES.includes(employment_status)) {
     return res.status(400).json({ error: 'invalid_status', message: 'Недопустимый статус' });
+  }
+  if (req.user.role === 'assistant' && employment_status === 'active' && !ASSISTANT_CAN_RESTORE) {
+    return res.status(403).json({ error: 'forbidden', message: 'Вернуть сотрудника в штат может только администратор' });
   }
   let startDate, endDate;
   try {
@@ -498,13 +558,22 @@ router.patch('/:id/employment-status', authRequired, requireRole('admin', 'super
   } catch (e) {
     return res.status(400).json({ error: 'invalid_date', message: 'Некорректная дата (нужен формат ГГГГ-ММ-ДД)' });
   }
-  // Отпуск: обязательно указываем период «с — по»
+  // Отпуск: обязательно указываем период «с — по» и причину
+  let leaveReason = null, leaveNote = null;
   if (employment_status === 'maternity') {
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'leave_dates_required', message: 'Укажите даты отпуска: с какого и по какое число' });
     }
     if (endDate < startDate) {
       return res.status(400).json({ error: 'invalid_date_range', message: 'Дата окончания отпуска раньше даты начала' });
+    }
+    leaveReason = String(req.body.leave_reason || '').trim();
+    if (!LEAVE_REASONS.includes(leaveReason)) {
+      return res.status(400).json({ error: 'leave_reason_required', message: 'Укажите причину отпуска (больничный, декрет и т.д.)' });
+    }
+    leaveNote = String(req.body.leave_note || '').trim().slice(0, 200) || null;
+    if (leaveReason === 'other' && !leaveNote) {
+      return res.status(400).json({ error: 'leave_note_required', message: 'Для причины «Другое» напишите пояснение' });
     }
   }
   try {
@@ -514,6 +583,9 @@ router.patch('/:id/employment-status', authRequired, requireRole('admin', 'super
     if (target.role !== 'employee') {
       return res.status(400).json({ error: 'not_employee', message: 'Статус «уволен / в отпуске» применим только к сотрудникам и руководителям' });
     }
+    if (!isInAssistantScope(req.user, target)) {
+      return res.status(403).json({ error: 'forbidden', message: 'Сотрудник вне вашей зоны доступа' });
+    }
     // Уволен / в отпуске — сотрудник больше не может войти в систему (как обычная деактивация),
     // сразу пропадает из общего списка/статистики и появляется во вкладке «Архив».
     // Возврат в штат снова включает вход и статистику. Из отпуска сотрудник возвращается
@@ -522,12 +594,13 @@ router.patch('/:id/employment-status', authRequired, requireRole('admin', 'super
     const dateVal = employment_status === 'active' ? null : startDate;
     const endVal = employment_status === 'maternity' ? endDate : null;
     await query(
-      `UPDATE users SET employment_status = $1, status_date = $2, status_date_end = $3, active = $4 WHERE id = $5`,
-      [employment_status, dateVal, endVal, active, id]
+      `UPDATE users SET employment_status = $1, status_date = $2, status_date_end = $3, active = $4,
+                        leave_reason = $5, leave_note = $6 WHERE id = $7`,
+      [employment_status, dateVal, endVal, active, leaveReason, leaveNote, id]
     );
     await logAction(req, 'employment_status_changed', {
       entityType: 'user', entityId: id, entityName: fullName(target),
-      details: { status: employment_status, date: dateVal, date_end: endVal }
+      details: { status: employment_status, date: dateVal, date_end: endVal, leave_reason: leaveReason, leave_note: leaveNote }
     });
     res.json({ ok: true });
   } catch (e) {
@@ -678,14 +751,8 @@ router.post('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), 
     // Регистр и лишние пробелы в ФИО не считаются — если такой сотрудник уже есть,
     // новая запись не создаётся, а вызывающая сторона получает данные существующего.
     if (targetRole === 'employee') {
-      const dup = await findDuplicateEmployee(last_name, first_name);
-      if (dup) {
-        return res.status(409).json({
-          error: 'duplicate_employee',
-          message: 'Сотрудник с таким ФИО уже есть в системе — используйте существующую карточку',
-          existing_user: dup
-        });
-      }
+      const dup = await findDuplicateEmployee(last_name, first_name, null, iinVal);
+      if (rejectDuplicate(req, res, dup)) return;
     }
 
     const hash = loginVal ? bcrypt.hashSync(String(password), 10) : null;
@@ -793,6 +860,10 @@ router.put('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
       } catch (e) {
         return res.status(400).json({ error: 'invalid_iin', message: 'ИИН должен состоять ровно из 12 цифр' });
       }
+      if (target.role === 'employee' && iinVal && iinVal !== target.iin) {
+        const same = await query(`SELECT id, last_name, first_name, object, department, position, employment_status FROM users WHERE role = 'employee' AND iin = $1 AND id != $2 LIMIT 1`, [iinVal, id]);
+        if (same.rows[0] && rejectDuplicate(req, res, { ...same.rows[0], level: 'strong', reason: 'iin' })) return;
+      }
       params.push(iinVal);
       fields.push(`iin = $${params.length}`);
     }
@@ -814,15 +885,14 @@ router.put('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
       const newLast = last_name !== undefined ? last_name : target.last_name;
       const newFirst = first_name !== undefined ? first_name : target.first_name;
 
-      if (target.role === 'employee') {
-        const dup = await findDuplicateEmployee(newLast, newFirst, id);
-        if (dup) {
-          return res.status(409).json({
-            error: 'duplicate_employee',
-            message: 'Сотрудник с таким ФИО уже есть в системе',
-            existing_user: dup
-          });
-        }
+      // Проверяем дубль, только если ФИО реально изменилось: иначе карточку со старым «похожим»
+      // двойником нельзя было бы отредактировать вообще (форма всегда присылает ФИО целиком).
+      const nameChanged = String(newLast).trim() !== String(target.last_name || '').trim()
+        || String(newFirst).trim() !== String(target.first_name || '').trim();
+      if (target.role === 'employee' && nameChanged) {
+        const iinForCheck = iin !== undefined ? (String(iin || '').trim() || null) : target.iin;
+        const dup = await findDuplicateEmployee(newLast, newFirst, id, iinForCheck);
+        if (rejectDuplicate(req, res, dup)) return;
       }
 
       const { normalized, translit } = computeFioFields(newLast, newFirst);
