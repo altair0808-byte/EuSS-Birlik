@@ -33,8 +33,8 @@ async function findDuplicateEmployee(lastName, firstName, excludeId) {
 }
 
 
-// Категория сотрудника: обычный сотрудник или руководитель
-const STAFF_CATEGORIES = ['employee', 'manager'];
+// Категория сотрудника: обычный сотрудник, специалист или руководитель
+const STAFF_CATEGORIES = ['employee', 'specialist', 'manager'];
 function normalizeStaffCategory(v) {
   if (v === undefined || v === null || v === '') return undefined;
   const s = String(v).trim().toLowerCase();
