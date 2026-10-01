@@ -69,12 +69,25 @@ async function loadSession(id, client) {
 }
 
 async function requireSessionCourse(courseId) {
-  const r = await query('SELECT id, title_ru, course_kind FROM courses WHERE id = $1', [courseId]);
+  const r = await query('SELECT id, title_ru, course_kind, validity_months, no_expiry FROM courses WHERE id = $1', [courseId]);
   const c = r.rows[0];
   if (!c) return { error: 'Курс не найден' };
   return { course: c };
 }
 const isOwnCourse = (kind) => (kind || 'internal') === 'internal';
+
+// Дата + N месяцев КАЛЕНДАРНО, с учётом конца месяца (31.01 + 1 мес = 28/29.02). Тот же алгоритм, что addMonthsISO в index.html,
+// чтобы дата, показанная в форме закрытия группы, и сохранённая в БД совпадали.
+function addMonthsISO(iso, months) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+  const n = Number(months);
+  if (!m || !Number.isFinite(n)) return null;
+  const total = Number(m[1]) * 12 + (Number(m[2]) - 1) + Math.trunc(n);
+  const ny = Math.floor(total / 12), nm = total % 12;
+  const last = new Date(Date.UTC(ny, nm + 1, 0)).getUTCDate();
+  const nd = Math.min(Number(m[3]), last);
+  return `${String(ny).padStart(4, '0')}-${String(nm + 1).padStart(2, '0')}-${String(nd).padStart(2, '0')}`;
+}
 
 // Создаёт запись «пройдено» для одного сотрудника (внутри транзакции). Если у него уже есть пройденное
 // обучение по этому курсу с той же датой — новую запись не заводим, а привязываем существующую.
@@ -442,6 +455,11 @@ router.post('/:id/complete', ...adminOnly, async (req, res) => {
     const chk = await requireSessionCourse(cur.course_id);
     if (chk.error) { await client.query('ROLLBACK'); return bad(res, chk.error); }
 
+    // «Следующее прохождение»: бессрочный курс — даты нет; пусто, а срок задан — тест_дата + срок курса
+    let nextFinal = nextDate;
+    if (chk.course.no_expiry) nextFinal = null;
+    else if (!nextFinal && Number(chk.course.validity_months) > 0) nextFinal = addMonthsISO(testDate, Number(chk.course.validity_months));
+
     const members = await client.query(
       `SELECT m.user_id FROM training_session_members m JOIN users u ON u.id = m.user_id
         WHERE m.session_id = $1 AND m.attended AND u.role = 'employee' ORDER BY u.last_name, u.first_name`,
@@ -449,7 +467,7 @@ router.post('/:id/complete', ...adminOnly, async (req, res) => {
     );
     if (!members.rows.length) { await client.query('ROLLBACK'); return bad(res, 'В заявке нет присутствовавших сотрудников'); }
 
-    const s = { course_id: cur.course_id, course_kind: cur.course_kind, protocol_number: protocolNumber, protocol_date: own ? (protocolDate || testDate) : testDate, test_date: testDate, next_test_date: nextDate, score_percent: score };
+    const s = { course_id: cur.course_id, course_kind: cur.course_kind, protocol_number: protocolNumber, protocol_date: own ? (protocolDate || testDate) : testDate, test_date: testDate, next_test_date: nextFinal, score_percent: score };
     let already = 0;
     for (const row of members.rows) {
       const a = await issueAssignment(client, s, Number(row.user_id), req.user.id);
@@ -460,7 +478,7 @@ router.post('/:id/complete', ...adminOnly, async (req, res) => {
       `UPDATE training_sessions SET status = 'completed', completed_at = NOW(), completed_by = $2,
               protocol_number = $3, protocol_date = $4, test_date = $5, next_test_date = $6, score_percent = $7
         WHERE id = $1`,
-      [req.params.id, req.user.id, protocolNumber, s.protocol_date, testDate, nextDate, score]
+      [req.params.id, req.user.id, protocolNumber, s.protocol_date, testDate, nextFinal, score]
     );
     await client.query('COMMIT');
 
