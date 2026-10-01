@@ -2640,7 +2640,8 @@ async function clearSavedSignature() {
 let dashCourseStats = [];
 let dashSelectedCourseId = null;
 let dashMainGroup = null;   // null — экран «3 категории»; иначе 'biot' | 'internal' | 'external'
-let dashAssignData = null;  // активные назначения (с учётом фильтра объект/отдел): уникальные подсчёты и «записать всех»
+let dashAssignData = null;
+let dashPlanned = [];  // запланированные группы обучения (для строки «Записаны в группу» на панели курса)  // активные назначения (с учётом фильтра объект/отдел): уникальные подсчёты и «записать всех»
 
 const DASH_GROUPS = [
   { key: 'biot', icon: '🦺', ru: 'БиОТ', kz: 'БиОТ' },
@@ -2705,11 +2706,13 @@ async function loadDashboardCourseStats() {
   const mandCard = document.getElementById('dashMandatoryCard');
   if (!tabsDiv || !panelDiv) return;
   try {
-    const [summary, assigns, allCourses] = await Promise.all([
+    const [summary, assigns, allCourses, planned] = await Promise.all([
       api.getCourseStatsSummary(orgParams()),
       api.getAssignments({ ...orgParams(), active_only: 1 }).catch(() => null),
-      api.getCourses().catch(() => null)
+      api.getCourses().catch(() => null),
+      api.req('/api/training-sessions?status=planned').catch(() => [])
     ]);
+    dashPlanned = Array.isArray(planned) ? planned : [];
     dashCourseStats = summary.courses || [];
     dashAssignData = Array.isArray(assigns) ? assigns : null;
     // Дополняем статистику категорией и видом курса из списка курсов, если эндпоинт статистики их не вернул
@@ -2838,6 +2841,14 @@ function renderDashCoursePanel() {
         <button type="button" onclick="setTab('courses'); setTimeout(() => openUntrainedModal(${c.id}, '${jsAttrEsc(CURRENT_LANG === 'kz' ? (c.title_kz || c.title_ru) : (c.title_ru || c.title_kz))}'), 50)" class="text-xs font-semibold text-blue-600 hover:underline">Список сотрудников, не прошедших курс &rarr;</button>
       </div>
     ` : ''}
+    ${(() => {
+      const pl = dashPlanned.filter(x => String(x.course_id) === String(c.id));
+      if (!pl.length) return '';
+      return `<div class="mt-4 text-xs bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+        <div class="font-bold text-amber-800 mb-1">${_L('Записаны в группу обучения', 'Оқыту тобына жазылғандар')}</div>
+        ${pl.map(x => `<div class="flex justify-between gap-3 py-0.5"><span>${x.planned_date ? sessFmtDate(x.planned_date) : '—'} · ${x.members_count} ${_L('чел.', 'адам')}${x.title ? ' · ' + esc(x.title) : ''}</span><button type="button" onclick="dashOpenSession(${x.id})" class="font-semibold text-blue-600 hover:underline whitespace-nowrap">${_L('Открыть и закрыть', 'Ашу және жабу')} &rarr;</button></div>`).join('')}
+      </div>`;
+    })()}
     ${canAct ? `
       <div class="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2">
         <button type="button" onclick="dashAssignCourse(${c.id})" class="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700">📚 ${_L('Записать сотрудников', 'Қызметкерлерді жазу')}</button>
@@ -2851,7 +2862,49 @@ function renderDashCoursePanel() {
 // Записать сотрудников на курс прямо с главной (модалка назначения с предвыбранным курсом)
 function dashAssignCourse(courseId) {
   if (!courseId) return;
-  openAssignModal(null, null, courseId);
+  dashEnroll(courseId, null);
+}
+
+// Запись с главной = заявка в «Группах обучения» (статус «Запланирована»): записанные попадают в дашборд групп,
+// все по умолчанию считаются присутствующими; не пришедшего убираете из заявки, затем одной кнопкой закрываете —
+// прохождение вносится всем оставшимся. Если по курсу уже есть запланированная группа, предлагаем добавить в неё.
+async function dashEnroll(courseId, userIds) {
+  try {
+    let session = null;
+    const existing = dashPlanned.filter(x => String(x.course_id) === String(courseId));
+    if (existing.length) {
+      const e = existing[0];
+      const label = `${e.planned_date ? sessFmtDate(e.planned_date) : _L('без даты', 'күні жоқ')}, ${e.members_count} ${_L('чел.', 'адам')}`;
+      if (confirm(_L(`По этому курсу уже есть запланированная группа (${label}).\n\nОК — добавить сотрудников в неё.\nОтмена — создать новую группу.`, `Бұл курс бойынша жоспарланған топ бар (${label}).\n\nОК — қызметкерлерді соған қосу.\nБас тарту — жаңа топ құру.`))) session = e.id;
+    }
+    if (session) {
+      if (userIds && userIds.length) await api.req(`/api/training-sessions/${session}/members`, { method: 'POST', body: { user_ids: userIds } });
+    } else {
+      const today = new Date();
+      const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      const r = await api.req('/api/training-sessions', { method: 'POST', body: { course_id: Number(courseId), planned_date: iso, user_ids: userIds || [] } });
+      session = r.id;
+    }
+    // Открываем карточку заявки: готовим состояние ДО переключения вкладки, чтобы не зависеть от порядка отрисовки
+    sessionsState.detail = await api.req('/api/training-sessions/' + session);
+    sessionsState.view = 'detail';
+    sessionsState.selected = new Set();
+    sessionsState.courses = null;
+    setTab('sessions');
+    if (!userIds || !userIds.length) {
+      // список сотрудников выбирается прямо в заявке
+      for (let i = 0; i < 40 && !document.getElementById('sessionsBody'); i++) await new Promise(r => setTimeout(r, 50));
+      sessionsOpenPicker();
+    }
+  } catch (e) {
+    alert(e && e.message ? e.message : t('error_generic'));
+  }
+}
+function dashOpenSession(id) {
+  api.req('/api/training-sessions/' + id).then(d => {
+    sessionsState.detail = d; sessionsState.view = 'detail'; sessionsState.selected = new Set();
+    setTab('sessions');
+  }).catch(e => alert(e && e.message ? e.message : t('error_generic')));
 }
 
 // Сотрудники с просрочкой / ожидающие прохождения по одному курсу — из уже загруженных назначений
@@ -2890,7 +2943,7 @@ async function dashAssignProblem(courseId) {
     alert(_L('Нет сотрудников, которых нужно записать: все прошли курс, просроченных нет.', 'Жазуды қажет ететін қызметкерлер жоқ: барлығы курстан өткен, мерзімі өткендер жоқ.'));
     return;
   }
-  openAssignModal(null, [...ids], courseId);
+  dashEnroll(courseId, [...ids]);
 }
 
 // Создать группу обучения: вкладка «Группы обучения» + окно создания с предвыбранным курсом
