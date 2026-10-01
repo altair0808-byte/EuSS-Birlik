@@ -18,7 +18,7 @@ const I18N = {
     nav_my_tests: 'Мои тесты',
 
     role_superadmin: 'Суперадминистратор',
-    role_admin: 'Администратор (Инженер ТБ)',
+    role_admin: 'Администратор',
     role_employee: 'Сотрудник',
 
     hint_last_protocol: 'Последний использованный номер протокола',
@@ -145,7 +145,7 @@ const I18N = {
     nav_my_tests: 'Менің тесттерім',
 
     role_superadmin: 'Супер әкімші',
-    role_admin: 'Әкімші (ЕҚ инженері)',
+    role_admin: 'Әкімші',
     role_employee: 'Қызметкер',
 
     hint_last_protocol: 'Соңғы қолданылған хаттама нөмірі',

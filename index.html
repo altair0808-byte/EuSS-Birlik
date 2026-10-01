@@ -70,7 +70,7 @@ const I18N = {
     certificates_empty: 'Сертификатов пока нет',
 
     role_superadmin: 'Суперадминистратор',
-    role_admin: 'Администратор (Инженер ТБ)',
+    role_admin: 'Администратор',
     role_assistant: 'Ассистент',
     role_employee: 'Сотрудник',
 
@@ -230,7 +230,7 @@ const I18N = {
     nav_calendar: 'Күнтізбе',
 
     role_superadmin: 'Супер әкімші',
-    role_admin: 'Әкімші (ЕҚ инженері)',
+    role_admin: 'Әкімші',
     role_assistant: 'Ассистент',
     role_employee: 'Қызметкер',
 
@@ -712,7 +712,7 @@ function switchLang(l) {
 }
 
 // --- ЕДИНЫЙ ФИЛЬТР «ОБЪЕКТ / ОТДЕЛ» (виден на всех рабочих вкладках администратора) ---
-const ORG_TABS = ['dashboard', 'users', 'archive', 'courses', 'assignments', 'protocols', 'certificates', 'calendar'];
+const ORG_TABS = ['dashboard', 'users', 'archive', 'courses', 'assignments', 'protocols', 'certificates', 'calendar', 'training'];
 
 // orgParams() отдаёт значения через запятую (?object=A,B) — так их понимает
 // splitMulti() на backend (routes/*.js), при этом одиночное значение (или пусто)
@@ -960,7 +960,10 @@ async function handleLogin(e) {
 // Упрощённый дашборд ("наблюдатель"): роль assistant, либо любой пользователь
 // с назначенной ролью в комиссии (committee_role), кроме superadmin — ему всегда
 // показываем полный интерфейс. См. ТЗ §5.
-const OBSERVER_TABS = ['users', 'protocols'];
+const OBSERVER_TABS = ['users', 'training', 'protocols', 'user_profile'];
+// Удаление сотрудников, курсов и протоколов, а также изменение номера/дат протокола и
+// системных настроек — только у суперадмина (то же ограничено и на сервере).
+function isSuperadminUser() { return !!(state.user && state.user.role === 'superadmin'); }
 function isObserverUser() {
   // Роль в комиссии (committee_role) даёт доступ к электронной подписи протоколов,
   // но САМА ПО СЕБЕ не должна понижать права пользователя до "только просмотр":
@@ -1023,6 +1026,7 @@ function renderMain(app) {
             <button onclick="setTab('my_certificate')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'my_certificate' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Сертификаты БиОТ', 'БиОТ сертификаттары')}</button>
           ` : isObserver ? `
             <button onclick="setTab('users')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_users')}</button>
+            <button onclick="setTab('training')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'training' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Обучение', 'Оқыту')}</button>
             <button onclick="setTab('protocols')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'protocols' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_protocols')}</button>
             <a href="#" onclick="openExportModal();return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-emerald-700 hover:bg-emerald-50">📥 ${t('nav_export')}</a>
             ${state.user.committee_role ? `<a href="#" onclick="openSignatureModal();return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-indigo-700 hover:bg-indigo-50">✍️ Электронная подпись</a>` : ''}
@@ -1271,7 +1275,7 @@ async function loadTabContent() {
               <select id="uRole" onchange="onUserRoleFieldChange()" class="w-full border p-2 rounded text-sm">
                 <option value="employee">Сотрудник</option>
                 <option value="assistant">Ассистент</option>
-                <option value="admin">Администратор (Инженер ТБ)</option>
+                <option value="admin">Администратор</option>
               </select>
             </div>
             <div id="assistantZoneWrapper" class="hidden border rounded-lg p-3 bg-slate-50">
@@ -1355,7 +1359,7 @@ async function loadTabContent() {
 
   if (state.tab === 'user_profile') {
     container.innerHTML = `
-      <button onclick="setTab('users')" class="text-sm text-blue-600 hover:underline mb-4">&larr; ${t('back_to_users')}</button>
+      <button onclick="backFromProfile()" class="text-sm text-blue-600 hover:underline mb-4">&larr; ${state.profileBackTab === 'training' ? _L('К списку обучения', 'Оқыту тізіміне') : t('back_to_users')}</button>
       <div id="profileContent"><div class="text-slate-400">${t('loading')}</div></div>
       ${assignModalHtml()}
     `;
@@ -1743,6 +1747,11 @@ async function loadTabContent() {
     loadProtocolsList();
   }
 
+  if (state.tab === 'training') {
+    renderTrainingTab(container);
+    return;
+  }
+
   if (state.tab === 'certificates') {
     container.innerHTML = `
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
@@ -1880,15 +1889,16 @@ async function loadTabContent() {
 
   if (state.tab === 'settings') {
     const isSuperadmin = state.user && state.user.role === 'superadmin';
-    const stab = state.settingsTab || 'org';
+    // Администратор не может менять настройки организации, комиссию, нумерацию и бланк —
+    // эти разделы ему не показываем, остаётся только справочник «Объекты, отделы и должности» (просмотр).
+    const stab = isSuperadmin ? (state.settingsTab || 'org') : 'dicts';
     container.innerHTML = `
-      <div class="max-w-3xl">
+      <div class="max-w-5xl">
         <h2 class="text-lg font-bold text-slate-900 mb-3">${t('nav_settings')}</h2>
-        <div id="settingsTabBar" class="flex flex-wrap gap-1 border-b border-slate-200 mb-4">${settingsTabBarHtml(isSuperadmin, stab)}</div>
+        ${isSuperadmin ? `<div id="settingsTabBar" class="flex flex-wrap gap-1 border-b border-slate-200 mb-4">${settingsTabBarHtml(isSuperadmin, stab)}</div>` : ''}
       </div>
-      <div data-stab="org commission numbering card" class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-w-xl">
-        ${!isSuperadmin ? `<div class="mb-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">Изменение настроек и фирменного бланка доступно только суперадминистратору.</div>` : ''}
-        <fieldset ${!isSuperadmin ? 'disabled' : ''}>
+      ${isSuperadmin ? `<div data-stab="org commission numbering card" class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-w-xl">
+        <fieldset>
           <form onsubmit="saveSettingsForm(event)" class="space-y-4">
             <div data-stab="org">
               <label class="text-xs font-semibold text-slate-600">Наименование организации (ТОО / АО)</label>
@@ -1997,41 +2007,51 @@ async function loadTabContent() {
             </div>
           </div>
         </fieldset>
-      </div>
-      <div data-stab="dicts" class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-w-3xl">
-        <h2 class="text-lg font-bold text-slate-900 mb-1">Объекты, отделы и должности</h2>
-        <p class="text-xs text-slate-500 mb-4">Структура «Объект → Отдел → Должность». В карточке сотрудника после выбора объекта показываются только его отделы, а после выбора отдела — только его должности.</p>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+      </div>` : ''}
+      <div data-stab="dicts" class="bg-white rounded-xl border border-slate-200 shadow-sm max-w-5xl overflow-hidden">
+        <div class="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-slate-100">
           <div>
-            <h3 class="text-sm font-bold text-slate-900 mb-2">Объекты</h3>
-            <div id="dictObjectsList" class="space-y-1 mb-2"></div>
-            <div class="flex gap-1">
-              <input id="dictObjectsNew" placeholder="Новый объект" class="w-full border p-2 rounded text-sm" onkeydown="if(event.key==='Enter'){event.preventDefault();addDictionaryValueFromSettings('objects');}">
-              <button type="button" onclick="addDictionaryValueFromSettings('objects')" class="shrink-0 px-3 py-2 border rounded text-sm font-semibold">Добавить</button>
-            </div>
+            <h2 class="text-base font-bold text-slate-900">Объекты, отделы и должности</h2>
+            <p id="orgSummary" class="text-[11px] text-slate-500"></p>
           </div>
-          <div>
-            <h3 class="text-sm font-bold text-slate-900 mb-2">Справочник должностей <span class="font-normal text-slate-400">(рус. / қаз.)</span></h3>
-            <div id="dictPositionsList" class="space-y-1 mb-2 max-h-64 overflow-y-auto"></div>
-            <div class="flex flex-col gap-1">
-              <input id="dictPositionsNewRu" placeholder="Новая должность (русский)" class="w-full border p-2 rounded text-sm">
-              <div class="flex gap-1">
-                <input id="dictPositionsNewKz" placeholder="То же самое на казахском" class="w-full border p-2 rounded text-sm" onkeydown="if(event.key==='Enter'){event.preventDefault();addDictionaryValueFromSettings('positions');}">
-                <button type="button" onclick="addDictionaryValueFromSettings('positions')" class="shrink-0 px-3 py-2 border rounded text-sm font-semibold">Добавить</button>
-              </div>
-            </div>
-            <p class="text-[11px] text-slate-400 mt-1">Удаление должности из справочника убирает её и из всех отделов.</p>
-          </div>
+          ${isSuperadmin ? `<span class="text-[11px] text-slate-400">Изменения сохраняются сразу</span>` : `<span class="text-[11px] font-semibold text-slate-500 bg-slate-100 rounded-full px-2.5 py-1">👁 Только просмотр</span>`}
         </div>
-        <div class="mt-6 pt-4 border-t border-slate-200">
-          <h3 class="text-sm font-bold text-slate-900 mb-2">Отделы и должности объекта</h3>
-          <select id="orgStructObject" onchange="selectOrgStructObject(this.value)" class="w-full sm:w-72 border p-2 rounded text-sm mb-3"></select>
-          <div id="orgStructBox" class="space-y-3"></div>
-          <div id="orgStructAddDept" class="flex gap-1 mt-3">
-            <input id="orgNewDept" placeholder="Новый отдел в этом объекте" class="w-full sm:w-72 border p-2 rounded text-sm" onkeydown="if(event.key==='Enter'){event.preventDefault();addOrgDepartment();}">
-            <button type="button" onclick="addOrgDepartment()" class="shrink-0 px-3 py-2 border rounded text-sm font-semibold">Добавить отдел</button>
-          </div>
+        <div class="grid grid-cols-1 md:grid-cols-[15rem_minmax(0,1fr)]">
+          <aside class="border-b md:border-b-0 md:border-r border-slate-100 p-3">
+            <div class="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-1.5">Объекты</div>
+            <div id="dictObjectsList" class="space-y-0.5 max-h-72 overflow-y-auto"></div>
+            ${isSuperadmin ? `<div class="flex gap-1 mt-2">
+              <input id="dictObjectsNew" placeholder="Новый объект" class="min-w-0 flex-1 border px-2 py-1.5 rounded text-xs" onkeydown="if(event.key==='Enter'){event.preventDefault();addDictionaryValueFromSettings('objects');}">
+              <button type="button" onclick="addDictionaryValueFromSettings('objects')" class="shrink-0 px-2.5 py-1.5 border rounded text-xs font-semibold hover:bg-slate-50" title="Добавить объект">+</button>
+            </div>` : ''}
+          </aside>
+          <section class="p-3 min-w-0">
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+              <div id="orgStructTitle" class="text-sm font-bold text-slate-900"></div>
+              ${isSuperadmin ? `<div id="orgStructAddDept" class="flex gap-1">
+                <input id="orgNewDept" placeholder="Новый отдел" class="w-40 border px-2 py-1.5 rounded text-xs" onkeydown="if(event.key==='Enter'){event.preventDefault();addOrgDepartment();}">
+                <button type="button" onclick="addOrgDepartment()" class="shrink-0 px-2.5 py-1.5 border rounded text-xs font-semibold hover:bg-slate-50" title="Добавить отдел в этот объект">+ отдел</button>
+              </div>` : ''}
+            </div>
+            <div id="orgStructBox" class="grid grid-cols-1 lg:grid-cols-2 gap-2"></div>
+          </section>
         </div>
+        <details id="dictPositionsDetails" class="border-t border-slate-100">
+          <summary class="px-4 py-2.5 cursor-pointer select-none text-sm font-semibold text-slate-800 flex items-center justify-between hover:bg-slate-50">
+            <span>Справочник должностей <span id="dictPositionsCount" class="font-normal text-slate-400"></span></span>
+            <span class="text-[11px] font-normal text-slate-400">показать / скрыть</span>
+          </summary>
+          <div class="px-4 pb-4 pt-1">
+            <input id="dictPositionsSearch" oninput="renderPositionsCatalog()" placeholder="Поиск должности..." class="w-full sm:w-64 border px-2 py-1.5 rounded text-xs mb-2">
+            <div id="dictPositionsList" class="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto"></div>
+            ${isSuperadmin ? `<div class="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-1 mt-3">
+              <input id="dictPositionsNewRu" placeholder="Новая должность (рус.)" class="min-w-0 border px-2 py-1.5 rounded text-xs">
+              <input id="dictPositionsNewKz" placeholder="Қазақша" class="min-w-0 border px-2 py-1.5 rounded text-xs" onkeydown="if(event.key==='Enter'){event.preventDefault();addDictionaryValueFromSettings('positions');}">
+              <button type="button" onclick="addDictionaryValueFromSettings('positions')" class="shrink-0 px-3 py-1.5 border rounded text-xs font-semibold hover:bg-slate-50">+ Добавить</button>
+            </div>
+            <p class="text-[11px] text-slate-400 mt-1.5">Удаление должности из справочника убирает её и из всех отделов.</p>` : ''}
+          </div>
+        </details>
       </div>
       ${isSuperadmin ? `
       <div data-stab="storage" class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-w-xl">
@@ -2046,7 +2066,7 @@ async function loadTabContent() {
         <div id="driveActionMsg" class="text-xs mt-2"></div>
       </div>` : ''}
     `;
-    loadSettingsData();
+    if (isSuperadmin) loadSettingsData();
     renderDictionariesSettings();
     if (isSuperadmin) loadDriveStatus();
     showSettingsTab(stab);
@@ -2055,10 +2075,10 @@ async function loadTabContent() {
 
 // --- Вкладки внутри «Настроек» (чтобы всё не шло одной длинной страницей) ---
 const SETTINGS_TABS = [
-  { id: 'org', label: 'Организация' },
-  { id: 'commission', label: 'Комиссия и подписи' },
-  { id: 'numbering', label: 'Нумерация' },
-  { id: 'card', label: 'Удостоверение' },
+  { id: 'org', label: 'Организация', superOnly: true },
+  { id: 'commission', label: 'Комиссия и подписи', superOnly: true },
+  { id: 'numbering', label: 'Нумерация', superOnly: true },
+  { id: 'card', label: 'Удостоверение', superOnly: true },
   { id: 'dicts', label: 'Объекты, отделы и должности' },
   { id: 'storage', label: 'Хранилище', superOnly: true }
 ];
@@ -2069,7 +2089,7 @@ function settingsTabBarHtml(isSuperadmin, active) {
 }
 function showSettingsTab(name) {
   const isSuper = state.user && state.user.role === 'superadmin';
-  if (!SETTINGS_TABS.some(t => t.id === name && (!t.superOnly || isSuper))) name = 'org';
+  if (!SETTINGS_TABS.some(t => t.id === name && (!t.superOnly || isSuper))) name = isSuper ? 'org' : 'dicts';
   state.settingsTab = name;
   document.querySelectorAll('[data-stab]').forEach(el => {
     el.classList.toggle('hidden', !el.getAttribute('data-stab').split(' ').includes(name));
@@ -2152,77 +2172,89 @@ async function renderDictionariesSettings() {
 
 function renderOrgSettings() {
   const d = state.dictionaries;
+  const canEdit = isSuperadminUser();
+  const deptCount = o => ((d.structure.find(x => x.object === o) || {}).departments || []).length;
+  const totalDepts = d.structure.reduce((n, o) => n + o.departments.length, 0);
+
+  const summary = document.getElementById('orgSummary');
+  if (summary) summary.textContent = `Объектов: ${d.objects.length} · Отделов: ${totalDepts} · Должностей: ${d.positions.length}`;
+
+  if (!d.objects.includes(state.orgStructObject)) state.orgStructObject = d.objects[0] || '';
+
+  // Левая колонка: объекты (клик — выбрать, ✕ — удалить, только суперадмин)
   const objBox = document.getElementById('dictObjectsList');
   if (objBox) {
     objBox.innerHTML = d.objects.length
-      ? d.objects.map(v => `
-        <div class="flex items-center justify-between gap-2 px-2 py-1 rounded bg-slate-50 border border-slate-100 text-sm">
-          <span>${esc(v)}</span>
-          <button type="button" onclick="removeDictionaryValueFromSettings('objects', '${jsAttrEsc(v)}')" class="text-red-500 hover:text-red-700 text-xs font-bold" title="Удалить">✕</button>
-        </div>`).join('')
-      : `<div class="text-xs text-slate-400">Список пуст</div>`;
-  }
-  const posBox = document.getElementById('dictPositionsList');
-  if (posBox) {
-    posBox.innerHTML = d.positions.length
-      ? d.positions.map(p => `
-        <div class="flex items-center justify-between gap-2 px-2 py-1 rounded bg-slate-50 border border-slate-100 text-sm">
-          <span>${esc(p.ru)}${p.kz ? ` <span class="text-slate-400">— ${esc(p.kz)}</span>` : ''}</span>
-          <button type="button" onclick="removeDictionaryValueFromSettings('positions', '${jsAttrEsc(p.ru)}')" class="text-red-500 hover:text-red-700 text-xs font-bold shrink-0" title="Удалить из справочника и из всех отделов">✕</button>
-        </div>`).join('')
-      : `<div class="text-xs text-slate-400">Список пуст</div>`;
+      ? d.objects.map(v => {
+          const on = v === state.orgStructObject;
+          return `
+        <div class="group flex items-center gap-1 rounded-lg ${on ? 'bg-blue-50 ring-1 ring-blue-200' : 'hover:bg-slate-50'}">
+          <button type="button" onclick="selectOrgStructObject('${jsAttrEsc(v)}')" class="flex-1 min-w-0 flex items-center justify-between gap-2 text-left px-2.5 py-1.5 text-sm ${on ? 'font-semibold text-blue-800' : 'text-slate-700'}">
+            <span class="truncate">${esc(v)}</span>
+            <span class="shrink-0 text-[10px] font-semibold rounded-full px-1.5 py-0.5 ${on ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500'}" title="Отделов">${deptCount(v)}</span>
+          </button>
+          ${canEdit ? `<button type="button" onclick="removeDictionaryValueFromSettings('objects', '${jsAttrEsc(v)}')" class="shrink-0 px-1.5 text-red-400 hover:text-red-600 text-xs font-bold opacity-60 group-hover:opacity-100" title="Удалить объект">✕</button>` : ''}
+        </div>`;
+        }).join('')
+      : `<div class="text-xs text-slate-400 px-1">Список пуст</div>`;
   }
 
-  // Выбор объекта для редактирования его отделов
-  if (!d.objects.includes(state.orgStructObject)) state.orgStructObject = d.objects[0] || '';
-  const sel = document.getElementById('orgStructObject');
-  if (sel) {
-    sel.innerHTML = d.objects.length
-      ? d.objects.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('')
-      : '<option value="">— сначала добавьте объект —</option>';
-    sel.value = state.orgStructObject;
-  }
+  // Правая часть: отделы выбранного объекта — компактные карточки с «чипами» должностей
+  const title = document.getElementById('orgStructTitle');
+  if (title) title.innerHTML = state.orgStructObject
+    ? `${esc(state.orgStructObject)} <span class="font-normal text-xs text-slate-400">· отделов: ${deptCount(state.orgStructObject)}</span>`
+    : '<span class="font-normal text-slate-400">Выберите или добавьте объект</span>';
   const addDept = document.getElementById('orgStructAddDept');
   if (addDept) addDept.classList.toggle('hidden', !state.orgStructObject);
 
   const box = document.getElementById('orgStructBox');
-  if (!box) return;
-  const obj = d.structure.find(o => o.object === state.orgStructObject);
-  if (!obj || !obj.departments.length) {
-    box.innerHTML = `<div class="text-xs text-slate-400">${state.orgStructObject ? 'В этом объекте пока нет отделов' : ''}</div>`;
-    return;
-  }
-  box.innerHTML = obj.departments.map((dep, di) => {
-    const linked = new Set(dep.positions);
-    const available = d.positions.filter(p => !linked.has(p.ru));
-    return `
-      <div class="border border-slate-200 rounded-lg p-3">
-        <div class="flex items-center justify-between gap-2 mb-2">
-          <div class="font-semibold text-sm text-slate-900">${esc(dep.name)} <span class="font-normal text-slate-400 text-xs">· должностей: ${dep.positions.length}</span></div>
-          <button type="button" onclick="removeOrgDepartment(${di})" class="text-red-500 hover:text-red-700 text-xs font-bold shrink-0" title="Удалить отдел из объекта">✕ отдел</button>
+  if (box) {
+    const obj = d.structure.find(o => o.object === state.orgStructObject);
+    if (!obj || !obj.departments.length) {
+      box.innerHTML = `<div class="text-xs text-slate-400 lg:col-span-2">${state.orgStructObject ? 'В этом объекте пока нет отделов' : ''}</div>`;
+    } else {
+      box.innerHTML = obj.departments.map((dep, di) => {
+        const linked = new Set(dep.positions);
+        const available = d.positions.filter(p => !linked.has(p.ru));
+        const chips = dep.positions.map((ru, pi) => {
+          const kz = (d.positions.find(p => p.ru === ru) || {}).kz;
+          return `<span class="inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-200 ${canEdit ? 'pl-2.5 pr-1' : 'px-2.5'} py-0.5 text-xs text-slate-700" ${kz ? `title="${esc(kz)}"` : ''}>${esc(ru)}${canEdit ? `<button type="button" onclick="removeOrgPosition(${di}, ${pi})" class="text-slate-400 hover:text-red-600 font-bold leading-none px-0.5" title="Убрать из отдела">✕</button>` : ''}</span>`;
+        }).join('');
+        return `
+      <div class="border border-slate-200 rounded-lg p-2.5">
+        <div class="flex items-center justify-between gap-2 mb-1.5">
+          <div class="font-semibold text-[13px] text-slate-900 truncate" title="${esc(dep.name)}">${esc(dep.name)} <span class="font-normal text-slate-400 text-[11px]">· ${dep.positions.length}</span></div>
+          ${canEdit ? `<button type="button" onclick="removeOrgDepartment(${di})" class="shrink-0 text-red-400 hover:text-red-600 text-[11px] font-semibold" title="Удалить отдел из объекта">✕ отдел</button>` : ''}
         </div>
-        <div class="space-y-1 mb-2">
-          ${dep.positions.length ? dep.positions.map((ru, pi) => {
-            const kz = (d.positions.find(p => p.ru === ru) || {}).kz;
-            return `
-          <div class="flex items-center justify-between gap-2 px-2 py-1 rounded bg-slate-50 border border-slate-100 text-sm">
-            <span>${esc(ru)}${kz ? ` <span class="text-slate-400">— ${esc(kz)}</span>` : ''}</span>
-            <button type="button" onclick="removeOrgPosition(${di}, ${pi})" class="text-red-500 hover:text-red-700 text-xs font-bold shrink-0" title="Убрать из отдела">✕</button>
-          </div>`;
-          }).join('') : '<div class="text-xs text-slate-400">Должности не закреплены</div>'}
-        </div>
-        <div class="flex gap-1">
-          <select id="orgAddPos_${di}" class="w-full border p-2 rounded text-sm">
-            <option value="">— добавить должность в отдел —</option>
-            ${available.map(p => `<option value="${esc(p.ru)}">${esc(p.ru)}</option>`).join('')}
-          </select>
-          <button type="button" onclick="addOrgPosition(${di})" class="shrink-0 px-3 py-2 border rounded text-sm font-semibold">Добавить</button>
-        </div>
+        <div class="flex flex-wrap gap-1">${chips || '<span class="text-[11px] text-slate-400 italic">Должности не закреплены</span>'}</div>
+        ${canEdit ? `<select id="orgAddPos_${di}" onchange="addOrgPosition(${di})" class="mt-2 w-full border px-2 py-1 rounded text-xs text-slate-500">
+          <option value="">+ добавить должность…</option>
+          ${available.map(p => `<option value="${esc(p.ru)}">${esc(p.ru)}</option>`).join('')}
+        </select>` : ''}
       </div>`;
-  }).join('');
+      }).join('');
+    }
+  }
+  renderPositionsCatalog();
+}
+
+// Справочник должностей — «чипы» с поиском (рус. + қаз. в подсказке/приписке)
+function renderPositionsCatalog() {
+  const d = state.dictionaries;
+  const canEdit = isSuperadminUser();
+  const posBox = document.getElementById('dictPositionsList');
+  const cnt = document.getElementById('dictPositionsCount');
+  if (cnt) cnt.textContent = `· ${d.positions.length}`;
+  if (!posBox) return;
+  const q = ((document.getElementById('dictPositionsSearch') || {}).value || '').trim().toLowerCase();
+  const list = q ? d.positions.filter(p => (p.ru || '').toLowerCase().includes(q) || (p.kz || '').toLowerCase().includes(q)) : d.positions;
+  posBox.innerHTML = list.length
+    ? list.map(p => `<span class="inline-flex items-center gap-1 rounded-full bg-slate-50 border border-slate-200 ${canEdit ? 'pl-2.5 pr-1' : 'px-2.5'} py-0.5 text-xs text-slate-700">${esc(p.ru)}${p.kz ? ` <span class="text-slate-400">/ ${esc(p.kz)}</span>` : ''}${canEdit ? `<button type="button" onclick="removeDictionaryValueFromSettings('positions', '${jsAttrEsc(p.ru)}')" class="text-slate-400 hover:text-red-600 font-bold leading-none px-0.5" title="Удалить из справочника и из всех отделов">✕</button>` : ''}</span>`).join('')
+    : `<div class="text-xs text-slate-400">${q ? 'Ничего не найдено' : 'Список пуст'}</div>`;
 }
 
 async function saveOrgDictionaries(next) {
+  if (!isSuperadminUser()) return;
   try {
     setDictionaries(await api.saveDictionaries(next));
   } catch (e) {
@@ -3583,14 +3615,14 @@ async function loadUsersList() {
           ${u.role === 'employee' ? `<button onclick="editUser(${u.id})" class="text-emerald-700 hover:underline text-xs font-semibold">${_L('Изменить', 'Өзгерту')}</button>` : ''}
         ` : isArchiveTab ? `
           <button onclick="openStatusModal(${u.id}, 'active')" class="text-emerald-700 hover:underline text-xs">${_L('Восстановить', 'Қалпына келтіру')}</button>
-          <button onclick="delUser(${u.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
+          ${isSuperadminUser() ? `<button onclick="delUser(${u.id})" class="text-red-600 hover:underline text-xs">Удалить</button>` : ''}
         ` : `
           <button onclick="editUser(${u.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>
           ${!isAdminsTab ? `
             <button onclick="openStatusModal(${u.id}, 'fired')" class="text-amber-700 hover:underline text-xs">${_L('Уволить', 'Жұмыстан босату')}</button>
             <button onclick="openStatusModal(${u.id}, 'maternity')" class="text-purple-700 hover:underline text-xs">${_L('В отпуск', 'Демалысқа')}</button>
           ` : ''}
-          <button onclick="delUser(${u.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
+          ${isSuperadminUser() ? `<button onclick="delUser(${u.id})" class="text-red-600 hover:underline text-xs">Удалить</button>` : ''}
         `}
       </td>
     </tr>
@@ -3889,6 +3921,7 @@ function editUser(id) {
 }
 
 async function delUser(id) {
+  if (!isSuperadminUser()) return;
   if (!confirm('Удалить пользователя?')) return;
   await api.deleteUser(id);
   loadUsersList();
@@ -4788,7 +4821,7 @@ function courseCardHtml(c, color) {
       <div class="mt-4 pt-3 border-t flex justify-end space-x-3 text-xs font-semibold">
         <button onclick="openTestsModal(${c.id})" class="text-emerald-600 hover:underline">Тесты</button>
         <button onclick="openCourseModal(${c.id})" class="text-blue-600 hover:underline">Изменить</button>
-        <button onclick="delCourse(${c.id})" class="text-red-600 hover:underline">Удалить</button>
+        ${isSuperadminUser() ? `<button onclick="delCourse(${c.id})" class="text-red-600 hover:underline">Удалить</button>` : ''}
       </div>
     </div>`;
 }
@@ -5164,6 +5197,7 @@ async function deleteCourseVideo(lang) {
 }
 
 async function delCourse(id) {
+  if (!isSuperadminUser()) return;
   if (!confirm('Удалить курс?')) return;
   await api.deleteCourse(id);
   loadCoursesList();
@@ -6104,6 +6138,164 @@ async function loadCertificatesList() {
   }
 }
 
+// --- ОБУЧЕНИЕ (ассистент: пройденное обучение, сроки, сколько дней осталось, документы) ---
+const trainUi = { q: '', status: '', course: '', rows: [] };
+
+// Состояние срока действия пройденного курса: valid / soon (≤30 дн.) / overdue / unlimited
+function trainStatusOf(a) {
+  if (a.no_expiry || !a.next_test_date) return { key: 'unlimited', days: null };
+  const days = expDaysLeft(a);
+  if (days < 0) return { key: 'overdue', days };
+  if (days <= 30) return { key: 'soon', days };
+  return { key: 'valid', days };
+}
+
+// Бейдж «осталось N дней» / «просрочен N дн.» / «Бессрочно»
+function trainBadgeHtml(a) {
+  const st = trainStatusOf(a);
+  const dn = CURRENT_LANG === 'kz' ? 'күн' : 'дн.';
+  let cls, text;
+  if (st.key === 'unlimited') { cls = 'bg-slate-100 text-slate-600'; text = CURRENT_LANG === 'kz' ? 'Мерзімсіз' : 'Бессрочно'; }
+  else if (st.key === 'overdue') { cls = 'bg-red-100 text-red-800'; text = `${Math.abs(st.days)} ${dn} ${t('overdue')}`; }
+  else if (st.days === 0) { cls = 'bg-amber-100 text-amber-800'; text = t('expires_today'); }
+  else if (st.key === 'soon') { cls = 'bg-amber-100 text-amber-800'; text = `${st.days} ${t('days_left')}`; }
+  else { cls = 'bg-emerald-100 text-emerald-800'; text = `${st.days} ${t('days_left')}`; }
+  return `<span class="text-xs font-bold px-2.5 py-1 rounded-lg whitespace-nowrap ${cls}">${text}</span>`;
+}
+
+// Только актуальная (последняя успешная) запись по паре «сотрудник + курс»
+function latestPassedPerCourse(list) {
+  const m = new Map();
+  list.filter(x => x.status === 'passed').forEach(x => {
+    const k = `${x.user_id}:${x.course_id}`;
+    const cur = m.get(k);
+    const tx = String(x.test_date || ''), tc = cur ? String(cur.test_date || '') : '';
+    if (!cur || tx > tc || (tx === tc && Number(x.id) > Number(cur.id))) m.set(k, x);
+  });
+  return [...m.values()];
+}
+
+function renderTrainingTab(container) {
+  const cls = 'border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white';
+  container.innerHTML = `
+    <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+      <h2 class="text-lg font-bold text-slate-900">${_L('Пройденное обучение', 'Өткен оқыту')}</h2>
+      <p class="text-xs text-slate-500 mt-1 mb-4">${_L('Какое обучение сотрудники прошли, до какого числа оно действует и сколько дней осталось. Удостоверения и единое удостоверение — в колонке «Документы».', 'Қызметкерлер қандай оқудан өткені, ол қашанға дейін жарамды және қанша күн қалғаны. Куәліктер мен бірыңғай куәлік — «Құжаттар» бағанында.')}</p>
+      ${orgNoteHtml(_L('Показано обучение сотрудников:', 'Қызметкерлердің оқуы көрсетілген:'))}
+      <div id="trainSummary" class="flex flex-wrap gap-2 mb-3"></div>
+      <div class="flex flex-wrap gap-2 mb-4">
+        <input id="trainQ" type="text" value="${esc(trainUi.q)}" placeholder="${_L('Поиск по ФИО, курсу, объекту...', 'Аты-жөні, курс, объект бойынша іздеу...')}" oninput="onTrainFilterChange()" class="flex-1 min-w-[200px] ${cls}">
+        <select id="trainCourse" onchange="onTrainFilterChange()" class="${cls}"></select>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+          <thead class="bg-slate-50">
+            <tr>
+              <th class="px-4 py-3 text-left font-semibold text-slate-600">${_L('Сотрудник', 'Қызметкер')}</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-600">${_L('Курс', 'Курс')}</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-600">${_L('Пройден', 'Өтілген')}</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-600">${t('next_test_date')}</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-600">${_L('Осталось', 'Қалды')}</th>
+              <th class="px-4 py-3 text-left font-semibold text-slate-600">${_L('Протокол', 'Хаттама')}</th>
+              <th class="px-4 py-3 text-right font-semibold text-slate-600">${_L('Документы', 'Құжаттар')}</th>
+            </tr>
+          </thead>
+          <tbody id="trainTable" class="divide-y divide-slate-100"><tr><td colspan="7" class="p-4 text-center text-slate-400">${t('loading')}</td></tr></tbody>
+        </table>
+      </div>
+    </div>`;
+  loadTrainingList();
+}
+
+async function loadTrainingList() {
+  const tbody = document.getElementById('trainTable');
+  if (!tbody) return;
+  try {
+    const all = await api.getAssignments({ ...orgParams(), status: 'passed' });
+    trainUi.rows = latestPassedPerCourse(all);
+    renderTrainingRows();
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="7" class="p-4 text-center text-red-500">${t('error_generic')}</td></tr>`;
+  }
+}
+
+function onTrainFilterChange() {
+  const q = document.getElementById('trainQ');
+  const c = document.getElementById('trainCourse');
+  trainUi.q = q ? q.value : '';
+  trainUi.course = c ? c.value : '';
+  renderTrainingRows();
+}
+function setTrainStatus(key) {
+  trainUi.status = trainUi.status === key ? '' : key;
+  renderTrainingRows();
+}
+
+function renderTrainingRows() {
+  const tbody = document.getElementById('trainTable');
+  if (!tbody) return;
+  const title = a => (CURRENT_LANG === 'kz' ? (a.title_kz || a.title_ru) : (a.title_ru || a.title_kz)) || '';
+  const rows = trainUi.rows;
+
+  // курсы для фильтра
+  const courses = [...new Set(rows.map(title).filter(Boolean))].sort((x, y) => x.localeCompare(y, 'ru'));
+  if (trainUi.course && !courses.includes(trainUi.course)) trainUi.course = '';
+  const cSel = document.getElementById('trainCourse');
+  if (cSel) cSel.innerHTML = `<option value="">${_L('Все курсы', 'Барлық курстар')}</option>` +
+    courses.map(c => `<option value="${esc(c)}" ${c === trainUi.course ? 'selected' : ''}>${esc(c)}</option>`).join('');
+
+  // счётчики-«таблетки» (клик — фильтр по статусу)
+  const counts = { valid: 0, soon: 0, overdue: 0, unlimited: 0 };
+  rows.forEach(a => { counts[trainStatusOf(a).key]++; });
+  const pill = (key, label, n, color) => `<button type="button" onclick="setTrainStatus('${key}')" class="text-xs font-semibold px-3 py-1.5 rounded-full border ${trainUi.status === key ? color.on : color.off}">${label}: ${n}</button>`;
+  const sum = document.getElementById('trainSummary');
+  if (sum) sum.innerHTML = [
+    pill('valid', _L('Действует', 'Жарамды'), counts.valid, { on: 'bg-emerald-600 text-white border-emerald-600', off: 'bg-emerald-50 text-emerald-700 border-emerald-200' }),
+    pill('soon', _L('Истекает ≤ 30 дн.', '≤ 30 күнде аяқталады'), counts.soon, { on: 'bg-amber-500 text-white border-amber-500', off: 'bg-amber-50 text-amber-700 border-amber-200' }),
+    pill('overdue', _L('Просрочено', 'Мерзімі өткен'), counts.overdue, { on: 'bg-red-600 text-white border-red-600', off: 'bg-red-50 text-red-700 border-red-200' }),
+    pill('unlimited', _L('Бессрочно', 'Мерзімсіз'), counts.unlimited, { on: 'bg-slate-600 text-white border-slate-600', off: 'bg-slate-50 text-slate-600 border-slate-200' })
+  ].join('');
+
+  const q = (trainUi.q || '').trim().toLowerCase();
+  let list = rows.filter(a => {
+    if (trainUi.status && trainStatusOf(a).key !== trainUi.status) return false;
+    if (trainUi.course && title(a) !== trainUi.course) return false;
+    if (q) {
+      const hay = `${a.last_name} ${a.first_name} ${title(a)} ${a.object || ''} ${a.department || ''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  // сначала самые срочные (просроченные → скоро истекающие), бессрочные — в конце
+  const rank = a => { const st = trainStatusOf(a); return st.key === 'unlimited' ? Infinity : st.days; };
+  list.sort((a, b) => rank(a) - rank(b) || `${a.last_name} ${a.first_name}`.localeCompare(`${b.last_name} ${b.first_name}`, 'ru'));
+
+  if (!list.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="p-4 text-center text-slate-400">${rows.length ? _L('Ничего не найдено по выбранным фильтрам', 'Таңдалған сүзгілер бойынша ештеңе табылмады') : t('no_data')}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = list.map(a => {
+    const hasCert = !a.is_external && a.certificate_number;
+    return `
+    <tr class="hover:bg-slate-50">
+      <td class="px-4 py-3 font-medium">
+        <button onclick="openUserProfile(${a.user_id})" class="hover:text-blue-600 hover:underline text-left">${esc(a.last_name)} ${esc(a.first_name)}</button>
+        <br><span class="text-xs text-slate-400">${esc(a.object || '—')}${a.department ? ' / ' + esc(a.department) : ''}</span>
+      </td>
+      <td class="px-4 py-3">${esc(title(a))}</td>
+      <td class="px-4 py-3 text-xs text-slate-600">${a.test_date ? new Date(a.test_date).toLocaleDateString('ru-RU') : '—'}</td>
+      <td class="px-4 py-3 text-xs text-slate-600">${a.no_expiry ? (CURRENT_LANG === 'kz' ? 'Мерзімсіз' : 'Бессрочно') : (a.next_test_date ? new Date(a.next_test_date).toLocaleDateString('ru-RU') : '—')}</td>
+      <td class="px-4 py-3">${trainBadgeHtml(a)}</td>
+      <td class="px-4 py-3 text-xs text-slate-600">№ ${esc(a.protocol_number || '—')}</td>
+      <td class="px-4 py-3 text-right whitespace-nowrap space-x-3">
+        ${hasCert ? `<a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="text-blue-600 hover:underline text-xs font-semibold">${t('download_cert')}</a>
+        <a href="#" onclick="downloadAuthed('/api/id-cards/${a.id}');return false;" class="text-indigo-600 hover:underline text-xs font-semibold">${t('download_id_card')}</a>` : ''}
+        ${a.public_uid ? `<a href="/p/${encodeURIComponent(a.public_uid)}" target="_blank" rel="noopener" class="text-indigo-700 hover:underline text-xs font-semibold">🪪 ${_L('Единое удостоверение', 'Бірыңғай куәлік')}</a>` : ''}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
 // --- ПРОТОКОЛЫ (открытие/закрытие, п.1 и п.4) ---
 function fmtDate(d) {
   if (!d) return '—';
@@ -6211,12 +6403,12 @@ function renderProtocolsView() {
           <span class="text-[11px] text-slate-400 font-semibold" title="Протокол полностью подписан комиссией — изменение, закрытие и удаление запрещены">🔒 Подписан</span>
           ${(state.user && state.user.role === 'superadmin') ? `<button onclick="revokeProtocolAction(${p.id})" class="text-red-600 hover:underline text-xs">Аннулировать</button>` : ''}
         ` : `
-          <button onclick="editProtocol(${p.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>
+          ${isSuperadminUser() ? `<button onclick="editProtocol(${p.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>` : ''}
           ${p.status === 'open'
             ? `<button onclick="closeProtocolAction(${p.id})" class="text-amber-600 hover:underline text-xs">Закрыть</button>`
             : `<button onclick="reopenProtocolAction(${p.id})" class="text-emerald-600 hover:underline text-xs">Открыть снова</button>`}
           ${(state.user && state.user.role === 'superadmin') ? `<button onclick="revokeProtocolAction(${p.id})" class="text-red-600 hover:underline text-xs">Аннулировать</button>` : ''}
-          <button onclick="deleteProtocolAction(${p.id})" class="text-red-600 hover:underline text-xs">Удалить</button>
+          ${isSuperadminUser() ? `<button onclick="deleteProtocolAction(${p.id})" class="text-red-600 hover:underline text-xs">Удалить</button>` : ''}
         `}
       </td>
     </tr>
@@ -6521,6 +6713,7 @@ async function revokeProtocolAction(id) {
 }
 
 async function deleteProtocolAction(id) {
+  if (!isSuperadminUser()) return;
   if (!confirm('Удалить протокол?')) return;
   try {
     await api.deleteProtocol(id);
@@ -6531,8 +6724,16 @@ async function deleteProtocolAction(id) {
 }
 
 // --- USER PROFILE (АДМИН/СУПЕРАДМИН СМОТРИТ КАРТОЧКУ СОТРУДНИКА) ---
+function backFromProfile() {
+  const back = state.profileBackTab;
+  const ok = back && back !== 'user_profile' && (!isObserverUser() || OBSERVER_TABS.includes(back));
+  setTab(ok ? back : 'users');
+}
+
 function openUserProfile(userId) {
   state.profileUserId = userId;
+  // запоминаем, откуда открыли карточку (Сотрудники / Обучение / Дашборд...), чтобы «Назад» вёл туда же
+  if (state.tab !== 'user_profile') state.profileBackTab = state.tab;
   state.tab = 'user_profile';
   render();
 }
@@ -6599,6 +6800,8 @@ async function loadUserProfile(userId) {
       api.getAssignments({ user_id: userId })
     ]);
     const roleName = t('role_' + user.role) || user.role;
+    // «Осталось дней» показываем только у актуального (последнего успешного) прохождения курса
+    const latestPassedIds = new Set(latestPassedPerCourse(assignments).map(x => x.id));
     div.innerHTML = `
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
         <div class="flex flex-wrap justify-between items-start gap-4">
@@ -6691,6 +6894,7 @@ async function loadUserProfile(userId) {
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">Статус</th>
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">Балл</th>
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">${t('next_test_date')}</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">${_L('Осталось', 'Қалды')}</th>
                 <th class="px-4 py-3 text-right font-semibold text-slate-600">${t('actions')}</th>
               </tr>
             </thead>
@@ -6706,6 +6910,7 @@ async function loadUserProfile(userId) {
                   </td>
                   <td class="px-4 py-3 font-bold">${a.score_percent !== null ? a.score_percent + '%' : '—'}</td>
                   <td class="px-4 py-3 text-xs text-slate-600">${a.next_test_date ? new Date(a.next_test_date).toLocaleDateString('ru-RU') : (a.no_expiry && a.status === 'passed' ? (CURRENT_LANG === 'kz' ? 'Мерзімсіз' : 'Бессрочно') : '—')}</td>
+                  <td class="px-4 py-3">${latestPassedIds.has(a.id) ? trainBadgeHtml(a) : '<span class="text-xs text-slate-400">—</span>'}</td>
                   <td class="px-4 py-3 text-right whitespace-nowrap space-x-2">
                     ${a.user_answers ? `<button onclick="openAnswersModal(${a.id})" class="text-slate-600 hover:underline text-xs font-semibold">Подробнее</button>` : ''}
                     ${a.status === 'passed' && !a.is_external && a.certificate_number ? `<a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="text-blue-600 hover:underline text-xs font-semibold">${t('download_cert')}</a>
@@ -6713,7 +6918,7 @@ async function loadUserProfile(userId) {
                     ${state.user && state.user.role === 'superadmin' ? `<button onclick="delAssign(${a.id}, ${user.id})" class="text-red-600 hover:underline text-xs font-semibold">Удалить</button>` : ''}
                   </td>
                 </tr>
-              `).join('') : `<tr><td colspan="6" class="p-4 text-center text-slate-400">${t('no_data')}</td></tr>`}
+              `).join('') : `<tr><td colspan="7" class="p-4 text-center text-slate-400">${t('no_data')}</td></tr>`}
             </tbody>
           </table>
         </div>
