@@ -1430,6 +1430,15 @@ async function loadTabContent() {
               </select>
               <p id="cKindHint" class="text-[11px] text-violet-800 mt-2"></p>
             </div>
+            <div class="bg-slate-50 border border-slate-200 rounded-lg p-3">
+              <label class="text-xs font-semibold text-slate-700">Категория на главной</label>
+              <select id="cMainGroup" onchange="this.dataset.manual='1'" class="w-full border p-2 rounded text-sm bg-white mt-1">
+                <option value="biot">БиОТ</option>
+                <option value="internal">Внутренние курсы</option>
+                <option value="external">Внешние курсы</option>
+              </select>
+              <p class="text-[11px] text-slate-500 mt-1">В какой из трёх категорий курс показывается в «Статистике по курсам» на главной странице.</p>
+            </div>
             <div><label class="text-xs font-semibold text-slate-600">Описание (RU)</label><textarea id="cDescRu" rows="2" class="w-full border p-2 rounded text-sm"></textarea></div>
             <div><label class="text-xs font-semibold text-slate-600">Описание (KZ)</label><textarea id="cDescKz" rows="2" class="w-full border p-2 rounded text-sm"></textarea></div>
             <div class="border rounded-lg p-3 bg-slate-50">
@@ -2626,8 +2635,69 @@ async function clearSavedSignature() {
 }
 
 // --- DASHBOARD: STATISTICS SPLIT BY COURSE (п.5 запроса) ---
+// Главная: сначала 3 крупные карточки-категории («БиОТ» / «Внутренние курсы» / «Внешние курсы»),
+// клик по карточке открывает курсы ТОЛЬКО этой категории, дальше — панель выбранного курса.
 let dashCourseStats = [];
 let dashSelectedCourseId = null;
+let dashMainGroup = null;   // null — экран «3 категории»; иначе 'biot' | 'internal' | 'external'
+let dashAssignData = null;  // активные назначения (с учётом фильтра объект/отдел): уникальные подсчёты и «записать всех»
+
+const DASH_GROUPS = [
+  { key: 'biot', icon: '🦺', ru: 'БиОТ', kz: 'БиОТ' },
+  { key: 'internal', icon: '🏢', ru: 'Внутренние курсы', kz: 'Ішкі курстар' },
+  { key: 'external', icon: '🎓', ru: 'Внешние курсы', kz: 'Сыртқы курстар' }
+];
+function dashGroupLabel(key) {
+  const g = DASH_GROUPS.find(x => x.key === key);
+  return g ? _L(g.ru, g.kz) : '';
+}
+// Категория по умолчанию, если у курса main_group ещё не задан: наш курс → БиОТ, без протокола → внутренние, внешний → внешние
+function dashDefaultGroup(kind) {
+  return kind === 'internal' ? 'biot' : kind === 'external' ? 'external' : 'internal';
+}
+function dashCourseGroup(c) {
+  if (c && DASH_GROUPS.some(g => g.key === c.main_group)) return c.main_group;
+  return dashDefaultGroup((c && c.course_kind) || (c && c.is_external ? 'external' : 'internal'));
+}
+function dashCourseTitle(c) {
+  return CURRENT_LANG === 'kz' ? (c.title_kz || c.title_ru) : (c.title_ru || c.title_kz);
+}
+function dashGroupCourses(key) {
+  return dashCourseStats.filter(c => dashCourseGroup(c) === key);
+}
+
+// Для набора курсов (Set id-строк): последний «сдал» по паре сотрудник+курс; считаем уникальных сотрудников
+// с действующим обучением и с просрочкой (та же логика, что у верхних карточек главной).
+function dashUniqueCounts(courseIds) {
+  const now = new Date();
+  const latest = new Map();
+  (dashAssignData || []).forEach(x => {
+    if (x.status !== 'passed' || !courseIds.has(String(x.course_id))) return;
+    const k = `${x.user_id}:${x.course_id}`;
+    const cur = latest.get(k);
+    const tx = String(x.test_date || ''), tc = cur ? String(cur.test_date || '') : '';
+    if (!cur || tx > tc || (tx === tc && Number(x.id) > Number(cur.id))) latest.set(k, x);
+  });
+  const valid = new Set(), overdue = new Set();
+  latest.forEach(x => {
+    const isOverdue = x.next_test_date && new Date(x.next_test_date) < now;
+    (isOverdue ? overdue : valid).add(x.user_id);
+  });
+  return { valid: valid.size, overdue: overdue.size };
+}
+function dashGroupStats(key) {
+  const courses = dashGroupCourses(key);
+  const ids = new Set(courses.map(c => String(c.id)));
+  let valid, overdue;
+  if (dashAssignData) {
+    ({ valid, overdue } = dashUniqueCounts(ids));
+  } else { // назначения не загрузились — приблизительно по сумме курсов
+    valid = courses.reduce((n, c) => n + (c.trained_employees || 0), 0);
+    overdue = courses.reduce((n, c) => n + (c.overdue || 0), 0);
+  }
+  const missingMandatory = courses.some(c => c.is_mandatory && (c.untrained || 0) > 0);
+  return { courses, valid, overdue, missingMandatory };
+}
 
 async function loadDashboardCourseStats() {
   const tabsDiv = document.getElementById('dashCourseTabs');
@@ -2635,8 +2705,24 @@ async function loadDashboardCourseStats() {
   const mandCard = document.getElementById('dashMandatoryCard');
   if (!tabsDiv || !panelDiv) return;
   try {
-    const summary = await api.getCourseStatsSummary(orgParams());
+    const [summary, assigns, allCourses] = await Promise.all([
+      api.getCourseStatsSummary(orgParams()),
+      api.getAssignments({ ...orgParams(), active_only: 1 }).catch(() => null),
+      api.getCourses().catch(() => null)
+    ]);
     dashCourseStats = summary.courses || [];
+    dashAssignData = Array.isArray(assigns) ? assigns : null;
+    // Дополняем статистику категорией и видом курса из списка курсов, если эндпоинт статистики их не вернул
+    if (Array.isArray(allCourses)) {
+      const byId = new Map(allCourses.map(x => [String(x.id), x]));
+      dashCourseStats.forEach(c => {
+        const x = byId.get(String(c.id));
+        if (!x) return;
+        if (!c.main_group && x.main_group) c.main_group = x.main_group;
+        if (!c.course_kind && x.course_kind) c.course_kind = x.course_kind;
+        if (c.is_external == null && x.is_external != null) c.is_external = x.is_external;
+      });
+    }
 
     if (mandCard) {
       const missing = summary.overall ? (summary.overall.employees_missing_mandatory || 0) : 0;
@@ -2645,19 +2731,28 @@ async function loadDashboardCourseStats() {
       document.getElementById('dashMandatoryMissing').textContent = missing;
     }
 
-    if (!dashCourseStats.length) {
-      tabsDiv.innerHTML = `<div class="text-slate-400 text-sm">${t('no_data')}</div>`;
-      panelDiv.innerHTML = '';
-      return;
-    }
-    if (!dashSelectedCourseId || !dashCourseStats.some(c => String(c.id) === String(dashSelectedCourseId))) {
-      dashSelectedCourseId = dashCourseStats[0].id;
-    }
+    if (dashMainGroup && !DASH_GROUPS.some(g => g.key === dashMainGroup)) dashMainGroup = null;
+    if (dashMainGroup) ensureDashSelectedCourse();
     renderDashCourseTabs();
     renderDashCoursePanel();
   } catch (e) {
     tabsDiv.innerHTML = `<div class="text-red-600 text-sm">${t('error_generic')}</div>`;
   }
+}
+
+function ensureDashSelectedCourse() {
+  const list = dashGroupCourses(dashMainGroup);
+  if (!dashSelectedCourseId || !list.some(c => String(c.id) === String(dashSelectedCourseId))) {
+    dashSelectedCourseId = list.length ? list[0].id : null;
+  }
+}
+
+// key = null → вернуться ко всем категориям
+function selectDashGroup(key) {
+  dashMainGroup = key || null;
+  if (dashMainGroup) ensureDashSelectedCourse();
+  renderDashCourseTabs();
+  renderDashCoursePanel();
 }
 
 function selectDashCourse(id) {
@@ -2669,19 +2764,56 @@ function selectDashCourse(id) {
 function renderDashCourseTabs() {
   const tabsDiv = document.getElementById('dashCourseTabs');
   if (!tabsDiv) return;
-  tabsDiv.innerHTML = dashCourseStats.map(c => {
+  const canAct = !isObserverUser();
+
+  // Экран 1: три категории
+  if (!dashMainGroup) {
+    tabsDiv.className = 'grid grid-cols-1 md:grid-cols-3 gap-3 mb-4';
+    tabsDiv.innerHTML = DASH_GROUPS.map(g => {
+      const st = dashGroupStats(g.key);
+      const alert = st.overdue > 0 || st.missingMandatory;
+      const first = st.courses.slice().sort((a, b) => String(dashCourseTitle(a)).localeCompare(String(dashCourseTitle(b)), 'ru'))[0];
+      return `
+        <div onclick="selectDashGroup('${g.key}')" class="cursor-pointer rounded-xl border-2 p-4 flex flex-col transition hover:shadow-md ${alert ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-white hover:border-blue-300'}">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="text-2xl leading-none">${g.icon}</span>
+            <div class="text-base font-black text-slate-900 leading-tight">${esc(_L(g.ru, g.kz))}</div>
+            ${st.missingMandatory ? `<span class="ml-auto text-[11px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700" title="${esc(_L('Есть сотрудники, не прошедшие обязательный курс', 'Міндетті курстан өтпеген қызметкерлер бар'))}">⚠</span>` : ''}
+          </div>
+          <div class="grid grid-cols-3 gap-2 text-center">
+            <div><div class="text-xl font-black tabular-nums text-slate-900">${st.courses.length}</div><div class="text-[10px] font-bold uppercase text-slate-500 leading-tight">${_L('Курсов', 'Курс')}</div></div>
+            <div><div class="text-xl font-black tabular-nums text-emerald-600">${st.valid}</div><div class="text-[10px] font-bold uppercase text-slate-500 leading-tight">${_L('Обучение действует', 'Оқу жарамды')}</div></div>
+            <div><div class="text-xl font-black tabular-nums ${st.overdue > 0 ? 'text-red-600' : 'text-slate-400'}">${st.overdue}</div><div class="text-[10px] font-bold uppercase ${st.overdue > 0 ? 'text-red-700' : 'text-slate-500'} leading-tight">${_L('Просрочено', 'Мерзімі өткен')}</div></div>
+          </div>
+          <div class="mt-3 text-[11px] text-slate-400">${_L('Сотрудников — по уникальным людям', 'Қызметкерлер — бірегей адамдар бойынша')}</div>
+          ${canAct && first ? `<button type="button" onclick="event.stopPropagation(); dashAssignCourse(${first.id})" class="mt-3 self-start px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700">📚 ${_L('Записать сотрудников', 'Қызметкерлерді жазу')}</button>` : ''}
+        </div>`;
+    }).join('');
+    return;
+  }
+
+  // Экран 2: курсы выбранной категории
+  tabsDiv.className = 'mb-4';
+  const list = dashGroupCourses(dashMainGroup);
+  const back = `<button type="button" onclick="selectDashGroup(null)" class="px-3 py-1.5 rounded-full text-xs font-semibold border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">← ${_L('Все категории', 'Барлық санаттар')}</button>`;
+  const title = `<span class="text-sm font-black text-slate-800 mr-1">${esc(dashGroupLabel(dashMainGroup))}</span>`;
+  const buttons = list.map(c => {
     const on = String(c.id) === String(dashSelectedCourseId);
-    const title = CURRENT_LANG === 'kz' ? (c.title_kz || c.title_ru) : (c.title_ru || c.title_kz);
     const flag = c.is_mandatory && (c.untrained || 0) > 0 ? ' ⚠' : '';
-    return `<button type="button" onclick="selectDashCourse(${c.id})" class="px-3 py-1.5 rounded-full text-xs font-semibold border ${on ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}">${esc(title)}${flag}</button>`;
+    return `<button type="button" onclick="selectDashCourse(${c.id})" class="px-3 py-1.5 rounded-full text-xs font-semibold border ${on ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}">${esc(dashCourseTitle(c))}${flag}</button>`;
   }).join('');
+  tabsDiv.innerHTML = `
+    <div class="flex flex-wrap items-center gap-1.5">${back}${title}</div>
+    <div class="flex flex-wrap gap-1.5 mt-3">${buttons || `<div class="text-slate-400 text-sm">${_L('В этой категории пока нет курсов', 'Бұл санатта әзірге курс жоқ')}</div>`}</div>`;
 }
 
 function renderDashCoursePanel() {
   const panelDiv = document.getElementById('dashCoursePanel');
   if (!panelDiv) return;
-  const c = dashCourseStats.find(x => String(x.id) === String(dashSelectedCourseId));
+  if (!dashMainGroup) { panelDiv.innerHTML = ''; return; }
+  const c = dashGroupCourses(dashMainGroup).find(x => String(x.id) === String(dashSelectedCourseId));
   if (!c) { panelDiv.innerHTML = ''; return; }
+  const canAct = !isObserverUser();
   const cards = [
     { label: 'Сотрудников всего', value: c.total_employees, cls: 'text-slate-900' },
     { label: 'Прошли обучение', value: c.trained_employees, cls: 'text-emerald-600' },
@@ -2706,8 +2838,67 @@ function renderDashCoursePanel() {
         <button type="button" onclick="setTab('courses'); setTimeout(() => openUntrainedModal(${c.id}, '${jsAttrEsc(CURRENT_LANG === 'kz' ? (c.title_kz || c.title_ru) : (c.title_ru || c.title_kz))}'), 50)" class="text-xs font-semibold text-blue-600 hover:underline">Список сотрудников, не прошедших курс &rarr;</button>
       </div>
     ` : ''}
+    ${canAct ? `
+      <div class="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2">
+        <button type="button" onclick="dashAssignCourse(${c.id})" class="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700">📚 ${_L('Записать сотрудников', 'Қызметкерлерді жазу')}</button>
+        <button type="button" onclick="dashAssignProblem(${c.id})" class="px-3 py-1.5 bg-red-50 text-red-700 border border-red-200 rounded-lg text-xs font-semibold hover:bg-red-100">${_L('Записать всех, кто не прошёл / просрочен', 'Өтпегендердің / мерзімі өткендердің барлығын жазу')}</button>
+        ${(c.course_kind || (c.is_external ? 'external' : 'internal')) === 'internal' ? `<button type="button" onclick="dashCreateSession(${c.id})" class="text-xs font-semibold text-blue-600 hover:underline">${_L('Создать группу обучения', 'Оқыту тобын құру')} &rarr;</button>` : ''}
+      </div>
+    ` : ''}
   `;
 }
+
+// Записать сотрудников на курс прямо с главной (модалка назначения с предвыбранным курсом)
+function dashAssignCourse(courseId) {
+  if (!courseId) return;
+  openAssignModal(null, null, courseId);
+}
+
+// Сотрудники с просрочкой / ожидающие прохождения по одному курсу — из уже загруженных назначений
+function dashCourseUserSets(courseId) {
+  const overdue = new Set(), pending = new Set();
+  const cid = String(courseId);
+  const now = new Date();
+  const latest = new Map();
+  (dashAssignData || []).forEach(x => {
+    if (String(x.course_id) !== cid) return;
+    if (x.status === 'pending' || x.status === 'in_progress') pending.add(Number(x.user_id));
+    if (x.status === 'passed') {
+      const cur = latest.get(x.user_id);
+      const tx = String(x.test_date || ''), tc = cur ? String(cur.test_date || '') : '';
+      if (!cur || tx > tc || (tx === tc && Number(x.id) > Number(cur.id))) latest.set(x.user_id, x);
+    }
+  });
+  latest.forEach((x, uid) => { if (x.next_test_date && new Date(x.next_test_date) < now) overdue.add(Number(uid)); });
+  return { overdue, pending };
+}
+
+// «Записать всех, кто не прошёл / просрочен»: не проходивших курс (с учётом фильтра объект/отдел) + просроченных + ожидающих
+async function dashAssignProblem(courseId) {
+  const ids = new Set();
+  try {
+    const untrained = await api.getUntrainedEmployees(courseId, orgParams());
+    (untrained || []).forEach(u => ids.add(Number(u.id)));
+  } catch (e) {
+    alert(e && e.message ? e.message : t('error_generic'));
+    return;
+  }
+  const sets = dashCourseUserSets(courseId);
+  sets.overdue.forEach(id => ids.add(id));
+  sets.pending.forEach(id => ids.add(id));
+  if (!ids.size) {
+    alert(_L('Нет сотрудников, которых нужно записать: все прошли курс, просроченных нет.', 'Жазуды қажет ететін қызметкерлер жоқ: барлығы курстан өткен, мерзімі өткендер жоқ.'));
+    return;
+  }
+  openAssignModal(null, [...ids], courseId);
+}
+
+// Создать группу обучения: вкладка «Группы обучения» + окно создания с предвыбранным курсом
+function dashCreateSession(courseId) {
+  setTab('sessions');
+  setTimeout(() => sessionsOpenCreate(courseId), 80);
+}
+
 
 // --- DASHBOARD: EXPIRING CERTIFICATES WIDGET (сортировка, фильтры, период, экспорт) ---
 let expData = [];
@@ -3821,7 +4012,7 @@ function sessionsModalShell(id, innerHtml, widthCls = 'max-w-lg') {
 }
 function sessionsCloseModal(id) { const m = document.getElementById(id); if (m) m.remove(); }
 
-async function sessionsOpenCreate() {
+async function sessionsOpenCreate(presetCourseId) {
   let courses;
   try { courses = await sessionsEnsureCourses(); } catch (e) { return sessErr(e); }
   const opts = courses.map((c) => `<option value="${c.id}" data-kind="${esc(c.course_kind || 'internal')}">${esc(c.title_ru)} — ${esc(SESSION_KIND_LABEL[c.course_kind || 'internal'])}</option>`).join('');
@@ -3840,6 +4031,7 @@ async function sessionsOpenCreate() {
       <button onclick="sessionsCloseModal('sessCreateModal')" class="px-4 py-2 text-sm rounded-lg bg-slate-100 hover:bg-slate-200">Отмена</button>
       <button onclick="sessionsCreate()" class="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700">Создать и добавить людей</button>
     </div>`);
+  if (presetCourseId) { const sel = document.getElementById('sessCourse'); if (sel) sel.value = String(presetCourseId); }
 }
 async function sessionsCreate() {
   const course_id = document.getElementById('sessCourse').value;
@@ -3993,12 +4185,19 @@ async function sessionsSaveEdit() {
 }
 
 // ---------- закрыть заявку (массово «прошли») ----------
-function sessionsOpenComplete() {
+let scNextManual = false;   // «Следующее прохождение» правили вручную (или оно уже было сохранено в заявке) — не затираем
+async function sessionsOpenComplete() {
   const d = sessionsState.detail;
   const attended = d.members.filter((m) => m.attended).length;
   if (!attended) return alert('Сначала отметьте присутствующих (кнопка «Отметить ВСЕХ присутствующими» или галочки + «Отметить выбранных»).');
   const kind = d.course_kind || 'internal';
   const absent = d.members.length - attended;
+  // Срок курса нужен, чтобы предзаполнить «Следующее прохождение»; если курсы не загрузились — работаем как раньше (посчитает сервер)
+  let sessCourse = null;
+  try { sessCourse = (await sessionsEnsureCourses()).find((c) => String(c.id) === String(d.course_id)) || null; } catch (e) { /* не критично */ }
+  sessCompleteCourse = sessCourse;
+  scNextManual = !!d.next_test_date;
+  const term = courseTermInfo(sessCourse);
   const protoField = kind === 'no_protocol' ? '' : `
     <label class="block text-xs font-semibold text-slate-600 mb-1">${kind === 'internal' ? '№ протокола *' : '№ протокола другой организации (необязательно)'}</label>
     <input id="scProto" type="text" value="${esc(d.protocol_number || '')}" class="w-full border rounded-lg px-3 py-2 text-sm mb-3">
@@ -4008,21 +4207,46 @@ function sessionsOpenComplete() {
     <h3 class="text-lg font-bold mb-1">Внести прохождение</h3>
     <p class="text-sm text-slate-600 mb-3">Будет отмечено «прошли»: <b>${attended}</b> чел.${absent ? ` Не присутствовали (${absent}) — запись им не вносится.` : ''}</p>
     <label class="block text-xs font-semibold text-slate-600 mb-1">Дата прохождения *</label>
-    <input id="scDate" type="date" value="${esc(d.test_date || d.planned_date || '')}" class="w-full border rounded-lg px-3 py-2 text-sm mb-3">
+    <input id="scDate" type="date" oninput="sessionsUpdateNext()" value="${esc(d.test_date || d.planned_date || '')}" class="w-full border rounded-lg px-3 py-2 text-sm mb-3">
     ${protoField}
+    ${term.noExpiry ? `<div class="text-xs text-slate-600 mb-3"><b>Следующее прохождение:</b> бессрочно — даты нет.</div>` : `
     <label class="block text-xs font-semibold text-slate-600 mb-1">Следующее прохождение (если пусто — по сроку действия курса)</label>
-    <input id="scNext" type="date" value="${esc(d.next_test_date || '')}" class="w-full border rounded-lg px-3 py-2 text-sm mb-3">
+    <input id="scNext" type="date" oninput="sessionsNextInput()" value="${esc(d.next_test_date || '')}" class="w-full border rounded-lg px-3 py-2 text-sm">
+    <p id="scNextHint" class="text-[11px] text-slate-500 mt-1 mb-3"></p>`}
     <label class="block text-xs font-semibold text-slate-600 mb-1">Результат, % (необязательно)</label>
     <input id="scScore" type="number" min="0" max="100" value="${d.score_percent == null ? '' : esc(d.score_percent)}" class="w-full border rounded-lg px-3 py-2 text-sm mb-4">
     <div class="flex justify-end gap-2">
       <button onclick="sessionsCloseModal('sessCompleteModal')" class="px-4 py-2 text-sm rounded-lg bg-slate-100">Отмена</button>
       <button id="scBtn" onclick="sessionsComplete()" class="px-4 py-2 text-sm rounded-lg bg-emerald-600 text-white font-semibold">Внести прохождение (${attended})</button>
     </div>`);
+  sessionsUpdateNext();
 }
+let sessCompleteCourse = null;
+function sessionsNextInput() {
+  const el = document.getElementById('scNext');
+  scNextManual = !!(el && el.value);
+  sessionsUpdateNext();
+}
+// Предзаполнение «Следующего прохождения» по сроку курса (при смене даты прохождения, пока поле не правили вручную)
+function sessionsUpdateNext() {
+  const nextEl = document.getElementById('scNext'), hint = document.getElementById('scNextHint');
+  if (!nextEl || !hint) return;
+  const term = courseTermInfo(sessCompleteCourse);
+  if (term.months === null) { hint.textContent = ''; return; }
+  const auto = addMonthsISO((document.getElementById('scDate') || {}).value, term.months);
+  if (!scNextManual) nextEl.value = auto;
+  hint.textContent = scNextManual
+    ? `Срок курса: ${term.months} мес. — дата изменена вручную`
+    : (auto ? `Срок курса: ${term.months} мес. — дата рассчитана автоматически` : `Срок курса: ${term.months} мес. — дата рассчитается после ввода даты прохождения`);
+}
+
 async function sessionsComplete() {
   const d = sessionsState.detail;
   const val = (id) => { const el = document.getElementById(id); return el ? el.value : undefined; };
   const body = { test_date: val('scDate'), next_test_date: val('scNext'), score_percent: val('scScore') };
+  // Бессрочный курс: поля нет — явно шлём пустое значение, чтобы не подтянулась старая дата из заявки
+  if (courseTermInfo(sessCompleteCourse).noExpiry) body.next_test_date = '';
+  else if (!body.next_test_date) body.next_test_date = asNextDateFromTerm(body.test_date, sessCompleteCourse) || body.next_test_date;
   if (val('scProto') !== undefined) body.protocol_number = val('scProto');
   if (val('scProtoDate') !== undefined) body.protocol_date = val('scProtoDate');
   const btn = document.getElementById('scBtn'); if (btn) btn.disabled = true;
@@ -4607,7 +4831,12 @@ const COURSE_KIND_HINTS = {
   external: 'Обучение провела другая организация. Вносятся дата прохождения, срок и (по желанию) номер её протокола. Удостоверение не выдаётся: на странице по QR-коду сотрудник отображается как «пройден», обучение попадает в статистику.',
   no_protocol: 'Курс оформляется без протокола. Вносится только дата прохождения (и срок). Удостоверение не выдаётся: на странице по QR-коду сотрудник отображается как «пройден», обучение попадает в статистику.'
 };
-function onCourseKindChange() { onCourseExternalToggle(); }
+function onCourseKindChange() {
+  onCourseExternalToggle();
+  // Категория на главной по умолчанию выводится из вида курса, пока её не выбрали вручную
+  const mg = document.getElementById('cMainGroup');
+  if (mg && !mg.dataset.manual) mg.value = dashDefaultGroup(document.getElementById('cKind').value);
+}
 function onCourseExternalToggle() {
   const kind = document.getElementById('cKind').value;
   const on = kind !== 'internal';
@@ -4729,6 +4958,11 @@ async function openCourseModal(id) {
     document.getElementById('cMandatoryFor').value = course.mandatory_for || 'all';
     onCourseMandatoryToggle();
     document.getElementById('cKind').value = course.course_kind || (course.is_external ? 'external' : 'internal');
+    {
+      const mg = document.getElementById('cMainGroup');
+      mg.value = course.main_group || dashDefaultGroup(document.getElementById('cKind').value);
+      mg.dataset.manual = course.main_group ? '1' : '';
+    }
     setCourseCardColor(course.card_color || '');
     onCourseNoExpiryToggle();
     onCourseExternalToggle();
@@ -4759,6 +4993,11 @@ async function openCourseModal(id) {
     document.getElementById('cMandatoryFor').value = 'all';
     onCourseMandatoryToggle();
     document.getElementById('cKind').value = 'internal';
+    {
+      const mg = document.getElementById('cMainGroup');
+      mg.value = dashDefaultGroup('internal');
+      mg.dataset.manual = '';
+    }
     setCourseCardColor('');
     onCourseNoExpiryToggle();
     onCourseExternalToggle();
@@ -4807,6 +5046,7 @@ async function saveCourseForm(e) {
     mandatory_for: document.getElementById('cMandatoryFor').value || 'all',
     course_kind: document.getElementById('cKind').value,
     is_external: document.getElementById('cKind').value !== 'internal',
+    main_group: document.getElementById('cMainGroup').value,
     card_color: document.getElementById('cCardColor').value || undefined,
     video_url_ru: document.getElementById('cVideoRu').value.trim(),
     video_url_kz: document.getElementById('cVideoKz').value.trim()
@@ -5359,14 +5599,18 @@ function assignModalHtml() {
             <div id="asProtAutoNote" class="text-[11px] text-slate-500 -mt-1">Номер подставлен автоматически по счётчику из настроек — при необходимости его можно исправить вручную.</div>
             <div id="asActiveProtocolHint" class="text-[11px] text-emerald-700 font-semibold -mt-1"></div>
             <div id="asNextCertHint" class="text-[11px] text-blue-600 font-semibold -mt-1"></div>
+            <div id="asValidityNote" class="hidden text-[11px] text-blue-700 -mt-1"></div>
             <div class="border-t pt-3">
               <label id="asHistoricalToggleLabel" class="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
                 <input type="checkbox" id="asHistorical" onchange="onAsHistoricalToggle()">
                 Внести уже пройденное ранее обучение (старые данные, без сдачи теста в системе)
               </label>
               <div id="asHistoricalFields" class="hidden grid grid-cols-2 gap-3 mt-2">
-                <div><label class="text-xs font-semibold text-slate-600">Дата прохождения</label><input type="date" id="asTestDate" class="w-full border p-2 rounded text-sm"></div>
-                <div><label class="text-xs font-semibold text-slate-600">Дата след. прохождения</label><input type="date" id="asNextTestDate" class="w-full border p-2 rounded text-sm"></div>
+                <div><label class="text-xs font-semibold text-slate-600">Дата прохождения</label><input type="date" id="asTestDate" oninput="asUpdateNextDate()" class="w-full border p-2 rounded text-sm"></div>
+                <div id="asNextWrap">
+                  <div id="asNextFields"><label class="text-xs font-semibold text-slate-600">Дата след. прохождения</label><input type="date" id="asNextTestDate" oninput="onAsNextInput()" class="w-full border p-2 rounded text-sm"></div>
+                  <p id="asNextHint" class="text-[11px] text-slate-500 mt-1"></p>
+                </div>
                 <div><label id="asScoreLabel" class="text-xs font-semibold text-slate-600">Результат, % (по умолчанию 100)</label><input type="number" min="0" max="100" id="asScorePercent" class="w-full border p-2 rounded text-sm"></div>
                 <div id="asHistNote" class="text-[11px] text-slate-500 self-end pb-2">Номер сертификата будет присвоен автоматически. Если дату след. прохождения не указать, она рассчитается по сроку действия курса (у бессрочных курсов даты нет).</div>
               </div>
@@ -5468,6 +5712,7 @@ async function openAssignModal(presetUserId, presetUserIds, presetCourseId) {
   document.getElementById('asTestDate').value = '';
   document.getElementById('asTestDate').required = false;
   document.getElementById('asNextTestDate').value = '';
+  asNextManual = false;
   document.getElementById('asScorePercent').value = '';
 
   document.getElementById('asProtDate').value = toLocalDateStr(new Date());
@@ -5498,6 +5743,95 @@ async function openAssignModal(presetUserId, presetUserIds, presetCourseId) {
   applyAsExternalMode();
   renderAssignEmployeeList();
   document.getElementById('assignModal').classList.remove('hidden');
+}
+
+// ---------- Срок действия курса: автоподстановка «даты след. прохождения» ----------
+// Прибавляем месяцы КАЛЕНДАРНО и считаем «с конца месяца»: 31.01 + 1 мес = 28/29.02, а не 03.03.
+// Arithmetic ведём по числам (год, месяц, день), без Date.setMonth на «грязной» дате.
+function addMonthsISO(iso, months) {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const n = Number(months);
+  if (!m || !Number.isFinite(n)) return '';
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  if (y < 1990 || y > 2100 || mo < 1 || mo > 12 || d < 1 || d > 31) return '';
+  const total = y * 12 + (mo - 1) + Math.trunc(n);
+  const ny = Math.floor(total / 12), nm = total % 12;                 // nm: 0..11
+  const last = new Date(Date.UTC(ny, nm + 1, 0)).getUTCDate();         // последний день нужного месяца
+  const nd = Math.min(d, last);
+  return `${String(ny).padStart(4, '0')}-${String(nm + 1).padStart(2, '0')}-${String(nd).padStart(2, '0')}`;
+}
+// {noExpiry, months} — months = null, если срок у курса не задан
+function courseTermInfo(course) {
+  if (!course) return { noExpiry: false, months: null };
+  const v = Number(course.validity_months);
+  return { noExpiry: !!course.no_expiry, months: Number.isFinite(v) && v > 0 ? Math.trunc(v) : null };
+}
+function asNextDateFromTerm(testDate, course) {
+  const term = courseTermInfo(course);
+  return !term.noExpiry && term.months !== null && testDate ? addMonthsISO(testDate, term.months) : '';
+}
+function monthsWord(n) { return _L(`${n} мес.`, `${n} ай`); }
+
+let asNextManual = false;   // пользователь сам поправил «дату след. прохождения» — при смене даты прохождения не затираем
+
+function asCurrentCourse() {
+  const cid = document.getElementById('asCourseId').value;
+  return (asCourses || []).find(c => String(c.id) === String(cid)) || null;
+}
+function onAsNextInput() {
+  const el = document.getElementById('asNextTestDate');
+  // Очистили поле — снова считаем автоматически; ввели своё значение — больше не затираем
+  asNextManual = !!el.value;
+  asUpdateNextDate();
+}
+// Пересчёт поля «след. прохождения» и подсказок под ним. Вызывается при смене курса, даты прохождения и режима «пройденное ранее».
+function asUpdateNextDate() {
+  const $ = id => document.getElementById(id);
+  const course = asCurrentCourse();
+  const term = courseTermInfo(course);
+  const nextEl = $('asNextTestDate'), hint = $('asNextHint'), fields = $('asNextFields');
+  if (!nextEl || !hint || !fields) return;
+
+  if (term.noExpiry) {                       // бессрочный курс: следующего прохождения нет
+    fields.classList.add('hidden');
+    nextEl.value = '';
+    hint.textContent = _L('Бессрочно — даты следующего прохождения нет.', 'Мерзімсіз — келесі өту күні жоқ.');
+  } else {
+    fields.classList.remove('hidden');
+    if (term.months === null) {              // срок не задан — поле остаётся пустым и ручным
+      if (!asNextManual) nextEl.value = '';
+      hint.textContent = '';
+    } else {
+      const testDate = $('asTestDate').value;
+      const auto = testDate ? addMonthsISO(testDate, term.months) : '';
+      if (!asNextManual) nextEl.value = auto;
+      hint.textContent = asNextManual
+        ? _L(`Срок курса: ${term.months} мес. — дата изменена вручную`, `Курс мерзімі: ${term.months} ай — күн қолмен өзгертілді`)
+        : (auto
+          ? _L(`Срок курса: ${term.months} мес. — дата рассчитана автоматически`, `Курс мерзімі: ${term.months} ай — күн автоматты түрде есептелді`)
+          : _L(`Срок курса: ${term.months} мес. — дата рассчитается после ввода даты прохождения`, `Курс мерзімі: ${term.months} ай — өту күнін енгізгеннен кейін есептеледі`));
+    }
+  }
+
+  // Обычное назначение теста нашего курса (без «пройденного ранее»): поля дат не нужны, но показываем срок действия после сдачи
+  const note = $('asValidityNote');
+  if (note) {
+    const ext = !!(course && course.is_external);
+    const hist = $('asHistorical').checked;
+    const show = !!course && !ext && !hist && (term.noExpiry || term.months !== null);
+    note.classList.toggle('hidden', !show);
+    note.textContent = !show ? '' : term.noExpiry
+      ? _L('Результат будет действовать бессрочно.', 'Нәтиже мерзімсіз жарамды болады.')
+      : _L(`Будет действовать ${term.months} мес. с даты сдачи`, `Тапсырған күннен бастап ${term.months} ай жарамды болады`);
+  }
+}
+// Значение «след. прохождения» для отправки: из поля, а если поле пустое, но срок задан — расчётное (чтобы БД совпадала с формой)
+function asNextDateForSubmit(testDate) {
+  const term = courseTermInfo(asCurrentCourse());
+  if (term.noExpiry) return undefined;
+  const v = document.getElementById('asNextTestDate').value;
+  if (v) return v;
+  return term.months !== null && testDate ? (addMonthsISO(testDate, term.months) || undefined) : undefined;
 }
 
 // Внешний курс: вместо нашего протокола — номер протокола внешней организации и дата прохождения.
@@ -5543,6 +5877,9 @@ function applyAsExternalMode() {
   }
   onAsHistoricalToggle();
   asExtMode = ext;
+  // Смена курса (или открытие модалки) — автозначение считаем заново, ручная правка предыдущего курса не переносится
+  asNextManual = false;
+  asUpdateNextDate();
 }
 
 function renderAssignEmployeeList() {
@@ -5606,6 +5943,7 @@ function onAsHistoricalToggle() {
   const on = document.getElementById('asHistorical').checked;
   document.getElementById('asHistoricalFields').classList.toggle('hidden', !on);
   document.getElementById('asTestDate').required = on;
+  if (typeof asUpdateNextDate === 'function') asUpdateNextDate();
 }
 
 async function submitAssignForm(e) {
@@ -5628,7 +5966,8 @@ async function submitAssignForm(e) {
   if (historical) {
     data.historical = true;
     data.test_date = document.getElementById('asTestDate').value;
-    data.next_test_date = document.getElementById('asNextTestDate').value || undefined;
+    // Бессрочный курс — дату следующего прохождения не шлём; иначе — то, что видно в форме (или расчётное при пустом поле)
+    data.next_test_date = asNextDateForSubmit(data.test_date);
     data.score_percent = document.getElementById('asScorePercent').value || undefined;
   }
   const res = await api.createAssignmentsBulk(data);

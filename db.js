@@ -605,6 +605,17 @@ async function initDb() {
   await pool.query(`UPDATE courses SET course_kind = 'external' WHERE is_external = TRUE AND course_kind = 'internal';`);
   await pool.query(`UPDATE courses SET is_external = (course_kind <> 'internal') WHERE is_external <> (course_kind <> 'internal');`);
 
+  // КАТЕГОРИЯ НА ГЛАВНОЙ (main_group): 'biot' | 'internal' | 'external' — в какой из трёх категорий
+  // курс показывается в «Статистике по курсам» на главной странице. Для существующих курсов
+  // выводится из вида курса: internal → biot, no_protocol → internal, external → external.
+  // Разовое заполнение трогает только курсы, где main_group ещё пуст, поэтому повторные запуски безопасны.
+  await pool.query(`ALTER TABLE courses ADD COLUMN IF NOT EXISTS main_group TEXT;`);
+  await pool.query(`UPDATE courses SET main_group = CASE course_kind
+      WHEN 'internal' THEN 'biot'
+      WHEN 'external' THEN 'external'
+      ELSE 'internal' END
+    WHERE main_group IS NULL;`);
+
   // Разовая раздача цветов существующим курсам — по порядку создания, разные, пока хватает палитры.
   try {
     const noColor = await pool.query('SELECT id FROM courses WHERE card_color IS NULL ORDER BY id');
