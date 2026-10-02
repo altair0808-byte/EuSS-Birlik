@@ -16,6 +16,7 @@ const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 const { COMMITTEE_ROLES } = require('../lib/committeeRoles');
 const { logAction, fullName } = require('../lib/audit');
 const driveSync = require('../driveSync');
+const { buildRotationCalendarPdf } = require('../rotationCalendarPdf');
 
 // Защита от дублей: ищет среди ВСЕХ сотрудников (в т.ч. уволенных и в отпуске) того, кто уже
 // есть в системе под другим написанием: порядок Ф/И, регистр, русский/английский/казахский,
@@ -845,6 +846,72 @@ router.patch('/:id/rotation', authRequired, requireRole('admin', 'assistant', 's
   } catch (e) {
     console.error('Error saving rotation:', e);
     res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
+// Календарь вахты сотрудника на год (PDF: логотип компании, ФИ, 12 месяцев, таблица смен).
+// Расписание = повтор цикла «вахта (заезд … отъезд) → дома N дней». Берётся сохранённая вахта сотрудника;
+// из окна «Вахта» можно передать ещё не сохранённые arrival / days / departure.
+// Параметры: rest — дней дома между вахтами (по умолчанию = срок вахты), start — месяц начала (ГГГГ-ММ[-ДД],
+// по умолчанию текущий), lang — ru | kz.
+router.get('/:id/rotation-calendar.pdf', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad_id', message: 'Некорректный сотрудник' });
+  try {
+    const target = (await query(
+      `SELECT id, role, last_name, first_name, object, department,
+              to_char(rotation_arrival, 'YYYY-MM-DD') AS rotation_arrival, rotation_days,
+              to_char(rotation_departure, 'YYYY-MM-DD') AS rotation_departure
+       FROM users WHERE id = $1`, [id])).rows[0];
+    if (!target || target.role !== 'employee') return res.status(404).json({ error: 'not_found', message: 'Сотрудник не найден' });
+    if (!isInAssistantScope(req.user, target)) return res.status(403).json({ error: 'forbidden', message: 'Сотрудник вне вашей зоны доступа' });
+
+    let rot;
+    try {
+      const q = req.query;
+      if (q.arrival) {
+        rot = computeRotation(parseRotationDate(q.arrival), q.days, parseRotationDate(q.departure));
+      } else {
+        rot = computeRotation(target.rotation_arrival, target.rotation_days, target.rotation_departure);
+      }
+    } catch (e) {
+      return res.status(400).json({ error: e.message, message: rotationErrorMessage(e.message) });
+    }
+    if (!rot.arrival) {
+      return res.status(400).json({ error: 'rotation_not_set', message: 'У сотрудника не указана вахта — сначала внесите дату заезда и срок' });
+    }
+
+    let restDays = rot.days;
+    if (req.query.rest !== undefined && String(req.query.rest).trim() !== '') {
+      restDays = Number(String(req.query.rest).trim());
+      if (!Number.isInteger(restDays) || restDays < 1 || restDays > 365) {
+        return res.status(400).json({ error: 'invalid_rest_days', message: 'Дней дома между вахтами — целое число от 1 до 365' });
+      }
+    }
+
+    const todayIso = (await query(`SELECT to_char(${ROT_TODAY_SQL}, 'YYYY-MM-DD') AS d`)).rows[0].d;
+    let startIso = todayIso.slice(0, 7) + '-01';
+    if (req.query.start) {
+      const m = String(req.query.start).match(/^(\d{4})-(\d{2})/);
+      if (!m || +m[2] < 1 || +m[2] > 12 || +m[1] < 2000 || +m[1] > 2100) {
+        return res.status(400).json({ error: 'invalid_start', message: 'Некорректный месяц начала периода' });
+      }
+      startIso = `${m[1]}-${m[2]}-01`;
+    }
+
+    const settings = (await query('SELECT company_name, logo_path, logo_data FROM settings WHERE id = 1')).rows[0] || {};
+    const pdf = await buildRotationCalendarPdf(
+      { last_name: target.last_name, first_name: target.first_name },
+      rot, settings,
+      { restDays, startIso, todayIso, lang: req.query.lang === 'kz' ? 'kz' : 'ru' }
+    );
+    const safe = `${target.last_name}_${target.first_name}`.replace(/[^\p{L}\p{N}_-]+/gu, '_');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="rotation_calendar.pdf"; filename*=UTF-8''${encodeURIComponent('Вахта_' + safe + '.pdf')}`);
+    res.send(pdf);
+  } catch (e) {
+    console.error('Error building rotation calendar:', e);
+    res.status(500).json({ error: 'calendar_failed', message: 'Не удалось сформировать календарь: ' + e.message, details: e.message });
   }
 });
 
