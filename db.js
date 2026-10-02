@@ -153,6 +153,12 @@ async function initDb() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS rotation_days INTEGER;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS rotation_departure DATE;
 
+    -- Овертайм на вахте: сотрудника оставили на несколько дней сверх вахты.
+    -- overtime_from / overtime_to — период «с … по» (включительно), без часов.
+    -- Пока сегодняшняя дата внутри периода, сотрудник считается «на вахте» (см. routes/users.js: ROT_ON_SQL).
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS overtime_from DATE;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS overtime_to DATE;
+
     -- Защита от дублей сотрудников (п.9 запроса): "УТЯШЕВ АЛТАИР" / "утяшев алтаир" /
     -- "Утяшев Алтаир" должны считаться одной записью, а поиск должен работать и по
     -- русскому написанию, и по английской транслитерации (Altair/Utyashev).
