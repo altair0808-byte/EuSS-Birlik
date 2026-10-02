@@ -6,6 +6,7 @@
 <title>ТБ / БиОТ — Обучение и тестирование</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
 <style>
   body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -45,6 +46,15 @@
     #tabContent .p-6 { padding: 1rem; }
     .fixed .max-h-\[90vh\] { max-height: 92vh; }
   }
+  /* ===== Просмотр материалов: полный экран ===== */
+  #mediaViewerBox.mv-pseudo-full { position: fixed !important; inset: 0 !important; width: 100vw !important; height: 100vh !important; height: 100dvh !important; max-width: none !important; max-height: none !important; border-radius: 0 !important; z-index: 110; }
+  #mediaViewerBox:fullscreen { border-radius: 0 !important; }
+  #mediaViewerBox:-webkit-full-screen { border-radius: 0 !important; }
+  #mvStage { display: flex; }
+  #mvCanvas { margin: auto; flex: 0 0 auto; }
+  .mv-btn { min-width: 36px; height: 34px; padding: 0 10px; border-radius: 8px; background: rgba(255,255,255,.12); color: #fff; font-size: 15px; font-weight: 600; line-height: 1; }
+  .mv-btn:hover { background: rgba(255,255,255,.22); }
+  .mv-btn:disabled { opacity: .35; cursor: default; }
   .test-scroll {
     min-height: 0;
     overflow-y: auto;
@@ -59,10 +69,11 @@
 
 <!-- Универсальное модальное окно для просмотра материалов курса (PDF/PPT) и видео прямо на сайте -->
 <div id="mediaViewerModal" class="fixed inset-0 bg-slate-900/70 hidden items-center justify-center p-2 sm:p-6 z-[100]" onclick="if(event.target===this) closeMediaViewer()">
-  <div class="bg-white rounded-xl shadow-2xl w-full max-w-5xl h-full sm:h-[85vh] flex flex-col overflow-hidden">
-    <div class="flex justify-between items-center px-4 py-3 border-b border-slate-200 shrink-0">
+  <div id="mediaViewerBox" class="bg-white rounded-xl shadow-2xl w-full max-w-5xl h-full sm:h-[85vh] flex flex-col overflow-hidden">
+    <div class="flex justify-between items-center px-4 py-2 border-b border-slate-200 shrink-0">
       <h3 id="mediaViewerTitle" class="text-sm font-bold text-slate-900 truncate pr-4"></h3>
       <div class="flex items-center gap-4 shrink-0">
+        <button type="button" id="mediaViewerFsBtn" onclick="toggleMediaFullscreen()" class="text-xs font-semibold text-blue-600 hover:underline whitespace-nowrap">⛶ На весь экран</button>
         <a id="mediaViewerDownload" href="#" target="_blank" rel="noopener" class="text-xs font-semibold text-blue-600 hover:underline">Скачать</a>
         <button type="button" onclick="closeMediaViewer()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none">&times;</button>
       </div>
@@ -670,6 +681,227 @@ function toYouTubeEmbedUrl(url) {
   } catch (e) { return null; }
 }
 
+// ---- Быстрый постраничный просмотр PDF (pdf.js) ----
+// Почему быстрее, чем <iframe> с PDF: файл читается кусками (HTTP Range) и ПЕРВАЯ страница
+// показывается, не дожидаясь загрузки всего файла; рисуется только текущая страница, следующая
+// готовится заранее. Если pdf.js не загрузился (нет доступа к cdnjs) или файл не открылся —
+// автоматически включается прежний вариант (встроенный просмотр браузера).
+const PDFJS_VER = '3.11.174';
+let _pdfjsPromise = null;
+function loadPdfJs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (_pdfjsPromise) return _pdfjsPromise;
+  _pdfjsPromise = new Promise((resolve, reject) => {
+    const sc = document.createElement('script');
+    sc.src = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VER}/pdf.min.js`;
+    sc.onload = () => {
+      try {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VER}/pdf.worker.min.js`;
+        resolve(window.pdfjsLib);
+      } catch (e) { _pdfjsPromise = null; reject(e); }
+    };
+    sc.onerror = () => { _pdfjsPromise = null; reject(new Error('pdfjs_load_failed')); };
+    document.head.appendChild(sc);
+  });
+  return _pdfjsPromise;
+}
+
+const MV = { doc: null, page: 1, total: 0, zoom: 1, token: 0, loadId: 0, ro: null, cache: new Map(), pages: new Map(), touchX: null, touchY: null, raf: 0 };
+
+function mvFullActive() {
+  const box = document.getElementById('mediaViewerBox');
+  return !!(document.fullscreenElement || document.webkitFullscreenElement || (box && box.classList.contains('mv-pseudo-full')));
+}
+
+function toggleMediaFullscreen() {
+  const box = document.getElementById('mediaViewerBox');
+  if (!box) return;
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    return;
+  }
+  if (box.classList.contains('mv-pseudo-full')) { box.classList.remove('mv-pseudo-full'); mvUpdateFsLabel(); return; }
+  const req = box.requestFullscreen || box.webkitRequestFullscreen;
+  const fallback = () => { box.classList.add('mv-pseudo-full'); mvUpdateFsLabel(); };
+  if (req) {
+    try { const r = req.call(box); if (r && r.catch) r.catch(fallback); } catch (e) { fallback(); }
+  } else {
+    fallback(); // например iPhone: у Safari нет полноэкранного режима для обычных элементов — растягиваем окно на весь экран
+  }
+}
+
+function mvUpdateFsLabel() {
+  const txt = mvFullActive() ? _L('✕ Выйти из полного экрана', '✕ Толық экраннан шығу') : _L('⛶ На весь экран', '⛶ Толық экран');
+  const b = document.getElementById('mediaViewerFsBtn');
+  if (b) b.textContent = txt;
+  const b2 = document.getElementById('mvFs');
+  if (b2) b2.textContent = mvFullActive() ? '✕' : '⛶';
+}
+document.addEventListener('fullscreenchange', mvUpdateFsLabel);
+document.addEventListener('webkitfullscreenchange', mvUpdateFsLabel);
+
+async function mvGetPage(n) {
+  if (!MV.doc) return null;
+  if (MV.pages.has(n)) return MV.pages.get(n);
+  const pr = MV.doc.getPage(n);
+  MV.pages.set(n, pr);
+  if (MV.pages.size > 6) MV.pages.delete(MV.pages.keys().next().value);
+  return pr;
+}
+
+// Размер страницы под доступную область (как слайд «по размеру экрана») × масштаб пользователя
+function mvLayout(page) {
+  const stage = document.getElementById('mvStage');
+  const vp1 = page.getViewport({ scale: 1 });
+  const W = Math.max(120, stage.clientWidth - 12), H = Math.max(120, stage.clientHeight - 12);
+  const fit = Math.min(W / vp1.width, H / vp1.height);
+  const cssW = Math.floor(vp1.width * fit * MV.zoom), cssH = Math.floor(vp1.height * fit * MV.zoom);
+  let dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const maxPx = 12e6; // не раздуваем память на телефонах
+  while (cssW * dpr * cssH * dpr > maxPx && dpr > 1) dpr -= 0.25;
+  return { cssW, cssH, dpr, scale: fit * MV.zoom * dpr };
+}
+
+async function mvRenderToCanvas(n) {
+  const page = await mvGetPage(n);
+  if (!page) return null;
+  const L = mvLayout(page);
+  const key = `${n}|${L.cssW}x${L.cssH}|${L.dpr}`;
+  if (MV.cache.has(key)) return { canvas: MV.cache.get(key), L };
+  const off = document.createElement('canvas');
+  off.width = Math.max(1, Math.floor(L.cssW * L.dpr));
+  off.height = Math.max(1, Math.floor(L.cssH * L.dpr));
+  const vp = page.getViewport({ scale: L.scale });
+  await page.render({ canvasContext: off.getContext('2d'), viewport: vp }).promise;
+  MV.cache.set(key, off);
+  if (MV.cache.size > 4) MV.cache.delete(MV.cache.keys().next().value);
+  return { canvas: off, L };
+}
+
+async function mvShow() {
+  if (!MV.doc) return;
+  const my = ++MV.token;
+  const n = MV.page;
+  try {
+    const r = await mvRenderToCanvas(n);
+    if (!r || my !== MV.token) return;
+    const cv = document.getElementById('mvCanvas');
+    if (!cv) return;
+    cv.width = r.canvas.width; cv.height = r.canvas.height;
+    cv.style.width = r.L.cssW + 'px'; cv.style.height = r.L.cssH + 'px';
+    cv.getContext('2d').drawImage(r.canvas, 0, 0);
+    const ld = document.getElementById('mvLoading'); if (ld) ld.remove();
+    // заранее готовим следующую страницу — переключение мгновенное
+    if (n < MV.total) { setTimeout(() => { if (my === MV.token) mvRenderToCanvas(n + 1).catch(() => {}); }, 60); }
+  } catch (e) {
+    if (my === MV.token) console.error('PDF render error:', e);
+  }
+}
+
+function mvUpdateNav() {
+  const info = document.getElementById('mvPageInfo');
+  if (info) info.textContent = `${MV.page} / ${MV.total}`;
+  const pv = document.getElementById('mvPrev'), nx = document.getElementById('mvNext');
+  if (pv) pv.disabled = MV.page <= 1;
+  if (nx) nx.disabled = MV.page >= MV.total;
+}
+
+function mvGo(n) {
+  if (!MV.doc) return;
+  n = Math.max(1, Math.min(MV.total, n));
+  if (n === MV.page) return;
+  MV.page = n;
+  mvUpdateNav();
+  const st = document.getElementById('mvStage'); if (st) { st.scrollTop = 0; st.scrollLeft = 0; }
+  mvShow();
+}
+
+function mvSetZoom(z) {
+  MV.zoom = Math.max(1, Math.min(4, z));
+  mvShow();
+}
+
+function mvOnKey(e) {
+  if (!MV.doc) return false;
+  const k = e.key;
+  if (k === 'ArrowRight' || k === 'PageDown' || k === ' ' ) { mvGo(MV.page + 1); return true; }
+  if (k === 'ArrowLeft' || k === 'PageUp') { mvGo(MV.page - 1); return true; }
+  if (k === 'ArrowDown' && MV.zoom === 1) { mvGo(MV.page + 1); return true; }
+  if (k === 'ArrowUp' && MV.zoom === 1) { mvGo(MV.page - 1); return true; }
+  if (k === 'Home') { mvGo(1); return true; }
+  if (k === 'End') { mvGo(MV.total); return true; }
+  if (k === 'f' || k === 'F') { toggleMediaFullscreen(); return true; }
+  return false;
+}
+
+function mvResetState() {
+  MV.token++; MV.loadId++;
+  if (MV.ro) { try { MV.ro.disconnect(); } catch (e) {} MV.ro = null; }
+  if (MV.doc) { try { MV.doc.destroy(); } catch (e) {} }
+  MV.doc = null; MV.page = 1; MV.total = 0; MV.zoom = 1;
+  MV.cache.clear(); MV.pages.clear();
+}
+
+function mvIframeFallback(body, absUrl) {
+  mvResetState();
+  body.innerHTML = `<iframe src="${esc(absUrl)}" class="w-full h-full border-0"></iframe>`;
+}
+
+async function openPdfInViewer(absUrl, body) {
+  mvResetState();
+  const loadId = MV.loadId;
+  body.innerHTML = `
+    <div class="flex flex-col w-full h-full bg-slate-800 select-none">
+      <div id="mvStage" class="flex-1 min-h-0 overflow-auto relative" style="touch-action:pan-x pan-y pinch-zoom">
+        <canvas id="mvCanvas" class="bg-white shadow-lg"></canvas>
+        <div id="mvLoading" class="absolute inset-0 flex items-center justify-center text-slate-200 text-sm pointer-events-none">${_L('Загрузка…', 'Жүктелуде…')}</div>
+      </div>
+      <div class="flex items-center justify-center gap-2 px-3 py-2 bg-slate-900 shrink-0 flex-wrap">
+        <button type="button" id="mvPrev" class="mv-btn" onclick="mvGo(MV.page-1)" title="←">‹</button>
+        <span id="mvPageInfo" class="text-slate-100 text-sm font-semibold min-w-[64px] text-center">–</span>
+        <button type="button" id="mvNext" class="mv-btn" onclick="mvGo(MV.page+1)" title="→">›</button>
+        <span class="w-px h-5 bg-slate-600 mx-1"></span>
+        <button type="button" class="mv-btn" onclick="mvSetZoom(MV.zoom-0.25)" title="−">−</button>
+        <button type="button" class="mv-btn" onclick="mvSetZoom(MV.zoom+0.25)" title="+">+</button>
+        <button type="button" id="mvFs" class="mv-btn" onclick="toggleMediaFullscreen()" title="${_L('На весь экран', 'Толық экран')}">⛶</button>
+      </div>
+    </div>`;
+  const stage = document.getElementById('mvStage');
+  // свайп пальцем влево/вправо — листание (когда страница не увеличена)
+  stage.addEventListener('touchstart', (e) => { if (e.touches.length === 1) { MV.touchX = e.touches[0].clientX; MV.touchY = e.touches[0].clientY; } else { MV.touchX = null; } }, { passive: true });
+  stage.addEventListener('touchend', (e) => {
+    if (MV.touchX === null || MV.zoom > 1) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - MV.touchX, dy = t.clientY - MV.touchY;
+    MV.touchX = null;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) mvGo(MV.page + (dx < 0 ? 1 : -1));
+  }, { passive: true });
+  // при изменении размера окна / входе в полный экран — перерисовать под новый размер
+  if (typeof ResizeObserver !== 'undefined') {
+    MV.ro = new ResizeObserver(() => {
+      if (!MV.doc) return;
+      cancelAnimationFrame(MV.raf);
+      MV.raf = requestAnimationFrame(() => mvShow());
+    });
+    MV.ro.observe(stage);
+  }
+  mvUpdateFsLabel();
+
+  try {
+    const pdfjs = await loadPdfJs();
+    if (loadId !== MV.loadId) return; // окно уже закрыли/открыли другое
+    const task = pdfjs.getDocument({ url: absUrl, rangeChunkSize: 131072, disableAutoFetch: true });
+    const doc = await task.promise;
+    if (loadId !== MV.loadId) { try { doc.destroy(); } catch (e) {} return; }
+    MV.doc = doc; MV.total = doc.numPages; MV.page = 1;
+    mvUpdateNav();
+    mvShow();
+  } catch (e) {
+    console.warn('pdf.js недоступен, открываю встроенным просмотром:', e && e.message);
+    if (loadId === MV.loadId) mvIframeFallback(body, absUrl);
+  }
+}
+
 // Открывает материал/видео (файл на сервере или внешняя ссылка, напр. YouTube) во встроенном
 // модальном окне поверх сайта, вместо перехода в новую вкладку.
 function openMediaViewer(url, title) {
@@ -681,43 +913,61 @@ function openMediaViewer(url, title) {
   let absUrl;
   try { absUrl = new URL(url, window.location.origin).href; } catch (e) { absUrl = url; }
 
+  mvResetState();
   titleEl.textContent = title || '';
   dl.href = absUrl;
+  dl.textContent = _L('Скачать', 'Жүктеп алу');
   body.innerHTML = '';
+  mvUpdateFsLabel();
+
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
 
   if (isPdfFileUrl(url)) {
-    body.innerHTML = `<iframe src="${esc(absUrl)}" class="w-full h-full border-0"></iframe>`;
+    openPdfInViewer(absUrl, body);
   } else if (isVideoFileUrl(url)) {
-    body.innerHTML = `<video src="${esc(absUrl)}" controls autoplay class="w-full h-full bg-black"></video>`;
+    body.innerHTML = `<video src="${esc(absUrl)}" controls autoplay playsinline class="w-full h-full bg-black"></video>`;
   } else if (isOfficeDocUrl(url)) {
     const officeUrl = 'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(absUrl);
     body.innerHTML = `
-      <iframe src="${esc(officeUrl)}" class="w-full h-full border-0"></iframe>
-      <p class="text-[11px] text-slate-500 px-3 py-2 border-t border-slate-200">Если предпросмотр не отображается (например, сайт недоступен из интернета), воспользуйтесь ссылкой «Скачать» выше.</p>
+      <iframe src="${esc(officeUrl)}" class="w-full h-[calc(100%-2.25rem)] border-0" allowfullscreen></iframe>
+      <p class="text-[11px] text-slate-500 px-3 py-2 border-t border-slate-200">Если предпросмотр не отображается (например, сайт недоступен из интернета), воспользуйтесь ссылкой «Скачать» выше. Для быстрой работы загружайте презентации в формате PDF.</p>
     `;
   } else {
     const yt = toYouTubeEmbedUrl(url);
     if (yt) {
-      body.innerHTML = `<iframe src="${esc(yt)}" class="w-full h-full border-0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
+      body.innerHTML = `<iframe src="${esc(yt)}" class="w-full h-full border-0" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>`;
     } else {
       body.innerHTML = `<iframe src="${esc(absUrl)}" class="w-full h-full border-0"></iframe>`;
     }
   }
-
-  modal.classList.remove('hidden');
-  modal.classList.add('flex');
 }
 
 function closeMediaViewer() {
   const modal = document.getElementById('mediaViewerModal');
   const body = document.getElementById('mediaViewerBody');
+  const box = document.getElementById('mediaViewerBox');
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    try { (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {}
+  }
+  if (box) box.classList.remove('mv-pseudo-full');
+  mvResetState();
   modal.classList.add('hidden');
   modal.classList.remove('flex');
   body.innerHTML = ''; // останавливает воспроизведение видео/iframe при закрытии
 }
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeMediaViewer();
+  const modal = document.getElementById('mediaViewerModal');
+  const open = modal && !modal.classList.contains('hidden');
+  if (!open) return;
+  if (e.key === 'Escape') {
+    const box = document.getElementById('mediaViewerBox');
+    if (box && box.classList.contains('mv-pseudo-full')) { box.classList.remove('mv-pseudo-full'); mvUpdateFsLabel(); return; }
+    closeMediaViewer();
+    return;
+  }
+  if (mvOnKey(e)) e.preventDefault();
 });
 
 function logout() {

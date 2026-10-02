@@ -145,26 +145,19 @@ const STATUS_LABEL = {
 //          department, object, title_ru, title_kz, protocol_number), см. certificateService.js
 // settings — строка из settings (логотип/печать/подписи/название компании)
 // verifyUrl — полный публичный адрес страницы проверки (/verify/:uid) для QR-кода
-// committeeSignatures — ЭТАП 2: [{ role, label, signed, name, position, signature_data }, ...]
-//          (3 роли комиссии), полученные ЖИВЬЁМ из протокола (certificateService.js:
-//          getCommitteeSignaturesForProtocol). Удостоверение отдельно не подписывается —
-//          источник подписей всегда протокол. Если у удостоверения нет связанного
-//          протокола (например, историческая запись без протокола), committeeSignatures
-//          будет null — тогда рисуется прежний однопредседательский блок из settings
-//          (обратная совместимость).
+// committeeSignatures — больше не используется (параметр оставлен для совместимости вызовов):
+//          подпись берётся из «Настроек», подписи протокола на сертификат не попадают.
 async function buildCertificatePdfBuffer(cert, settings, verifyUrl, committeeSignatures) {
   const s = settings || {};
 
-  const useCommittee = Array.isArray(committeeSignatures);
-  const committeeSigBufs = useCommittee
-    ? await Promise.all(committeeSignatures.map((m) => resolveCleanImage(m.signature_data)))
-    : [];
-
+  // На сертификате ОДНА подпись — председателя из «Настроек» (активный председатель 1 или 2).
+  // Подписи комиссии из протокола сюда не попадают: в протоколе остаются три подписи
+  // (председатель / инженер по БиОТ / член комиссии), а сертификат от них не зависит.
   const [logoBuf, stampBuf, sig1Buf, sig2Buf, qrBuf] = await Promise.all([
     resolveImageBuffer(s.logo_data || s.logo_path),
     resolveCleanImage(s.stamp_data || s.stamp_path),
-    useCommittee ? null : resolveCleanImage(s.chairman1_signature),
-    useCommittee ? null : resolveCleanImage(s.chairman2_signature),
+    resolveCleanImage(s.chairman1_signature),
+    resolveCleanImage(s.chairman2_signature),
     QRCode.toBuffer(verifyUrl, { type: 'png', margin: 1, width: 220, color: { dark: '#0f3b6c', light: '#ffffff' } })
       .catch((e) => { console.error('QR generation error:', e); return null; })
   ]);
@@ -248,68 +241,14 @@ async function buildCertificatePdfBuffer(cert, settings, verifyUrl, committeeSig
   const protStr = cert.protocol_number ? `Протокол № ${cert.protocol_number}` : '';
   doc.text(`Дата выдачи: ${fmtDate(cert.issue_date)}     Действителен до: ${validUntilStr}     ${protStr}`, 0, 318, { align: 'center' });
 
-  // ===================== Блок подписи =====================
-  if (useCommittee) {
-    // ЭТАП 2: три колонки — председатель комиссии / инженер по БиОТ / член комиссии —
-    // те же роли и та же живая подпись, что и в протоколе (protocolPdf.js), т.к.
-    // источник истины один и тот же: protocol_signatures. Отдельной системы подписания
-    // удостоверений нет.
-    const roleY = 366;
-    const sigBoxTop = 388;
-    const lineY = sigBoxTop + SIG_MAX_H * 0.55 + 4;
-    const nameY = lineY + 6;
-    const posY = nameY + 12;
-    const colW = Math.min(190, PAGE_W / 3 - 20);
-    const gapCol = (PAGE_W - 100 - colW * 3) / 2;
-    const startX = 50;
-
-    committeeSignatures.forEach((m, i) => {
-      const colX = startX + i * (colW + gapCol);
-      const centerX = colX + colW / 2;
-
-      fBold(8.5);
-      doc.fillColor('#000000');
-      doc.text(m.label, colX, roleY, { width: colW, align: 'center', height: 22, ellipsis: true });
-
-      const buf = committeeSigBufs[i];
-      if (buf) {
-        try {
-          doc.image(buf, centerX - Math.min(SIG_MAX_W, colW) / 2, sigBoxTop, {
-            fit: [Math.min(SIG_MAX_W, colW), SIG_MAX_H * 0.6], align: 'center', valign: 'bottom'
-          });
-        } catch (e) { console.error('Ошибка вставки подписи комиссии:', e); }
-      }
-
-      doc.moveTo(colX + 10, lineY).lineTo(colX + colW - 10, lineY).strokeColor('#888888').lineWidth(0.7).stroke();
-
-      fRegular(8.5);
-      doc.fillColor('#000000');
-      doc.text(m.name || '—', colX, nameY, { width: colW, align: 'center', ellipsis: true });
-      if (m.position) {
-        fRegular(7);
-        doc.fillColor('#666666');
-        doc.text(m.position, colX, posY, { width: colW, align: 'center', ellipsis: true });
-      }
-
-      // Печать организации ставится только на подпись председателя — стандартная
-      // практика заверения (как и в прежней однопредседательской схеме).
-      if (i === 0 && stampBuf) {
-        try {
-          const r = STAMP_D * 0.55 / 2;
-          doc.save();
-          doc.opacity(0.9);
-          doc.image(stampBuf, colX + colW - r * 1.1, sigBoxTop - r * 0.3, { fit: [r * 2, r * 2], align: 'center', valign: 'center' });
-          doc.restore();
-        } catch (e) { console.error('Ошибка вставки печати:', e); }
-      }
-    });
-  } else {
-    // Обратная совместимость: удостоверение без связанного протокола (историческая
-    // запись) — старая однопредседательская схема из настроек.
+  // ===================== Блок подписи (одна подпись + печать) =====================
+  // Размеры подобраны под реальную печать на А4: печать Ø42 мм, подпись до 55×22 мм,
+  // печать слегка заходит на подпись — как на бумажном документе.
+  {
     const isChair2Active = parseInt(s.active_chairman, 10) === 2;
     const activeChair = isChair2Active
-      ? { role: s.chairman2_position || 'Председатель комиссии', name: s.chairman2_name || '—', sig: sig2Buf }
-      : { role: s.chairman1_position || 'Председатель комиссии', name: s.chairman1_name || s.chairman_name || '—', sig: sig1Buf };
+      ? { role: s.chairman2_position || 'Председатель комиссии', name: s.chairman2_name || '—', position: '', sig: sig2Buf }
+      : { role: s.chairman1_position || 'Председатель комиссии', name: s.chairman1_name || s.chairman_name || '—', position: '', sig: sig1Buf };
 
     const colW = 320;
     const colX = (PAGE_W - colW) / 2;
@@ -341,6 +280,11 @@ async function buildCertificatePdfBuffer(cert, settings, verifyUrl, committeeSig
     doc.fillColor('#000000');
     const nameHalfW = Math.min(doc.widthOfString(m.name) / 2, colW / 2);
     doc.text(m.name, colX, nameY, { width: colW, align: 'center', lineBreak: false });
+    if (m.position) {
+      fRegular(7.5);
+      doc.fillColor('#666666');
+      doc.text(m.position, colX, nameY + 13, { width: colW, align: 'center', lineBreak: false, ellipsis: true });
+    }
 
     if (stampBuf) {
       try {
