@@ -2990,7 +2990,8 @@ async function clearSavedSignature() {
 // клик по карточке открывает курсы ТОЛЬКО этой категории, дальше — панель выбранного курса.
 let dashCourseStats = [];
 let dashSelectedCourseId = null;
-let dashMainGroup = null;   // null — экран «3 категории»; иначе 'biot' | 'internal' | 'external'
+let dashMainGroup = 'biot';   // активный дашборд: 'biot' | 'internal' | 'external' (у каждого своя система записи)
+let dashExpAll = true;        // список «Просрочено и скоро истекает» снизу: true — по всем категориям, false — по выбранному дашборду/курсу
 let dashAssignData = null;
 let dashPlanned = [];  // запланированные группы обучения (для строки «Записаны в группу» на панели курса)  // активные назначения (с учётом фильтра объект/отдел): уникальные подсчёты и «записать всех»
 
@@ -3085,8 +3086,8 @@ async function loadDashboardCourseStats() {
       document.getElementById('dashMandatoryMissing').textContent = missing;
     }
 
-    if (dashMainGroup && !DASH_GROUPS.some(g => g.key === dashMainGroup)) dashMainGroup = null;
-    if (dashMainGroup) ensureDashSelectedCourse();
+    if (!DASH_GROUPS.some(g => g.key === dashMainGroup)) dashMainGroup = 'biot';
+    ensureDashSelectedCourse();
     renderDashCourseTabs();
     renderDashCoursePanel();
     expScopeChanged();
@@ -3100,77 +3101,160 @@ function ensureDashSelectedCourse() {
   if (dashSelectedCourseId && !list.some(c => String(c.id) === String(dashSelectedCourseId))) dashSelectedCourseId = null;
 }
 
-// key = null → вернуться ко всем категориям
+// Переключение дашборда: БиОТ / Внутренние / Внешние
 function selectDashGroup(key) {
-  dashMainGroup = key || null;
+  if (key && DASH_GROUPS.some(g => g.key === key)) dashMainGroup = key;
   dashSelectedCourseId = null;
+  dashExpAll = false;
   renderDashCourseTabs();
   renderDashCoursePanel();
   expScopeChanged();
 }
 
 function selectDashCourse(id) {
-  dashSelectedCourseId = String(dashSelectedCourseId) === String(id) ? null : id;   // повторный клик — снова вся категория
+  dashSelectedCourseId = String(dashSelectedCourseId) === String(id) ? null : id;   // повторный клик — снова весь дашборд
+  dashExpAll = false;
   renderDashCourseTabs();
   renderDashCoursePanel();
   expScopeChanged();
 }
 
+// У каждого вида курсов своя система записи
+//  biot     — наш курс с тестом: назначается тест → сдал → протокол;
+//  internal — внутренний курс: группа обучения (заявка) → отметка присутствия → закрытие группы;
+//  external — внешний курс: вносится прохождение с номером протокола внешней организации (или заранее группа).
+function dashGroupMode(key) { return key === 'biot' ? 'test' : key === 'internal' ? 'session' : 'external'; }
+function dashGroupHow(key) {
+  return key === 'biot' ? _L('Запись: назначение теста → протокол', 'Жазылу: тест тағайындау → хаттама')
+    : key === 'internal' ? _L('Запись: группа обучения → отметка присутствия', 'Жазылу: оқыту тобы → қатысуды белгілеу')
+    : _L('Запись: внесение прохождения (протокол внешней организации)', 'Жазылу: өтуді енгізу (сыртқы ұйым хаттамасы)');
+}
+// Действующее обучение, которое истекает в ближайшие N дней (по последней записи «сдал» пары сотрудник+курс)
+function dashSoonCount(courseIds, days) {
+  const now = new Date(), limit = new Date(now.getTime() + days * 86400000);
+  const latest = new Map();
+  (dashAssignData || []).forEach(x => {
+    if (x.status !== 'passed' || !courseIds.has(String(x.course_id))) return;
+    const k = `${x.user_id}:${x.course_id}`, cur = latest.get(k);
+    const tx = String(x.test_date || ''), tc = cur ? String(cur.test_date || '') : '';
+    if (!cur || tx > tc || (tx === tc && Number(x.id) > Number(cur.id))) latest.set(k, x);
+  });
+  const people = new Set();
+  latest.forEach(x => { if (x.next_test_date) { const d = new Date(x.next_test_date); if (d >= now && d <= limit) people.add(x.user_id); } });
+  return people.size;
+}
+// Показатели дашборда — свои для каждого вида
+function dashGroupKpis(key) {
+  const st = dashGroupStats(key);
+  const ids = new Set(st.courses.map(c => String(c.id)));
+  const rows = (dashAssignData || []).filter(x => ids.has(String(x.course_id)));
+  const uniq = pred => new Set(rows.filter(pred).map(x => x.user_id)).size;
+  const k = [
+    { label: _L('Курсов', 'Курс'), value: st.courses.length, cls: 'text-slate-900' },
+    { label: _L('Обучение действует', 'Оқу жарамды'), value: st.valid, cls: 'text-emerald-600' },
+    { label: _L('Просрочено', 'Мерзімі өткен'), value: st.overdue, cls: st.overdue > 0 ? 'text-red-600' : 'text-slate-400', click: st.overdue > 0 ? `dashShowOverdue('group','${key}')` : '' }
+  ];
+  const mode = dashGroupMode(key);
+  if (mode === 'test') {
+    k.push({ label: _L('Ожидают теста', 'Тест күтеді'), value: uniq(x => x.status === 'pending' || x.status === 'in_progress'), cls: 'text-amber-600' });
+    k.push({ label: _L('Не сдали', 'Тапсырмады'), value: uniq(x => x.status === 'failed'), cls: 'text-red-600' });
+  } else if (mode === 'session') {
+    const pl = dashPlanned.filter(x => ids.has(String(x.course_id)));
+    k.push({ label: _L('Групп запланировано', 'Жоспарланған топтар'), value: pl.length, cls: 'text-amber-600' });
+    k.push({ label: _L('Записано в группы', 'Топтарға жазылған'), value: pl.reduce((n, x) => n + (x.members_count || 0), 0), cls: 'text-blue-600' });
+  } else {
+    k.push({ label: _L('Истекает ≤ 30 дн.', '≤ 30 күнде аяқталады'), value: dashSoonCount(ids, 30), cls: 'text-amber-600' });
+    const pl = dashPlanned.filter(x => ids.has(String(x.course_id)));
+    k.push({ label: _L('Записано в группы', 'Топтарға жазылған'), value: pl.reduce((n, x) => n + (x.members_count || 0), 0), cls: 'text-blue-600' });
+  }
+  return k;
+}
+
 function renderDashCourseTabs() {
   const tabsDiv = document.getElementById('dashCourseTabs');
   if (!tabsDiv) return;
-  const canAct = !isObserverUser();
-
-  // Экран 1: три категории
-  if (!dashMainGroup) {
-    tabsDiv.className = 'grid grid-cols-1 md:grid-cols-3 gap-3 mb-4';
-    tabsDiv.innerHTML = DASH_GROUPS.map(g => {
-      const st = dashGroupStats(g.key);
-      const alert = st.overdue > 0 || st.missingMandatory;
-      const first = st.courses.slice().sort((a, b) => String(dashCourseTitle(a)).localeCompare(String(dashCourseTitle(b)), 'ru'))[0];
-      return `
-        <div onclick="selectDashGroup('${g.key}')" class="cursor-pointer rounded-xl border-2 p-4 flex flex-col transition hover:shadow-md ${alert ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-white hover:border-blue-300'}">
-          <div class="flex items-center gap-2 mb-3">
-            <span class="text-2xl leading-none">${g.icon}</span>
-            <div class="text-base font-black text-slate-900 leading-tight">${esc(_L(g.ru, g.kz))}</div>
-            ${st.missingMandatory ? `<span class="ml-auto text-[11px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700" title="${esc(_L('Есть сотрудники, не прошедшие обязательный курс', 'Міндетті курстан өтпеген қызметкерлер бар'))}">⚠</span>` : ''}
-          </div>
-          <div class="grid grid-cols-3 gap-2 text-center">
-            <div><div class="text-xl font-black tabular-nums text-slate-900">${st.courses.length}</div><div class="text-[10px] font-bold uppercase text-slate-500 leading-tight">${_L('Курсов', 'Курс')}</div></div>
-            <div><div class="text-xl font-black tabular-nums text-emerald-600">${st.valid}</div><div class="text-[10px] font-bold uppercase text-slate-500 leading-tight">${_L('Обучение действует', 'Оқу жарамды')}</div></div>
-            <div ${st.overdue > 0 ? `onclick="event.stopPropagation(); dashShowOverdue('group','${g.key}')" title="${esc(_L('Показать просроченных', 'Мерзімі өткендерді көрсету'))}" class="cursor-pointer rounded hover:bg-red-100"` : ''}><div class="text-xl font-black tabular-nums ${st.overdue > 0 ? 'text-red-600' : 'text-slate-400'}">${st.overdue}</div><div class="text-[10px] font-bold uppercase ${st.overdue > 0 ? 'text-red-700' : 'text-slate-500'} leading-tight">${_L('Просрочено', 'Мерзімі өткен')}</div></div>
-          </div>
-          <div class="mt-3 text-[11px] text-slate-400">${_L('Сотрудников — по уникальным людям', 'Қызметкерлер — бірегей адамдар бойынша')}</div>
-        </div>`;
-    }).join('');
-    return;
-  }
-
-  // Экран 2: курсы выбранной категории
   tabsDiv.className = 'mb-4';
+  // Три переключателя — по одному дашборду на вид курсов
+  const switcher = DASH_GROUPS.map(g => {
+    const st = dashGroupStats(g.key);
+    const on = g.key === dashMainGroup;
+    const alert = st.overdue > 0 || st.missingMandatory;
+    return `
+      <div onclick="selectDashGroup('${g.key}')" class="cursor-pointer rounded-xl border-2 p-3 transition ${on ? 'border-blue-600 bg-blue-50 shadow-md' : alert ? 'border-red-200 bg-red-50/40 hover:border-red-300' : 'border-slate-200 bg-white hover:border-blue-300'}">
+        <div class="flex items-center gap-2">
+          <span class="text-xl leading-none">${g.icon}</span>
+          <div class="text-sm font-black text-slate-900 leading-tight">${esc(_L(g.ru, g.kz))}</div>
+          ${st.missingMandatory ? `<span class="ml-auto text-[11px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700" title="${esc(_L('Есть сотрудники, не прошедшие обязательный курс', 'Міндетті курстан өтпеген қызметкерлер бар'))}">⚠</span>` : ''}
+        </div>
+        <div class="mt-1 text-[11px] text-slate-500 leading-tight">${esc(dashGroupHow(g.key))}</div>
+        <div class="mt-2 text-xs text-slate-600"><b>${st.courses.length}</b> ${_L('курс.', 'курс')} · <b class="text-emerald-600">${st.valid}</b> ${_L('действует', 'жарамды')} · <b class="${st.overdue > 0 ? 'text-red-600' : 'text-slate-400'}">${st.overdue}</b> ${_L('просроч.', 'мерзімі өткен')}</div>
+      </div>`;
+  }).join('');
+  // Курсы выбранного дашборда
   const list = dashGroupCourses(dashMainGroup);
-  const back = `<button type="button" onclick="selectDashGroup(null)" class="px-3 py-1.5 rounded-full text-xs font-semibold border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">← ${_L('Все категории', 'Барлық санаттар')}</button>`;
-  const title = `<span class="text-sm font-black text-slate-800 mr-1">${esc(dashGroupLabel(dashMainGroup))}</span>`;
   const buttons = list.map(c => {
     const on = String(c.id) === String(dashSelectedCourseId);
     const flag = c.is_mandatory && (c.untrained || 0) > 0 ? ' ⚠' : '';
     return `<button type="button" onclick="selectDashCourse(${c.id})" class="px-3 py-1.5 rounded-full text-xs font-semibold border ${on ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}">${esc(dashCourseTitle(c))}${flag}</button>`;
   }).join('');
   tabsDiv.innerHTML = `
-    <div class="flex flex-wrap items-center gap-1.5">${back}${title}</div>
-    <div class="flex flex-wrap gap-1.5 mt-3">${buttons || `<div class="text-slate-400 text-sm">${_L('В этой категории пока нет курсов', 'Бұл санатта әзірге курс жоқ')}</div>`}</div>`;
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">${switcher}</div>
+    <div class="flex flex-wrap gap-1.5">${buttons || `<div class="text-slate-400 text-sm">${_L('В этой категории пока нет курсов', 'Бұл санатта әзірге курс жоқ')}</div>`}</div>`;
+}
+
+// Список групп обучения, запланированных по набору курсов
+function dashPlannedHtml(courseIds) {
+  const pl = dashPlanned.filter(x => courseIds.has(String(x.course_id)));
+  if (!pl.length) return '';
+  return `<div class="mt-4 text-xs bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+    <div class="font-bold text-amber-800 mb-1">${_L('Записаны в группу обучения', 'Оқыту тобына жазылғандар')}</div>
+    ${pl.map(x => `<div class="flex justify-between gap-3 py-0.5"><span>${x.planned_date ? sessFmtDate(x.planned_date) : '—'} · ${x.members_count} ${_L('чел.', 'адам')}${courseIds.size > 1 && x.course_title ? ' · ' + esc(x.course_title) : ''}${x.title ? ' · ' + esc(x.title) : ''}</span><button type="button" onclick="dashOpenSession(${x.id})" class="font-semibold text-blue-600 hover:underline whitespace-nowrap">${_L('Открыть и закрыть', 'Ашу және жабу')} &rarr;</button></div>`).join('')}
+  </div>`;
+}
+
+// Кнопки записи — свои для каждого вида курсов. courseId = null — действия уровня всего дашборда.
+function dashActionsHtml(key, courseId) {
+  if (isObserverUser()) return '';
+  const mode = dashGroupMode(key);
+  const cid = courseId == null ? 'null' : Number(courseId);
+  const btn = 'px-3 py-1.5 rounded-lg text-xs font-semibold';
+  const primary = (onclick, label) => `<button type="button" onclick="${onclick}" class="${btn} bg-blue-600 text-white hover:bg-blue-700">${label}</button>`;
+  const secondary = (onclick, label) => `<button type="button" onclick="${onclick}" class="${btn} bg-slate-100 text-slate-800 hover:bg-slate-200">${label}</button>`;
+  const problem = courseId == null ? '' : `<button type="button" onclick="dashAssignProblem(${cid})" class="${btn} bg-red-50 text-red-700 border border-red-200 hover:bg-red-100">${_L('Записать всех, кто не прошёл / просрочен', 'Өтпегендердің / мерзімі өткендердің барлығын жазу')}</button>`;
+  let main = '';
+  if (mode === 'test') {
+    main = primary(`dashEnroll(${cid}, null)`, '📚 ' + _L('Назначить тест', 'Тест тағайындау'));
+  } else if (mode === 'session') {
+    main = primary(`dashEnroll(${cid}, null)`, '👥 ' + _L('Записать в группу обучения', 'Оқыту тобына жазу'))
+      + secondary(`setTab('sessions')`, _L('Все группы обучения', 'Барлық оқыту топтары'));
+  } else {
+    main = primary(`dashRecordExternal(${cid})`, '➕ ' + _L('Внести прохождение (внешний протокол)', 'Өтуді енгізу (сыртқы хаттама)'))
+      + secondary(`dashEnroll(${cid}, null, 'session')`, '👥 ' + _L('Записать в группу заранее', 'Топқа алдын ала жазу'));
+  }
+  return `<div class="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2">${main}${problem}</div>`;
 }
 
 function renderDashCoursePanel() {
   const panelDiv = document.getElementById('dashCoursePanel');
   if (!panelDiv) return;
-  if (!dashMainGroup) { panelDiv.innerHTML = ''; return; }
-  const c = dashGroupCourses(dashMainGroup).find(x => String(x.id) === String(dashSelectedCourseId));
+  const key = dashMainGroup;
+  const list = dashGroupCourses(key);
+  const c = list.find(x => String(x.id) === String(dashSelectedCourseId));
+  const card = x => `
+    <div ${x.click ? `onclick="${x.click}"` : ''} class="border border-slate-200 rounded-lg p-3 flex flex-col ${x.click ? 'cursor-pointer hover:bg-red-50' : ''}">
+      <div class="text-[11px] font-bold text-slate-500 uppercase leading-tight min-h-[2.4em] flex items-start">${esc(x.label)}</div>
+      <div class="text-xl font-black mt-1 tabular-nums ${x.cls}">${x.value}</div>
+    </div>`;
+  // Дашборд вида курсов целиком (курс не выбран)
   if (!c) {
-    panelDiv.innerHTML = `<div class="text-xs text-slate-500">${_L('Выберите курс, чтобы увидеть его статистику. Список ниже показывает по всей категории', 'Курстың статистикасын көру үшін курсты таңдаңыз. Төмендегі тізім бүкіл санат бойынша')}: «${esc(dashGroupLabel(dashMainGroup))}».</div>`;
+    const ids = new Set(list.map(x => String(x.id)));
+    panelDiv.innerHTML = `
+      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">${dashGroupKpis(key).map(card).join('')}</div>
+      <div class="mt-2 text-[11px] text-slate-400">${_L('Сотрудники считаются по уникальным людям. Выберите курс, чтобы увидеть его статистику.', 'Қызметкерлер бірегей адамдар бойынша есептеледі. Статистиканы көру үшін курсты таңдаңыз.')}</div>
+      ${dashGroupMode(key) !== 'test' ? dashPlannedHtml(ids) : ''}
+      ${dashActionsHtml(key, null)}`;
     return;
   }
-  const canAct = !isObserverUser();
   const cards = [
     { label: 'Сотрудников всего', value: c.total_employees, cls: 'text-slate-900' },
     { label: 'Прошли обучение', value: c.trained_employees, cls: 'text-emerald-600' },
@@ -3182,34 +3266,14 @@ function renderDashCoursePanel() {
     cards.push({ label: 'Не прошли обучение (обязательный курс)', value: c.untrained || 0, cls: (c.untrained || 0) > 0 ? 'text-red-600' : 'text-emerald-600' });
   }
   panelDiv.innerHTML = `
-    <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
-      ${cards.map(x => `
-        <div ${x.click ? `onclick="${x.click}"` : ''} class="border border-slate-200 rounded-lg p-3 flex flex-col ${x.click ? 'cursor-pointer hover:bg-red-50' : ''}">
-          <div class="text-[11px] font-bold text-slate-500 uppercase leading-tight min-h-[2.4em] flex items-start">${esc(x.label)}</div>
-          <div class="text-xl font-black mt-1 tabular-nums ${x.cls}">${x.value}</div>
-        </div>
-      `).join('')}
-    </div>
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-3">${cards.map(card).join('')}</div>
     ${c.is_mandatory ? `
       <div class="mt-3">
         <button type="button" onclick="setTab('courses'); setTimeout(() => openUntrainedModal(${c.id}, '${jsAttrEsc(CURRENT_LANG === 'kz' ? (c.title_kz || c.title_ru) : (c.title_ru || c.title_kz))}'), 50)" class="text-xs font-semibold text-blue-600 hover:underline">Список сотрудников, не прошедших курс &rarr;</button>
       </div>
     ` : ''}
-    ${(() => {
-      const pl = dashPlanned.filter(x => String(x.course_id) === String(c.id));
-      if (!pl.length) return '';
-      return `<div class="mt-4 text-xs bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-        <div class="font-bold text-amber-800 mb-1">${_L('Записаны в группу обучения', 'Оқыту тобына жазылғандар')}</div>
-        ${pl.map(x => `<div class="flex justify-between gap-3 py-0.5"><span>${x.planned_date ? sessFmtDate(x.planned_date) : '—'} · ${x.members_count} ${_L('чел.', 'адам')}${x.title ? ' · ' + esc(x.title) : ''}</span><button type="button" onclick="dashOpenSession(${x.id})" class="font-semibold text-blue-600 hover:underline whitespace-nowrap">${_L('Открыть и закрыть', 'Ашу және жабу')} &rarr;</button></div>`).join('')}
-      </div>`;
-    })()}
-    ${canAct ? `
-      <div class="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2">
-        <button type="button" onclick="dashAssignCourse(${c.id})" class="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700">📚 ${(c.course_kind || (c.is_external ? 'external' : 'internal')) === 'internal' ? _L('Назначить тест', 'Тест тағайындау') : _L('Записать сотрудников', 'Қызметкерлерді жазу')}</button>
-        <button type="button" onclick="dashAssignProblem(${c.id})" class="px-3 py-1.5 bg-red-50 text-red-700 border border-red-200 rounded-lg text-xs font-semibold hover:bg-red-100">${_L('Записать всех, кто не прошёл / просрочен', 'Өтпегендердің / мерзімі өткендердің барлығын жазу')}</button>
-        ${(c.course_kind || (c.is_external ? 'external' : 'internal')) !== 'internal' ? `<button type="button" onclick="dashCreateSession(${c.id})" class="text-xs font-semibold text-blue-600 hover:underline">${_L('Создать группу обучения', 'Оқыту тобын құру')} &rarr;</button>` : ''}
-      </div>
-    ` : ''}
+    ${dashGroupMode(key) !== 'test' ? dashPlannedHtml(new Set([String(c.id)])) : ''}
+    ${dashActionsHtml(key, c.id)}
   `;
 }
 
@@ -3219,15 +3283,27 @@ function dashAssignCourse(courseId) {
   dashEnroll(courseId, null);
 }
 
+// Внешний курс: сразу внести пройденное обучение (модалка в режиме внешнего курса — номер протокола внешней организации и даты)
+function dashRecordExternal(courseId) {
+  openAssignModal(null, null, courseId ? Number(courseId) : null);
+}
+
 // Запись с главной = заявка в «Группах обучения» (статус «Запланирована»): записанные попадают в дашборд групп,
 // все по умолчанию считаются присутствующими; не пришедшего убираете из заявки, затем одной кнопкой закрываете —
 // прохождение вносится всем оставшимся. Если по курсу уже есть запланированная группа, предлагаем добавить в неё.
-async function dashEnroll(courseId, userIds) {
-  // Наш курс (БиОТ с тестом и протоколом): записываем только назначением теста. «Сдал» ставится после теста
-  // и закрепляется протоколом. Группа обучения (где присутствие = пройдено) — только для внешних / без протокола.
+async function dashEnroll(courseId, userIds, forceMode) {
+  // Система записи зависит от вида курсов (дашборда):
+  //  БиОТ — назначение теста (сдал после теста, закрепляется протоколом);
+  //  Внутренние — группа обучения (присутствие = пройдено);
+  //  Внешние — внесение прохождения (кнопка «Внести прохождение») или заранее группа (forceMode = 'session').
   const cs = dashCourseStats.find(x => String(x.id) === String(courseId));
-  const kind = cs ? (cs.course_kind || (cs.is_external ? 'external' : 'internal')) : 'internal';
-  if (kind === 'internal') {
+  const mode = forceMode || (cs ? dashGroupMode(dashCourseGroup(cs)) : dashGroupMode(dashMainGroup));
+  if (mode === 'test') {
+    openAssignModal(null, userIds && userIds.length ? userIds : null, courseId ? Number(courseId) : null);
+    return;
+  }
+  if (!courseId) { dashCreateSession(null); return; }   // действие уровня дашборда: окно создания группы без предвыбранного курса
+  if (mode === 'external' && !forceMode) {
     openAssignModal(null, userIds && userIds.length ? userIds : null, Number(courseId));
     return;
   }
@@ -3311,7 +3387,7 @@ async function dashAssignProblem(courseId) {
 // Создать группу обучения: вкладка «Группы обучения» + окно создания с предвыбранным курсом
 function dashCreateSession(courseId) {
   setTab('sessions');
-  setTimeout(() => sessionsOpenCreate(courseId), 80);
+  setTimeout(() => sessionsOpenCreate(courseId || undefined), 80);
 }
 
 
@@ -5495,11 +5571,13 @@ function ensureUntrainedModal() {
 // --- Просроченные на главной: список внизу переключается (Просрочено / Скоро истекает / Все)
 // и сам фильтруется по выбранной категории или курсу в блоке «Статистика по курсам» ---
 function expScopeIds() {
+  if (dashExpAll) return null;
   if (dashSelectedCourseId) return new Set([String(dashSelectedCourseId)]);
   if (dashMainGroup) return new Set(dashGroupCourses(dashMainGroup).map(c => String(c.id)));
   return null;
 }
 function expScopeLabel() {
+  if (dashExpAll) return '';
   if (dashSelectedCourseId) {
     const c = dashCourseStats.find(x => String(x.id) === String(dashSelectedCourseId));
     return c ? dashCourseTitle(c) : '';
@@ -5521,15 +5599,15 @@ function expScopeChanged() {
   renderExpiringList();
 }
 function setExpStatus(v) { expState.status = v; expScopeChanged(); }
-function clearExpScope() { selectDashGroup(null); }
+function clearExpScope() { dashExpAll = true; expScopeChanged(); }
 // Клик по цифре «Просрочено»: kind = 'all' | 'group' | 'course'
 function dashShowOverdue(kind, id) {
   expState.status = 'overdue';
-  if (kind === 'all') { dashMainGroup = null; dashSelectedCourseId = null; }
-  else if (kind === 'group') { dashMainGroup = id; dashSelectedCourseId = null; }
+  if (kind === 'all') { dashExpAll = true; dashSelectedCourseId = null; }
+  else if (kind === 'group') { dashExpAll = false; dashMainGroup = id; dashSelectedCourseId = null; }
   else if (kind === 'course') {
     const c = dashCourseStats.find(x => String(x.id) === String(id));
-    if (c) { dashMainGroup = dashCourseGroup(c); dashSelectedCourseId = c.id; }
+    if (c) { dashExpAll = false; dashMainGroup = dashCourseGroup(c); dashSelectedCourseId = c.id; }
   }
   renderDashCourseTabs(); renderDashCoursePanel(); expScopeChanged();
   const el = document.getElementById('expiringBlock');
