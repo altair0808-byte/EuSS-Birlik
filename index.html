@@ -1174,7 +1174,7 @@ async function loadTabContent() {
           <div class="text-xs font-bold text-slate-500 uppercase leading-tight min-h-[2em] flex items-start">Не сдали</div>
           <div class="text-2xl font-black text-orange-600 mt-1 tabular-nums" id="dashFailed">...</div>
         </div>
-        <div onclick="openOverdueList('all')" title="Показать всех просроченных" class="bg-white p-4 rounded-xl border border-red-200 bg-red-50/40 shadow-sm flex flex-col cursor-pointer hover:bg-red-50">
+        <div onclick="dashShowOverdue('all')" title="Показать всех просроченных" class="bg-white p-4 rounded-xl border border-red-200 bg-red-50/40 shadow-sm flex flex-col cursor-pointer hover:bg-red-50">
           <div class="text-xs font-bold text-red-700 uppercase leading-tight min-h-[2em] flex items-start">Просрочено</div>
           <div class="text-2xl font-black text-red-600 mt-1 tabular-nums" id="dashOverdue">...</div>
         </div>
@@ -1197,8 +1197,8 @@ async function loadTabContent() {
         <div id="dashCourseTabs" class="flex flex-wrap gap-1.5 mb-4"><div class="text-slate-400 text-sm">${t('loading')}</div></div>
         <div id="dashCoursePanel"></div>
       </div>
-      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-        <h3 class="text-base font-bold mb-4">⏰ ${t('expiring_soon_title')}</h3>
+      <div id="expiringBlock" class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <h3 class="text-base font-bold mb-4">⏰ ${_L('Просрочено и скоро истекает', 'Мерзімі өткен және аяқталатын')}</h3>
         <div id="expiringFilters" class="mb-3"></div>
         <div id="expiringList" class="space-y-2"><div class="text-slate-400 text-sm">${t('loading')}</div></div>
       </div>
@@ -2838,6 +2838,7 @@ async function loadDashboardCourseStats() {
     if (dashMainGroup) ensureDashSelectedCourse();
     renderDashCourseTabs();
     renderDashCoursePanel();
+    expScopeChanged();
   } catch (e) {
     tabsDiv.innerHTML = `<div class="text-red-600 text-sm">${t('error_generic')}</div>`;
   }
@@ -2845,23 +2846,23 @@ async function loadDashboardCourseStats() {
 
 function ensureDashSelectedCourse() {
   const list = dashGroupCourses(dashMainGroup);
-  if (!dashSelectedCourseId || !list.some(c => String(c.id) === String(dashSelectedCourseId))) {
-    dashSelectedCourseId = list.length ? list[0].id : null;
-  }
+  if (dashSelectedCourseId && !list.some(c => String(c.id) === String(dashSelectedCourseId))) dashSelectedCourseId = null;
 }
 
 // key = null → вернуться ко всем категориям
 function selectDashGroup(key) {
   dashMainGroup = key || null;
-  if (dashMainGroup) ensureDashSelectedCourse();
+  dashSelectedCourseId = null;
   renderDashCourseTabs();
   renderDashCoursePanel();
+  expScopeChanged();
 }
 
 function selectDashCourse(id) {
-  dashSelectedCourseId = id;
+  dashSelectedCourseId = String(dashSelectedCourseId) === String(id) ? null : id;   // повторный клик — снова вся категория
   renderDashCourseTabs();
   renderDashCoursePanel();
+  expScopeChanged();
 }
 
 function renderDashCourseTabs() {
@@ -2886,10 +2887,9 @@ function renderDashCourseTabs() {
           <div class="grid grid-cols-3 gap-2 text-center">
             <div><div class="text-xl font-black tabular-nums text-slate-900">${st.courses.length}</div><div class="text-[10px] font-bold uppercase text-slate-500 leading-tight">${_L('Курсов', 'Курс')}</div></div>
             <div><div class="text-xl font-black tabular-nums text-emerald-600">${st.valid}</div><div class="text-[10px] font-bold uppercase text-slate-500 leading-tight">${_L('Обучение действует', 'Оқу жарамды')}</div></div>
-            <div ${st.overdue > 0 ? `onclick="event.stopPropagation(); openOverdueList('group','${g.key}')" title="${esc(_L('Показать просроченных', 'Мерзімі өткендерді көрсету'))}" class="cursor-pointer rounded hover:bg-red-100"` : ''}><div class="text-xl font-black tabular-nums ${st.overdue > 0 ? 'text-red-600' : 'text-slate-400'}">${st.overdue}</div><div class="text-[10px] font-bold uppercase ${st.overdue > 0 ? 'text-red-700' : 'text-slate-500'} leading-tight">${_L('Просрочено', 'Мерзімі өткен')}</div></div>
+            <div ${st.overdue > 0 ? `onclick="event.stopPropagation(); dashShowOverdue('group','${g.key}')" title="${esc(_L('Показать просроченных', 'Мерзімі өткендерді көрсету'))}" class="cursor-pointer rounded hover:bg-red-100"` : ''}><div class="text-xl font-black tabular-nums ${st.overdue > 0 ? 'text-red-600' : 'text-slate-400'}">${st.overdue}</div><div class="text-[10px] font-bold uppercase ${st.overdue > 0 ? 'text-red-700' : 'text-slate-500'} leading-tight">${_L('Просрочено', 'Мерзімі өткен')}</div></div>
           </div>
           <div class="mt-3 text-[11px] text-slate-400">${_L('Сотрудников — по уникальным людям', 'Қызметкерлер — бірегей адамдар бойынша')}</div>
-          ${canAct && first ? `<button type="button" onclick="event.stopPropagation(); dashAssignCourse(${first.id})" class="mt-3 self-start px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700">📚 ${_L('Записать сотрудников', 'Қызметкерлерді жазу')}</button>` : ''}
         </div>`;
     }).join('');
     return;
@@ -2915,14 +2915,17 @@ function renderDashCoursePanel() {
   if (!panelDiv) return;
   if (!dashMainGroup) { panelDiv.innerHTML = ''; return; }
   const c = dashGroupCourses(dashMainGroup).find(x => String(x.id) === String(dashSelectedCourseId));
-  if (!c) { panelDiv.innerHTML = ''; return; }
+  if (!c) {
+    panelDiv.innerHTML = `<div class="text-xs text-slate-500">${_L('Выберите курс, чтобы увидеть его статистику. Список ниже показывает по всей категории', 'Курстың статистикасын көру үшін курсты таңдаңыз. Төмендегі тізім бүкіл санат бойынша')}: «${esc(dashGroupLabel(dashMainGroup))}».</div>`;
+    return;
+  }
   const canAct = !isObserverUser();
   const cards = [
     { label: 'Сотрудников всего', value: c.total_employees, cls: 'text-slate-900' },
     { label: 'Прошли обучение', value: c.trained_employees, cls: 'text-emerald-600' },
     { label: 'Ожидают прохождения', value: c.pending, cls: 'text-amber-600' },
     { label: 'Не сдали', value: c.failed, cls: 'text-red-600' },
-    { label: 'Просрочено', value: c.overdue, cls: 'text-red-600', click: (c.overdue || 0) > 0 ? `openOverdueList('course',${c.id})` : '' }
+    { label: 'Просрочено', value: c.overdue, cls: 'text-red-600', click: (c.overdue || 0) > 0 ? `dashShowOverdue('course',${c.id})` : '' }
   ];
   if (c.is_mandatory) {
     cards.push({ label: 'Не прошли обучение (обязательный курс)', value: c.untrained || 0, cls: (c.untrained || 0) > 0 ? 'text-red-600' : 'text-emerald-600' });
@@ -2951,9 +2954,9 @@ function renderDashCoursePanel() {
     })()}
     ${canAct ? `
       <div class="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2">
-        <button type="button" onclick="dashAssignCourse(${c.id})" class="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700">📚 ${_L('Записать сотрудников', 'Қызметкерлерді жазу')}</button>
+        <button type="button" onclick="dashAssignCourse(${c.id})" class="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700">📚 ${(c.course_kind || (c.is_external ? 'external' : 'internal')) === 'internal' ? _L('Назначить тест', 'Тест тағайындау') : _L('Записать сотрудников', 'Қызметкерлерді жазу')}</button>
         <button type="button" onclick="dashAssignProblem(${c.id})" class="px-3 py-1.5 bg-red-50 text-red-700 border border-red-200 rounded-lg text-xs font-semibold hover:bg-red-100">${_L('Записать всех, кто не прошёл / просрочен', 'Өтпегендердің / мерзімі өткендердің барлығын жазу')}</button>
-        ${(c.course_kind || (c.is_external ? 'external' : 'internal')) === 'internal' ? `<button type="button" onclick="dashCreateSession(${c.id})" class="text-xs font-semibold text-blue-600 hover:underline">${_L('Создать группу обучения', 'Оқыту тобын құру')} &rarr;</button>` : ''}
+        ${(c.course_kind || (c.is_external ? 'external' : 'internal')) !== 'internal' ? `<button type="button" onclick="dashCreateSession(${c.id})" class="text-xs font-semibold text-blue-600 hover:underline">${_L('Создать группу обучения', 'Оқыту тобын құру')} &rarr;</button>` : ''}
       </div>
     ` : ''}
   `;
@@ -2969,6 +2972,14 @@ function dashAssignCourse(courseId) {
 // все по умолчанию считаются присутствующими; не пришедшего убираете из заявки, затем одной кнопкой закрываете —
 // прохождение вносится всем оставшимся. Если по курсу уже есть запланированная группа, предлагаем добавить в неё.
 async function dashEnroll(courseId, userIds) {
+  // Наш курс (БиОТ с тестом и протоколом): записываем только назначением теста. «Сдал» ставится после теста
+  // и закрепляется протоколом. Группа обучения (где присутствие = пройдено) — только для внешних / без протокола.
+  const cs = dashCourseStats.find(x => String(x.id) === String(courseId));
+  const kind = cs ? (cs.course_kind || (cs.is_external ? 'external' : 'internal')) : 'internal';
+  if (kind === 'internal') {
+    openAssignModal(null, userIds && userIds.length ? userIds : null, Number(courseId));
+    return;
+  }
   try {
     let session = null;
     const existing = dashPlanned.filter(x => String(x.course_id) === String(courseId));
@@ -3055,7 +3066,7 @@ function dashCreateSession(courseId) {
 
 // --- DASHBOARD: EXPIRING CERTIFICATES WIDGET (сортировка, фильтры, период, экспорт) ---
 let expData = [];
-const expState = { days: 30, q: '', course: '', status: '', sort: 'date_asc' };
+const expState = { days: 30, q: '', course: '', status: 'overdue', sort: 'date_asc' };
 let expSelected = new Set(); // выбранные user_id — для скачивания уведомления с логинами/паролями (п.4 запроса)
 
 function expDaysLeft(a) {
@@ -3084,7 +3095,18 @@ function renderExpiringFilters() {
   if (expState.course && !courses.includes(expState.course)) expState.course = '';
   const cls = 'border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white';
   const opt = (v, label, cur) => `<option value="${esc(String(v))}" ${String(cur) === String(v) ? 'selected' : ''}>${esc(label)}</option>`;
+  const cn = expCounts();
+  const pill = (v, label, n, on, off) => `<button type="button" onclick="setExpStatus('${v}')" class="px-3 py-1.5 rounded-full text-xs font-bold border ${expState.status === v ? on : off}">${label} <span class="tabular-nums">${n}</span></button>`;
+  const scope = expScopeLabel();
   box.innerHTML = `
+    <div class="flex flex-wrap items-center gap-2 mb-3">
+      ${pill('overdue', _L('Просрочено', 'Мерзімі өткен'), cn.o, 'bg-red-600 text-white border-red-600', 'bg-red-50 text-red-700 border-red-200')}
+      ${pill('soon', _L('Скоро истекает', 'Жақында аяқталады'), cn.n, 'bg-amber-500 text-white border-amber-500', 'bg-amber-50 text-amber-700 border-amber-200')}
+      ${pill('', _L('Все', 'Барлығы'), cn.all, 'bg-slate-700 text-white border-slate-700', 'bg-white text-slate-600 border-slate-300')}
+      ${scope
+        ? `<span class="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">${esc(scope)} <button type="button" onclick="clearExpScope()" class="font-black leading-none" title="${_L('Показать все курсы', 'Барлық курстар')}">×</button></span>`
+        : `<span class="text-xs text-slate-400">${_L('Все курсы', 'Барлық курстар')}</span>`}
+    </div>
     <div class="flex flex-wrap gap-2 items-center">
       <input id="expQ" type="text" value="${esc(expState.q)}" placeholder="${_L('Поиск по ФИО, курсу, объекту...', 'Аты-жөні, курс, объект бойынша іздеу...')}" oninput="onExpFilterChange()" class="flex-1 min-w-[200px] ${cls}">
       <select id="expDays" onchange="onExpDaysChange()" class="${cls}" title="${_L('Период', 'Кезең')}">
@@ -3093,6 +3115,7 @@ function renderExpiringFilters() {
       <select id="expStatus" onchange="onExpFilterChange()" class="${cls}">
         ${opt('', _L('Любой статус', 'Кез келген күй'), expState.status)}
         ${opt('overdue', _L('Просрочено', 'Мерзімі өткен'), expState.status)}
+        ${opt('soon', _L('Ещё не просрочено', 'Әлі мерзімі өтпеген'), expState.status)}
         ${opt('7', _L('Истекает ≤ 7 дней', '≤ 7 күнде аяқталады'), expState.status)}
         ${opt('14', _L('Истекает ≤ 14 дней', '≤ 14 күнде аяқталады'), expState.status)}
         ${opt('30', _L('Истекает ≤ 30 дней', '≤ 30 күнде аяқталады'), expState.status)}
@@ -3138,7 +3161,7 @@ function onExpDaysChange() {
 }
 
 function resetExpFilters() {
-  Object.assign(expState, { q: '', course: '', status: '', sort: 'date_asc' });
+  Object.assign(expState, { q: '', course: '', status: 'overdue', sort: 'date_asc' });
   renderExpiringFilters();
   renderExpiringList();
 }
@@ -3146,9 +3169,12 @@ function resetExpFilters() {
 function getExpiringFiltered() {
   const q = expState.q.trim().toLowerCase();
   const title = a => (CURRENT_LANG === 'kz' ? (a.title_kz || a.title_ru) : (a.title_ru || a.title_kz)) || '';
+  const scopeIds = expScopeIds();
   let list = expData.filter(a => {
     const dl = expDaysLeft(a);
     if (expState.status === 'overdue' && !(dl < 0)) return false;
+    if (expState.status === 'soon' && dl < 0) return false;
+    if (scopeIds && !scopeIds.has(String(a.course_id))) return false;
     if (['7', '14', '30'].includes(expState.status) && !(dl >= 0 && dl <= Number(expState.status))) return false;
     if (expState.course && title(a) !== expState.course) return false;
     if (q) {
@@ -3181,7 +3207,7 @@ function renderExpiringList() {
     return;
   }
   if (!list.length) {
-    div.innerHTML = `<div class="text-sm text-slate-500">${_L('Ничего не найдено по выбранным фильтрам', 'Таңдалған сүзгілер бойынша ештеңе табылмады')}</div>`;
+    div.innerHTML = `<div class="text-sm ${expState.status === 'overdue' && !expState.q && !expState.course ? 'text-emerald-600 font-semibold' : 'text-slate-500'}">${expState.status === 'overdue' && !expState.q && !expState.course ? '✓ ' + _L('Просроченных нет', 'Мерзімі өткендер жоқ') : _L('Ничего не найдено по выбранным фильтрам', 'Таңдалған сүзгілер бойынша ештеңе табылмады')}</div>`;
     return;
   }
   div.innerHTML = list.map(a => {
@@ -4744,20 +4770,30 @@ async function sessionsOpenPicker() {
 }
 async function sessionsPickLoad() {
   const qs = new URLSearchParams();
-  if (sessPick.q) qs.set('q', sessPick.q);
   if (sessPick.object) qs.set('object', sessPick.object);
   if (sessPick.department) qs.set('department', sessPick.department);
   try { sessPick.users = await api.req('/api/users' + (qs.toString() ? '?' + qs : '')); } catch (e) { return sessErr(e); }
   sessionsPickRender();
 }
+function sessionsPickFiltered() {
+  const words = String(sessPick.q || '').toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return sessPick.users;
+  return sessPick.users.filter((u) => {
+    const hay = `${u.last_name || ''} ${u.first_name || ''} ${u.login || ''} ${u.position || ''} ${u.department || ''}`.toLowerCase();
+    return words.every((w) => hay.includes(w));
+  });
+}
 function sessionsPickRender() {
+  const af = document.activeElement;
+  const keepFocus = af && af.id === 'spQ' ? [af.selectionStart, af.selectionEnd] : null;
   const d = sessionsState.detail;
   const inSession = new Set(d.members.map((m) => m.user_id));
   const meta = state.meta || {};
   const objOpts = ['<option value="">Все объекты</option>'].concat((meta.objects || []).map((o) => `<option ${sessPick.object === o ? 'selected' : ''}>${esc(o)}</option>`)).join('');
   const depOpts = ['<option value="">Все отделы</option>'].concat((meta.departments || []).map((o) => `<option ${sessPick.department === o ? 'selected' : ''}>${esc(o)}</option>`)).join('');
-  const free = sessPick.users.filter((u) => !inSession.has(u.id));
-  const rows = sessPick.users.map((u) => {
+  const shown = sessionsPickFiltered();
+  const free = shown.filter((u) => !inSession.has(u.id));
+  const rows = shown.map((u) => {
     const already = inSession.has(u.id);
     return `<label class="flex items-center gap-2 py-1.5 border-t ${already ? 'opacity-40' : 'cursor-pointer hover:bg-slate-50'}">
       <input type="checkbox" ${already ? 'disabled checked' : ''} ${sessPick.selected.has(u.id) ? 'checked' : ''} onchange="sessionsPickToggle(${u.id}, this.checked)">
@@ -4770,25 +4806,29 @@ function sessionsPickRender() {
     <div class="flex justify-between items-start mb-3"><h3 class="text-lg font-bold">Добавить сотрудников</h3>
       <button onclick="sessionsCloseModal('sessPickModal')" class="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button></div>
     <div class="flex flex-wrap gap-2 mb-2">
-      <input id="spQ" type="text" value="${esc(sessPick.q)}" placeholder="Поиск по ФИО / логину" onkeydown="if(event.key==='Enter'){sessPick.q=this.value;sessionsPickLoad()}" class="border rounded-lg px-3 py-1.5 text-sm flex-1 min-w-[160px]">
+      <input id="spQ" type="text" value="${esc(sessPick.q)}" placeholder="Поиск по ФИО / логину" oninput="sessPick.q=this.value;sessionsPickRender()" class="border rounded-lg px-3 py-1.5 text-sm flex-1 min-w-[160px]">
       <select onchange="sessPick.object=this.value;sessionsPickLoad()" class="border rounded-lg px-2 py-1.5 text-sm">${objOpts}</select>
       <select onchange="sessPick.department=this.value;sessionsPickLoad()" class="border rounded-lg px-2 py-1.5 text-sm">${depOpts}</select>
     </div>
     <div class="flex flex-wrap items-center gap-2 mb-2 text-xs">
       <button onclick="sessionsPickAll()" class="px-3 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 font-semibold">Выбрать всех найденных (${free.length})</button>
       <button onclick="sessPick.selected=new Set();sessionsPickRender()" class="px-3 py-1 rounded-lg bg-slate-100 hover:bg-slate-200">Снять выбор</button>
-      <span class="text-slate-500">Найдено: ${sessPick.users.length} · выбрано: <b>${sessPick.selected.size}</b></span>
+      <span class="text-slate-500">Найдено: ${shown.length} · выбрано: <b>${sessPick.selected.size}</b></span>
     </div>
     <div class="max-h-[50vh] overflow-y-auto border rounded-lg px-3 mb-4">${rows || '<div class="py-6 text-center text-slate-400 text-sm">Никого не найдено</div>'}</div>
     <div class="flex justify-end gap-2">
       <button onclick="sessionsCloseModal('sessPickModal')" class="px-4 py-2 text-sm rounded-lg bg-slate-100">Отмена</button>
       <button onclick="sessionsPickApply()" class="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white font-semibold">Добавить в заявку (${sessPick.selected.size})</button>
     </div>`, 'max-w-3xl');
+  if (keepFocus) {
+    const q = document.getElementById('spQ');
+    if (q) { q.focus(); try { q.setSelectionRange(keepFocus[0], keepFocus[1]); } catch (e) {} }
+  }
 }
 function sessionsPickToggle(uid, on) { on ? sessPick.selected.add(uid) : sessPick.selected.delete(uid); sessionsPickRender(); }
 function sessionsPickAll() {
   const inSession = new Set(sessionsState.detail.members.map((m) => m.user_id));
-  sessPick.users.forEach((u) => { if (!inSession.has(u.id)) sessPick.selected.add(u.id); });
+  sessionsPickFiltered().forEach((u) => { if (!inSession.has(u.id)) sessPick.selected.add(u.id); });
   sessionsPickRender();
 }
 async function sessionsPickApply() {
@@ -5087,87 +5127,48 @@ function ensureUntrainedModal() {
   document.body.appendChild(d.firstElementChild);
 }
 
-// --- Список просроченных: все / по категории / по одному курсу (из уже загруженных назначений главной) ---
-function dashOverdueRows(courseIds) {
-  const now = new Date(), latest = new Map();
-  (dashAssignData || []).forEach(x => {
-    if (x.status !== 'passed') return;
-    if (courseIds && !courseIds.has(String(x.course_id))) return;
-    const k = `${x.user_id}:${x.course_id}`, cur = latest.get(k);
-    const tx = String(x.test_date || ''), tc = cur ? String(cur.test_date || '') : '';
-    if (!cur || tx > tc || (tx === tc && Number(x.id) > Number(cur.id))) latest.set(k, x);
-  });
-  const rows = [];
-  latest.forEach(x => {
-    if (x.next_test_date && new Date(x.next_test_date) < now) rows.push({ ...x, days: Math.max(1, Math.floor((now - new Date(x.next_test_date)) / 86400000)) });
-  });
-  return rows;
+// --- Просроченные на главной: список внизу переключается (Просрочено / Скоро истекает / Все)
+// и сам фильтруется по выбранной категории или курсу в блоке «Статистика по курсам» ---
+function expScopeIds() {
+  if (dashSelectedCourseId) return new Set([String(dashSelectedCourseId)]);
+  if (dashMainGroup) return new Set(dashGroupCourses(dashMainGroup).map(c => String(c.id)));
+  return null;
 }
-async function openOverdueList(kind, id) {
-  ensureUntrainedModal();
-  const modal = document.getElementById('untrainedModal');
-  const body = document.getElementById('untrainedModalBody');
-  const titleEl = document.getElementById('untrainedModalTitle');
-  const descEl = document.getElementById('untrainedModalDesc');
-  const btnRow = document.getElementById('untrainedAssignAllRow');
-  if (!modal || !body) return;
-  untrainedModalCourseId = null; untrainedModalUserIds = [];
-  if (btnRow) btnRow.classList.add('hidden');
-  let ids = null, scope = '';
-  if (kind === 'group') { ids = new Set(dashGroupCourses(id).map(c => String(c.id))); scope = dashGroupLabel(id); }
+function expScopeLabel() {
+  if (dashSelectedCourseId) {
+    const c = dashCourseStats.find(x => String(x.id) === String(dashSelectedCourseId));
+    return c ? dashCourseTitle(c) : '';
+  }
+  return dashMainGroup ? dashGroupLabel(dashMainGroup) : '';
+}
+function expCounts() {
+  const sc = expScopeIds();
+  let o = 0, n = 0;
+  expData.forEach(a => {
+    if (sc && !sc.has(String(a.course_id))) return;
+    if (expDaysLeft(a) < 0) o++; else n++;
+  });
+  return { o, n, all: o + n };
+}
+function expScopeChanged() {
+  if (!document.getElementById('expiringList')) return;
+  renderExpiringFilters();
+  renderExpiringList();
+}
+function setExpStatus(v) { expState.status = v; expScopeChanged(); }
+function clearExpScope() { selectDashGroup(null); }
+// Клик по цифре «Просрочено»: kind = 'all' | 'group' | 'course'
+function dashShowOverdue(kind, id) {
+  expState.status = 'overdue';
+  if (kind === 'all') { dashMainGroup = null; dashSelectedCourseId = null; }
+  else if (kind === 'group') { dashMainGroup = id; dashSelectedCourseId = null; }
   else if (kind === 'course') {
-    ids = new Set([String(id)]);
     const c = dashCourseStats.find(x => String(x.id) === String(id));
-    scope = c ? dashCourseTitle(c) : '';
+    if (c) { dashMainGroup = dashCourseGroup(c); dashSelectedCourseId = c.id; }
   }
-  titleEl.textContent = _L('Просрочено', 'Мерзімі өткен') + (scope ? ' — ' + scope : '');
-  descEl.textContent = '';
-  body.innerHTML = `<div class="text-slate-400 text-sm">${t('loading')}</div>`;
-  modal.classList.remove('hidden');
-  if (!dashAssignData) {
-    try { dashAssignData = await api.getAssignments({ ...orgParams(), active_only: 1 }); }
-    catch (e) { body.innerHTML = `<div class="text-red-600 text-sm">${t('error_generic')}</div>`; return; }
-  }
-  const rows = dashOverdueRows(ids);
-  if (!rows.length) {
-    body.innerHTML = `<div class="text-emerald-600 text-sm font-semibold text-center py-6">✓ ${_L('Просроченных нет.', 'Мерзімі өткендер жоқ.')}</div>`;
-    return;
-  }
-  const people = new Set(rows.map(r => r.user_id)).size;
-  const canAct = !isObserverUser();
-  descEl.textContent = `${people} ${_L('сотр.', 'қызм.')} · ${rows.length} ${_L('просрочено (сотрудник + курс).', 'мерзімі өткен (қызметкер + курс).')}` + (canAct ? ' ' + _L('Отметьте галочками, кого записать заново.', 'Қайта жазу керектерін белгілеңіз.') : '');
-  const byCourse = new Map();
-  rows.forEach(r => { const a = byCourse.get(r.course_id) || []; a.push(r); byCourse.set(r.course_id, a); });
-  const dn = CURRENT_LANG === 'kz' ? 'күн' : 'дн.';
-  body.innerHTML = [...byCourse.entries()].map(([cid, list]) => {
-    list.sort((a, b) => b.days - a.days);
-    const title = CURRENT_LANG === 'kz' ? (list[0].title_kz || list[0].title_ru) : (list[0].title_ru || list[0].title_kz);
-    return `
-      <div class="mb-4 last:mb-0">
-        <div class="flex items-center justify-between gap-2 mb-1.5">
-          <div class="text-sm font-bold text-slate-700">${esc(title)} <span class="text-red-600">(${list.length})</span></div>
-          ${canAct ? `<button type="button" onclick="overdueAssignChecked(${cid})" class="text-xs font-semibold text-blue-600 hover:underline whitespace-nowrap">${_L('Назначить отмеченным', 'Белгіленгендерге тағайындау')} &rarr;</button>` : ''}
-        </div>
-        <div class="space-y-1">
-          ${list.map(r => `
-            <div class="flex items-center gap-3 px-3 py-2 border rounded-lg text-sm hover:bg-slate-50">
-              ${canAct ? `<input type="checkbox" checked data-od-course="${cid}" value="${r.user_id}" class="rounded text-blue-600">` : ''}
-              <div class="flex-1 min-w-0">
-                <div class="font-semibold text-slate-800">${esc(r.last_name)} ${esc(r.first_name)}</div>
-                <div class="text-xs text-slate-400">${esc(posLabel(r.position) || '—')} · ${esc(r.object || '—')} / ${esc(r.department || '—')}</div>
-              </div>
-              <span class="text-[11px] font-bold px-2 py-0.5 rounded bg-red-100 text-red-800 whitespace-nowrap">${r.days} ${dn} ${t('overdue')}</span>
-              <button type="button" onclick="document.getElementById('untrainedModal').classList.add('hidden'); openUserProfile(${r.user_id})" class="text-xs text-blue-600 hover:underline whitespace-nowrap">${_L('Карточка', 'Карточка')}</button>
-            </div>`).join('')}
-        </div>
-      </div>`;
-  }).join('');
-}
-function overdueAssignChecked(courseId) {
-  const ids = [...document.querySelectorAll(`input[data-od-course="${courseId}"]:checked`)].map(x => Number(x.value));
-  if (!ids.length) { alert(_L('Отметьте хотя бы одного сотрудника.', 'Кемінде бір қызметкерді белгілеңіз.')); return; }
-  document.getElementById('untrainedModal').classList.add('hidden');
-  openAssignModal(null, ids, courseId);
+  renderDashCourseTabs(); renderDashCoursePanel(); expScopeChanged();
+  const el = document.getElementById('expiringBlock');
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // --- Сотрудники, не прошедшие обязательный курс (п.4 запроса) ---
