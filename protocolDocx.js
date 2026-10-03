@@ -100,7 +100,8 @@ const EMU_PER_PT = 12700;
 // жирный курсив 10 pt, инженер — жирный 12 pt, член комиссии — курсив 7 pt; в шапке 11/8/8 pt),
 // плюс длинный текст автоматически уменьшал кегль. Теперь везде один и тот же шрифт
 // (Times New Roman, как в бланке), жирный, прямой, один кегль, без авто-уменьшения.
-const SIGN_FONT_PT = 8;
+const HEADER_ZONE_TRIM_PT = 40;   // в шапке строка чуть укорачивается, иначе при крупном шрифте она переносится на вторую строку
+const SIGN_FONT_PT = 12.8;   // было 8 pt, увеличено в 1.6 раза
 const SIGN_NAME_RPR = '<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="Times New Roman" w:cs="Times New Roman"/><w:b/><w:bCs/></w:rPr>';
 // Одинаковая предельная высота картинки подписи у всех ролей (pt).
 const SIGN_IMG_MAX_H_PT = 28;   // подпись обрезана по штриху (без белых полей), поэтому 28 pt ≈ в 1.5 раза крупнее прежней
@@ -126,9 +127,13 @@ const SIGN_IMG_MAX_W_PT = 135;
 // за край листа (ширина A4 = 595 pt, поэтому правый край ≤ 590) и не закрывала таблицу выше
 // (низ таблицы ≈ 531 pt при верхе абзаца председателя 561 pt): круг 120 pt занимает x 470–590, y 531–651.
 // Проверено наложением на рендер шаблона (LibreOffice → PDF).
-const STAMP_DIAMETER_PT = 120;        // ~42 мм
-const STAMP_OFFSET_X_PT = 470;        // от левого края страницы (positionH relativeFrom="page")
-const STAMP_OFFSET_Y_PT = -30;        // от верха абзаца со строкой подписи председателя (relativeFrom="paragraph")
+// Печать увеличена ещё в 1.25 раза (120 → 150 pt, ~53 мм), опущена ниже (больше не заходит на таблицу
+// выше), а подписи сдвинуты левее (SIGN_SHIFT_LEFT_PT), чтобы печать закрывала лишь край подписи,
+// а не подпись целиком. Правый край печати = 440 + 150 = 590 pt (< 595 pt, ширина A4).
+const STAMP_DIAMETER_PT = 150;        // ~53 мм
+const STAMP_OFFSET_X_PT = 440;        // от левого края страницы (positionH relativeFrom="page")
+const STAMP_OFFSET_Y_PT = -14;         // от верха абзаца со строкой подписи председателя (relativeFrom="paragraph")
+const SIGN_SHIFT_LEFT_PT = 24;        // сдвиг картинок подписей влево (у всех ролей одинаковый)
 
 // Ширина/высота PNG из заголовка (IHDR), без внешних зависимостей.
 function pngDimensions(buffer) {
@@ -333,8 +338,9 @@ function buildSpacerRuns(rPrXml, style, widthPt, side) {
 // авто-уменьшением кегля. Общая ширина возвращаемых run-ов = zonePt.
 // Если даже при минимальном кегле строка не влезает — сокращается ДОЛЖНОСТЬ («…»), ФИО
 // сохраняется целиком (и только если не влезает уже одно ФИО — оно обрезается).
-function buildFittedCenteredRun(rPrXml, position, fio, zonePt, { minSizePt = 6, marginPt = 2, fixedSizePt = null } = {}) {
+function buildFittedCenteredRun(rPrXml, position, fio, zonePt, { minSizePt = 6, marginPt = 2, fixedSizePt = null, startSizePt = null } = {}) {
   const style = runStyleFromRPr(rPrXml);
+  if (startSizePt) style.sizePt = startSizePt;
   // fixedSizePt — единый кегль (без авто-уменьшения): если текст не влезает, сокращается должность («…»)
   if (fixedSizePt) { style.sizePt = fixedSizePt; minSizePt = fixedSizePt; }
   const avail = Math.max(0, zonePt - marginPt * 2);
@@ -439,7 +445,7 @@ async function embedSignaturesIntoXml(zip, xml, signaturesByRole, companyStamp) 
         relId,
         cx: Math.round(wPt * EMU_PER_PT),
         cy: Math.round(hPt * EMU_PER_PT),
-        offsetXEmu: Math.round(Math.max(-15, (sigZonePt - wPt) / 2) * EMU_PER_PT),
+        offsetXEmu: Math.round((Math.max(-15, (sigZonePt - wPt) / 2) - SIGN_SHIFT_LEFT_PT) * EMU_PER_PT),
         offsetYEmu: Math.round((lineSz * 0.89 - hPt - 2) * EMU_PER_PT)
       });
     }
@@ -502,7 +508,7 @@ function embedHeaderNamesIntoXml(xml, signaturesByRole) {
       ? `<w:r>${rPrMatch[1]}<w:t xml:space="preserve">${m[1].replace(/ /g, NBSP)}</w:t></w:r>`   // NBSP (той же ширины), чтобы строка не теряла исходную высоту
       : '';
 
-    xml = xml.replace(target.runXml, () => leadRun + buildFittedCenteredRun(SIGN_NAME_RPR, position, fio, zonePt, { fixedSizePt: SIGN_FONT_PT }));
+    xml = xml.replace(target.runXml, () => leadRun + buildFittedCenteredRun(SIGN_NAME_RPR, position, fio, zonePt - HEADER_ZONE_TRIM_PT, { startSizePt: SIGN_FONT_PT, minSizePt: 8, marginPt: 2 }));
   }
 
   return xml;
