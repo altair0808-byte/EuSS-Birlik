@@ -603,29 +603,47 @@ function brandMarkHtml(sizeClass) {
 // Скачивание/открытие защищённых файлов (требующих Authorization),
 // которые нельзя открыть обычной ссылкой <a href target="_blank">,
 // т.к. браузер не добавляет заголовок Authorization при обычной навигации.
-async function downloadAuthed(url, filename) {
+// Скачивание/открытие файла с токеном авторизации.
+// ВАЖНО: вкладку для просмотра (PDF без имени файла) открываем СРАЗУ, в момент клика, ДО await fetch.
+// Браузеры блокируют window.open, вызванный после асинхронного запроса (это уже не «жест
+// пользователя») — из-за этого кнопки «Скачать PDF», «Сертификат», «Удостоверение» молча ничего
+// не делали. Если вкладку открыть не удалось — файл скачивается обычной загрузкой.
+// forceDownload=true — всегда скачивать файлом (имя берётся из заголовка ответа).
+async function downloadAuthed(url, filename, forceDownload) {
+  let pre = null;
+  if (!filename && !forceDownload) { try { pre = window.open('', '_blank'); } catch (e) { pre = null; } }
+  const closePre = () => { try { if (pre && !pre.closed) pre.close(); } catch (e) {} };
   try {
     const res = await fetch(url, { headers: state.token ? { 'Authorization': 'Bearer ' + state.token } : {} });
-    if (res.status === 401) { logout(); return; }
+    if (res.status === 401) { closePre(); logout(); return; }
     if (!res.ok) {
+      closePre();
       const err = await res.json().catch(() => ({ error: 'Ошибка сервера' }));
       alert(err.message || err.error || 'Не удалось скачать файл');
       return;
     }
     const blob = await res.blob();
     const blobUrl = URL.createObjectURL(blob);
-    if (filename) {
+    if (filename || forceDownload || !pre || pre.closed) {
+      let name = filename;
+      if (!name) {
+        const cd = res.headers.get('content-disposition') || '';
+        const m = cd.match(/filename\*=UTF-8''([^;]+)/i) || cd.match(/filename="?([^";]+)"?/i);
+        name = blob.type === 'application/pdf' ? 'document.pdf' : 'document';
+        if (m) { try { name = decodeURIComponent(m[1]); } catch (e) { name = m[1]; } }
+      }
       const a = document.createElement('a');
       a.href = blobUrl;
-      a.download = filename;
+      a.download = name;
       document.body.appendChild(a);
       a.click();
       a.remove();
     } else {
-      window.open(blobUrl, '_blank');
+      pre.location.href = blobUrl;
     }
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
   } catch (e) {
+    closePre();
     alert('Не удалось скачать файл: ' + e.message);
   }
 }
@@ -1400,6 +1418,8 @@ function setTab(tname) {
   state.tab = tname;
   ['admin', 'employee'].forEach(k => { const sec = navSections(k).find(x => x.tabs.some(y => y[0] === tname)); if (sec) navLast[sec.id] = tname; });
   bulkSelectedUserIds.clear();
+  bulkShowOnlySelected = false;
+  bulkUserCache.clear();
   usersFilterDropdownOpen = null;
   render();
 }
@@ -1531,6 +1551,7 @@ async function loadTabContent() {
           ${!isAdminsTab ? usersFilterDropdownHtml('positions', _L('Все должности', 'Барлық лауазымдар'), (state.dictionaries.positions || []).map(p => p.ru), posLabel) : ''}
           ${!isAdminsTab && !isArchiveTab ? rotationFilterSelectHtml() : ''}
           ${isArchiveTab ? usersFilterDropdownHtml('statuses', _L('Все статусы', 'Барлық мәртебелер'), ['fired', 'maternity'], v => v === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В отпуске', 'Демалыста')) : ''}
+          ${!isAdminsTab && !isArchiveTab && !isObserverUser() ? `<button type="button" id="bulkShowSelectedBtn" onclick="toggleBulkShowSelected()" title="${_L('Показать в таблице только отмеченных сотрудников (поиск и фильтры временно не действуют)', 'Кестеде тек белгіленген қызметкерлерді көрсету')}" class="hidden px-3 py-2 border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-xs font-semibold rounded-lg whitespace-nowrap">${_L('Показать выбранных', 'Таңдалғандарды көрсету')}</button>` : ''}
           ${!isAdminsTab && !isArchiveTab && !isObserverUser() ? `<button type="button" id="bulkAssignBtn" onclick="openAssignModal(null, [...bulkSelectedUserIds])" class="hidden px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg whitespace-nowrap">${_L('Назначить выбранным', 'Таңдалғандарға тағайындау')} (<span id="bulkAssignCount">0</span>)</button>` : ''}
         </div>
         <div class="overflow-x-auto">
@@ -1693,6 +1714,7 @@ async function loadTabContent() {
           </form>
         </div>
       </div>
+      ${assignModalHtml()}
     `;
     if (!state.dictionariesLoaded) {
       // ВАЖНО: если пользователь успел открыть карточку «Добавить сотрудника» ДО того,
@@ -3440,6 +3462,7 @@ function dashCreateSession(courseId) {
 // --- DASHBOARD: EXPIRING CERTIFICATES WIDGET (сортировка, фильтры, период, экспорт) ---
 let expData = [];
 const expState = { days: 30, q: '', course: '', status: 'overdue', sort: 'date_asc' };
+let expShowOnlySelected = false; // «Показать выбранных»: в списке только отмеченные сотрудники
 let expSelected = new Set(); // выбранные user_id — для скачивания уведомления с логинами/паролями (п.4 запроса)
 
 function expDaysLeft(a) {
@@ -3513,6 +3536,7 @@ function renderExpiringFilters() {
         <input type="checkbox" id="expSelectAll" onchange="toggleExpSelectAll(this.checked)">
         ${_L('Выбрать всех видимых', 'Барлығын таңдау')}
       </label>
+      <button type="button" id="expShowSelectedBtn" onclick="toggleExpShowSelected()" class="text-emerald-700 hover:underline font-semibold">${expShowOnlySelected ? _L('Показать всех', 'Барлығын көрсету') : _L('Показать выбранных', 'Таңдалғандарды көрсету')}</button>
       <button type="button" onclick="assignExpiringSelected()" class="text-blue-600 hover:underline font-semibold">📚 ${_L('Назначить обучение выбранным', 'Таңдалғандарға оқу тағайындау')} (<span id="expSelectedCount">${expSelected.size}</span>)</button>
       <button type="button" onclick="downloadCredentialsNoticeFromExpiring()" class="text-indigo-700 hover:underline font-semibold">⬇ ${_L('Уведомление (логин/пароль)', 'Хабарлама (логин/құпиясөз)')}</button>
     </div>`;
@@ -3535,6 +3559,7 @@ function onExpDaysChange() {
 
 function resetExpFilters() {
   Object.assign(expState, { q: '', course: '', status: 'overdue', sort: 'date_asc' });
+  expShowOnlySelected = false;
   renderExpiringFilters();
   renderExpiringList();
 }
@@ -3543,7 +3568,9 @@ function getExpiringFiltered() {
   const q = expState.q.trim().toLowerCase();
   const title = a => (CURRENT_LANG === 'kz' ? (a.title_kz || a.title_ru) : (a.title_ru || a.title_kz)) || '';
   const scopeIds = expScopeIds();
+  const showSel = expShowOnlySelected && expSelected.size > 0;
   let list = expData.filter(a => {
+    if (showSel) return expSelected.has(Number(a.user_id));   // «Показать выбранных» игнорирует статус/курс/поиск
     const dl = expDaysLeft(a);
     if (expState.status === 'overdue' && !(dl < 0)) return false;
     if (expState.status === 'soon' && dl < 0) return false;
@@ -3618,7 +3645,18 @@ function renderExpiringList() {
 function toggleExpRow(userId, checked) {
   const id = Number(userId);
   if (checked) expSelected.add(id); else expSelected.delete(id);
+  if (expShowOnlySelected && !checked) {
+    if (!expSelected.size) expShowOnlySelected = false;
+    renderExpiringList();
+  }
   updateExpSelectedCount();
+}
+
+function toggleExpShowSelected() {
+  if (!expShowOnlySelected && !expSelected.size) { alert(_L('Сначала отметьте сотрудников галочками в списке.', 'Алдымен тізімде қызметкерлерді белгілеңіз.')); return; }
+  expShowOnlySelected = !expShowOnlySelected;
+  renderExpiringFilters();
+  renderExpiringList();
 }
 
 function toggleExpSelectAll(checked) {
@@ -3632,6 +3670,8 @@ function toggleExpSelectAll(checked) {
 function updateExpSelectedCount() {
   const el = document.getElementById('expSelectedCount');
   if (el) el.textContent = expSelected.size;
+  const sb = document.getElementById('expShowSelectedBtn');
+  if (sb) sb.textContent = expShowOnlySelected ? _L('Показать всех', 'Барлығын көрсету') : _L('Показать выбранных', 'Таңдалғандарды көрсету');
 }
 
 // Назначить обучение разом всем сотрудникам, отмеченным в списке «приближается срок»
@@ -3797,6 +3837,13 @@ function usersFilterDropdownHtml(field, allLabel, options, labelFn) {
 
 // --- Массовое назначение курса: выбор сотрудников чекбоксами прямо в таблице «Сотрудники» ---
 const bulkSelectedUserIds = new Set();
+let bulkShowOnlySelected = false;          // в таблице «Сотрудники» показаны только отмеченные
+const bulkUserCache = new Map();           // id -> сотрудник: отмеченные могли выпасть из текущего фильтра
+function toggleBulkShowSelected() {
+  if (!bulkShowOnlySelected && !bulkSelectedUserIds.size) { alert(_L('Пока никто не отмечен.', 'Әзірге ешкім белгіленбеген.')); return; }
+  bulkShowOnlySelected = !bulkShowOnlySelected;
+  loadUsersList();
+}
 function updateBulkAssignButton() {
   const btn = document.getElementById('bulkAssignBtn');
   if (!btn) return;
@@ -3804,6 +3851,11 @@ function updateBulkAssignButton() {
   const countEl = document.getElementById('bulkAssignCount');
   if (countEl) countEl.textContent = String(count);
   btn.classList.toggle('hidden', count === 0);
+  const showBtn = document.getElementById('bulkShowSelectedBtn');
+  if (showBtn) {
+    showBtn.classList.toggle('hidden', count === 0);
+    showBtn.textContent = bulkShowOnlySelected ? _L('Показать всех', 'Барлығын көрсету') : `${_L('Показать выбранных', 'Таңдалғандарды көрсету')} (${count})`;
+  }
   const selectAll = document.getElementById('uSelectAll');
   if (selectAll) {
     const visibleIds = (state.users || []).map(u => u.id);
@@ -3812,6 +3864,10 @@ function updateBulkAssignButton() {
 }
 function toggleBulkSelect(id, checked) {
   if (checked) bulkSelectedUserIds.add(id); else bulkSelectedUserIds.delete(id);
+  if (bulkShowOnlySelected && !checked) {
+    if (!bulkSelectedUserIds.size) bulkShowOnlySelected = false;
+    loadUsersList();
+  }
   updateBulkAssignButton();
 }
 function toggleBulkSelectAll(checked) {
@@ -3822,6 +3878,10 @@ function toggleBulkSelectAll(checked) {
   document.querySelectorAll('#usersTable input[type="checkbox"][data-uid]').forEach(cb => {
     cb.checked = bulkSelectedUserIds.has(Number(cb.dataset.uid));
   });
+  if (bulkShowOnlySelected && !checked) {
+    if (!bulkSelectedUserIds.size) bulkShowOnlySelected = false;
+    loadUsersList();
+  }
   updateBulkAssignButton();
 }
 
@@ -4060,6 +4120,11 @@ async function loadUsersList() {
     return;
   }
   state.users = users.filter(u => u.role !== "superadmin");
+  state.users.forEach(u => bulkUserCache.set(u.id, u));
+  if (bulkShowOnlySelected && bulkSelectedUserIds.size && state.tab === 'users') {
+    state.users = [...bulkSelectedUserIds].map(id => bulkUserCache.get(id)).filter(Boolean)
+      .sort((a, b) => String(a.last_name).localeCompare(String(b.last_name), 'ru'));
+  }
   if (!tbody) return;
   const isArchiveTab = state.tab === 'archive';
   const isAdminsTab = state.tab === 'admins';
@@ -6727,6 +6792,7 @@ function assignModalHtml() {
                 <div class="space-x-2 text-xs">
                   <button type="button" onclick="asSelectAll(true)" class="text-blue-600 hover:underline">Выбрать всех</button>
                   <button type="button" onclick="asSelectAll(false)" class="text-slate-500 hover:underline">Снять всё</button>
+                  <button type="button" id="asShowSelectedBtn" onclick="toggleAsShowSelected()" class="text-emerald-700 hover:underline font-semibold">Показать выбранных</button>
                 </div>
               </div>
               <div class="text-[11px] text-slate-500 -mt-1 mb-2">Один номер протокола будет присвоен всем выбранным ниже сотрудникам.</div>
@@ -6749,6 +6815,7 @@ function assignModalHtml() {
 
 let asAllEmployees = [];
 let asSelectedIds = new Set();
+let asShowSelectedOnly = false;   // в списке окна назначения показывать только отмеченных
 // Если назначение курса открыто с карточки сотрудника (п.1 запроса), сюда
 // попадает id этого сотрудника — выбор в списке ниже блокируется на нём одном.
 let asLockedUserId = null;
@@ -6756,7 +6823,31 @@ let asCourses = [];          // курсы, загруженные в модал
 let asExtMode = false;       // модалка сейчас в режиме «внешний курс»
 let asOwnProtNum = '';       // наш предложенный номер протокола — возвращаем при переключении обратно
 
+// Окно назначения встроено не на каждую вкладку: если его нет в разметке — добавляем на лету
+// (раньше на вкладке «Сотрудники» кнопка «Назначить выбранным» падала с TypeError и молчала).
+function ensureAssignModal() {
+  if (document.getElementById('assignModal')) return;
+  const holder = document.createElement('div');
+  holder.innerHTML = assignModalHtml();
+  while (holder.firstChild) document.body.appendChild(holder.firstChild);
+}
+
+let assignModalOpening = false;
 async function openAssignModal(presetUserId, presetUserIds, presetCourseId) {
+  if (assignModalOpening) return;           // защита от повторных нажатий, пока грузятся списки
+  assignModalOpening = true;
+  try {
+    ensureAssignModal();
+    await _openAssignModalImpl(presetUserId, presetUserIds, presetCourseId);
+  } catch (e) {
+    console.error('openAssignModal:', e);
+    alert('Не удалось открыть окно назначения: ' + (e && e.message ? e.message : e));
+  } finally {
+    assignModalOpening = false;
+  }
+}
+
+async function _openAssignModalImpl(presetUserId, presetUserIds, presetCourseId) {
   asLockedUserId = presetUserId ? Number(presetUserId) : null;
   // getUsers() без параметра status по умолчанию отдаёт только действующих сотрудников —
   // уволенные и находящиеся в декрете (вкладка «Архив») в список для назначения теста не попадают.
@@ -6842,6 +6933,7 @@ async function openAssignModal(presetUserId, presetUserIds, presetCourseId) {
     } catch (e) {}
   }
 
+  asShowSelectedOnly = false;
   applyAsExternalMode();
   renderAssignEmployeeList();
   document.getElementById('assignModal').classList.remove('hidden');
@@ -6990,6 +7082,8 @@ function renderAssignEmployeeList() {
   const dept = document.getElementById('asFilterDept').value;
 
   const filtered = asAllEmployees.filter(u => {
+    if (asShowSelectedOnly && !asSelectedIds.has(u.id)) return false;
+    if (asShowSelectedOnly) return true;   // «Показать выбранных» игнорирует поиск и фильтры — виден весь выбор
     if (obj && u.object !== obj) return false;
     if (dept && u.department !== dept) return false;
     if (q) {
@@ -7001,7 +7095,7 @@ function renderAssignEmployeeList() {
 
   const div = document.getElementById('asEmployeeList');
   if (!filtered.length) {
-    div.innerHTML = `<div class="p-3 text-xs text-slate-400 text-center">${t('no_data')}</div>`;
+    div.innerHTML = `<div class="p-3 text-xs text-slate-400 text-center">${asShowSelectedOnly ? 'Никто не выбран' : t('no_data')}</div>`;
   } else {
     div.innerHTML = filtered.map(u => `
       <label class="flex items-center gap-2 px-3 py-2 text-sm hover:bg-slate-50 cursor-pointer">
@@ -7016,7 +7110,18 @@ function renderAssignEmployeeList() {
 
 function toggleAsEmployee(id, checked) {
   if (checked) asSelectedIds.add(id); else asSelectedIds.delete(id);
+  if (asShowSelectedOnly && !checked) {
+    if (!asSelectedIds.size) asShowSelectedOnly = false;
+    renderAssignEmployeeList();
+    return;
+  }
   updateAsSelectedCount();
+}
+
+function toggleAsShowSelected() {
+  if (!asShowSelectedOnly && !asSelectedIds.size) { alert('Пока никто не выбран.'); return; }
+  asShowSelectedOnly = !asShowSelectedOnly;
+  renderAssignEmployeeList();
 }
 
 function asSelectAll(select) {
@@ -7024,6 +7129,8 @@ function asSelectAll(select) {
   const obj = document.getElementById('asFilterObject').value;
   const dept = document.getElementById('asFilterDept').value;
   const filtered = asAllEmployees.filter(u => {
+    if (asShowSelectedOnly && !asSelectedIds.has(u.id)) return false;
+    if (asShowSelectedOnly) return true;   // «Показать выбранных» игнорирует поиск и фильтры — виден весь выбор
     if (obj && u.object !== obj) return false;
     if (dept && u.department !== dept) return false;
     if (q) {
@@ -7039,6 +7146,8 @@ function asSelectAll(select) {
 function updateAsSelectedCount() {
   const span = document.getElementById('asSelectedCount');
   if (span) span.textContent = asSelectedIds.size ? `(${asSelectedIds.size})` : '';
+  const showBtn = document.getElementById('asShowSelectedBtn');
+  if (showBtn) showBtn.textContent = asShowSelectedOnly ? 'Показать всех' : (asSelectedIds.size ? `Показать выбранных (${asSelectedIds.size})` : 'Показать выбранных');
 }
 
 function onAsHistoricalToggle() {
@@ -7640,9 +7749,9 @@ async function downloadProtocolDocx(id) {
   }
 }
 
-// PDF со статусом подписания (открывается во вкладке — Content-Disposition: inline на сервере)
+// PDF со статусом подписания — скачивается файлом (имя берётся из заголовка ответа сервера)
 function downloadProtocolPdf(id) {
-  downloadAuthed('/api/protocols/' + id + '/pdf');
+  downloadAuthed('/api/protocols/' + id + '/pdf', null, true);
 }
 
 // Предложить следующий номер по нумерации года даты открытия (пока номер не правили вручную)

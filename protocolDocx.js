@@ -94,6 +94,16 @@ const HEADER_LINE_TARGETS = [
 
 const EMU_PER_PT = 12700;
 
+// ---------- ЕДИНЫЙ стиль ФИО/должности в шапке и в блоке подписей ----------
+// Раньше текст подставлялся в стиле «линии» шаблона, а у трёх ролей он разный (председатель —
+// жирный курсив 10 pt, инженер — жирный 12 pt, член комиссии — курсив 7 pt; в шапке 11/8/8 pt),
+// плюс длинный текст автоматически уменьшал кегль. Теперь везде один и тот же шрифт
+// (Times New Roman, как в бланке), жирный, прямой, один кегль, без авто-уменьшения.
+const SIGN_FONT_PT = 8;
+const SIGN_NAME_RPR = '<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="Times New Roman" w:cs="Times New Roman"/><w:b/><w:bCs/></w:rPr>';
+// Одинаковая предельная высота картинки подписи у всех ролей (pt).
+const SIGN_IMG_MAX_H_PT = 22;
+
 // ---------- Печать организации ----------
 // Печать ставится РОВНО ОДИН раз на весь документ, привязана к блоку подписи
 // председателя (т.к. это единственная роль в SIGNATURE_LINE_TARGETS, для которой мы
@@ -186,6 +196,30 @@ function buildInlineImageXml({ relId, cx, cy }) {
     + `<pic:blipFill><a:blip r:embed="${relId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>`
     + `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>`
     + '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>';
+}
+
+// Подпись — ПЛАВАЮЩАЯ картинка (wrapNone), а не inline: inline-картинка увеличивала высоту строки
+// и «раздвигала» строки бланка, из-за чего блок подписей съезжал. Плавающая подпись не влияет на
+// вёрстку вообще — строки стоят ровно там же, где в пустом шаблоне. Привязка по горизонтали — к
+// символу в начале зоны подписи (offsetX центрирует картинку в зоне), по вертикали — к абзацу.
+function buildSignatureAnchorXml({ relId, cx, cy, offsetXEmu, offsetYEmu }) {
+  const id = sigDocPrCounter++;
+  return '<w:r><w:rPr><w:noProof/></w:rPr><w:drawing>'
+    + `<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="${id}" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">`
+    + '<wp:simplePos x="0" y="0"/>'
+    + `<wp:positionH relativeFrom="character"><wp:posOffset>${offsetXEmu}</wp:posOffset></wp:positionH>`
+    + `<wp:positionV relativeFrom="paragraph"><wp:posOffset>${offsetYEmu}</wp:posOffset></wp:positionV>`
+    + `<wp:extent cx="${cx}" cy="${cy}"/>`
+    + '<wp:effectExtent l="0" t="0" r="0" b="0"/>'
+    + '<wp:wrapNone/>'
+    + `<wp:docPr id="${id}" name="Signature${id}"/>`
+    + '<wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr>'
+    + '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+    + '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+    + `<pic:nvPicPr><pic:cNvPr id="${id}" name="Signature${id}.png"/><pic:cNvPicPr/></pic:nvPicPr>`
+    + `<pic:blipFill><a:blip r:embed="${relId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>`
+    + `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>`
+    + '</pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>';
 }
 
 // Плавающая картинка печати. behindDoc="0" — печать поверх подписи (как в жизни, штамп
@@ -297,8 +331,10 @@ function buildSpacerRuns(rPrXml, style, widthPt, side) {
 // авто-уменьшением кегля. Общая ширина возвращаемых run-ов = zonePt.
 // Если даже при минимальном кегле строка не влезает — сокращается ДОЛЖНОСТЬ («…»), ФИО
 // сохраняется целиком (и только если не влезает уже одно ФИО — оно обрезается).
-function buildFittedCenteredRun(rPrXml, position, fio, zonePt, { minSizePt = 6, marginPt = 2 } = {}) {
+function buildFittedCenteredRun(rPrXml, position, fio, zonePt, { minSizePt = 6, marginPt = 2, fixedSizePt = null } = {}) {
   const style = runStyleFromRPr(rPrXml);
+  // fixedSizePt — единый кегль (без авто-уменьшения): если текст не влезает, сокращается должность («…»)
+  if (fixedSizePt) { style.sizePt = fixedSizePt; minSizePt = fixedSizePt; }
   const avail = Math.max(0, zonePt - marginPt * 2);
   const width = (t, sz) => measureTextPt(t, sz, style);
   const posClean = cleanText(position);
@@ -373,26 +409,36 @@ async function embedSignaturesIntoXml(zip, xml, signaturesByRole, companyStamp) 
     // У всех трёх ролей (включая председателя) — «фактическая должность из БД, ФИО».
     // Зона ФИО = реальная ширина (pt) исходной линии подчёркивания; gap и картинка подписи
     // после неё стартуют ровно там же, где в чистом шаблоне (над надписью «Подпись»).
-    const nameStyle = runStyleFromRPr(rPrMatch[1]);
-    const nameZonePt = measureTextPt(parts.nameBlank, nameStyle.sizePt, nameStyle);
-    const nameRun = buildFittedCenteredRun(rPrMatch[1], position, fio, nameZonePt);
+    // Зоны (pt) берём по ИСХОДНОМУ стилю линий шаблона — ширина строки не меняется. Сам текст ФИО —
+    // единым стилем (SIGN_NAME_RPR, SIGN_FONT_PT), одинаковым у всех ролей.
+    const origStyle = runStyleFromRPr(rPrMatch[1]);
+    const nameZonePt = measureTextPt(parts.nameBlank, origStyle.sizePt, origStyle);
+    const sigZonePt = measureTextPt(parts.sigBlank, origStyle.sizePt, origStyle);
+    const nameRun = buildFittedCenteredRun(SIGN_NAME_RPR, position, fio, nameZonePt, { fixedSizePt: SIGN_FONT_PT });
     const gapRun = `<w:r>${rPrMatch[1]}<w:t xml:space="preserve">${xmlEscape(parts.gap)}</w:t></w:r>`;
+    // Линия под подпись остаётся в строке как в шаблоне — картинка лишь ложится поверх неё.
+    const sigBlankRun = `<w:r>${rPrMatch[1]}<w:t xml:space="preserve">${xmlEscape(parts.sigBlank)}</w:t></w:r>`;
 
-    let sigRun;
+    let sigAnchor = '';
     const imgBuf = decodePngImage(sig.signature_data);
     const dims = imgBuf ? pngDimensions(imgBuf) : null;
     if (imgBuf && dims && dims.width && dims.height) {
       const relId = await addMedia(imgBuf, `media/sig-${target.role}-${Date.now()}-${Math.floor(Math.random() * 1e6)}.png`);
       const wPtFull = dims.width * 72 / 96;
       const hPtFull = dims.height * 72 / 96;
-      const scale = Math.min(target.maxWidthPt / wPtFull, target.maxHeightPt / hPtFull, 1);
-      const cx = Math.round(wPtFull * scale * EMU_PER_PT);
-      const cy = Math.round(hPtFull * scale * EMU_PER_PT);
-      sigRun = buildInlineImageXml({ relId, cx, cy });
-    } else {
-      // Подпись есть в БД, но картинку прочитать не удалось — не ломаем документ,
-      // оставляем исходную линию для подписи как в шаблоне.
-      sigRun = `<w:r>${rPrMatch[1]}<w:t xml:space="preserve">${xmlEscape(parts.sigBlank)}</w:t></w:r>`;
+      const maxW = Math.min(target.maxWidthPt, sigZonePt);
+      const scale = Math.min(maxW / wPtFull, SIGN_IMG_MAX_H_PT / hPtFull, 1);
+      const wPt = wPtFull * scale;
+      const hPt = hPtFull * scale;
+      // низ картинки — на уровне линии подписи: базовая линия строки ≈ 0.89 от кегля самой крупной вставки
+      const lineSz = Math.max(origStyle.sizePt, SIGN_FONT_PT);
+      sigAnchor = buildSignatureAnchorXml({
+        relId,
+        cx: Math.round(wPt * EMU_PER_PT),
+        cy: Math.round(hPt * EMU_PER_PT),
+        offsetXEmu: Math.round(Math.max(0, (sigZonePt - wPt) / 2) * EMU_PER_PT),
+        offsetYEmu: Math.round((lineSz * 0.89 - hPt + 1) * EMU_PER_PT)
+      });
     }
 
     let stampRun = '';
@@ -415,7 +461,7 @@ async function embedSignaturesIntoXml(zip, xml, signaturesByRole, companyStamp) 
       // отсутствие печати не должно ронять генерацию всего протокола.
     }
 
-    xml = xml.replace(target.runXml, () => nameRun + gapRun + sigRun + stampRun);
+    xml = xml.replace(target.runXml, () => nameRun + gapRun + sigAnchor + sigBlankRun + stampRun);
   }
 
   if (relsXml !== null) zip.file('word/_rels/document.xml.rels', relsXml);
@@ -450,10 +496,10 @@ function embedHeaderNamesIntoXml(xml, signaturesByRole) {
     const zonePt = measureTextPt(m[2], style.sizePt, style);
     // ведущий пробел перед линией (у председателя) сохраняем как есть, вне зоны
     const leadRun = m[1]
-      ? `<w:r>${rPrMatch[1]}<w:t xml:space="preserve">${m[1]}</w:t></w:r>`
+      ? `<w:r>${rPrMatch[1]}<w:t xml:space="preserve">${m[1].replace(/ /g, NBSP)}</w:t></w:r>`   // NBSP (той же ширины), чтобы строка не теряла исходную высоту
       : '';
 
-    xml = xml.replace(target.runXml, () => leadRun + buildFittedCenteredRun(rPrMatch[1], position, fio, zonePt));
+    xml = xml.replace(target.runXml, () => leadRun + buildFittedCenteredRun(SIGN_NAME_RPR, position, fio, zonePt, { fixedSizePt: SIGN_FONT_PT }));
   }
 
   return xml;
