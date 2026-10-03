@@ -977,6 +977,8 @@ function logout() {
   localStorage.removeItem('token');
   localStorage.removeItem('user');
   sessionStorage.removeItem('orgFilter');
+  sessionStorage.removeItem('dashCategory');
+  dashCategory = '';
   state.org = { object: [], department: [] };
   myTestsTab = 'todo';
   render();
@@ -1408,6 +1410,7 @@ async function loadTabContent() {
 
   if (state.tab === 'dashboard') {
     container.innerHTML = `
+      <div id="dashCatBar" class="flex flex-wrap items-center gap-1.5 mb-4"></div>
       <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
         <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col">
           <div class="text-xs font-bold text-slate-500 uppercase leading-tight min-h-[2em] flex items-start">Сотрудников всего</div>
@@ -1435,6 +1438,7 @@ async function loadTabContent() {
         </div>
       </div>
       ${orgNoteHtml(_L('Показатели выше — только по:', 'Жоғарыдағы көрсеткіштер тек мыналар бойынша:'))}
+      ${dashCategoryNoteHtml()}
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
         <h3 class="text-base font-bold mb-4">Быстрые действия</h3>
         <div class="flex flex-wrap gap-3">
@@ -1455,9 +1459,12 @@ async function loadTabContent() {
       </div>
       ${assignModalHtml()}
     `;
+    renderDashCatBar();
     try {
-      const [u, c, a] = await Promise.all([api.getUsers(orgParams()), api.getCourses(orgParams()), api.getAssignments({ ...orgParams(), active_only: 1 })]);
-      document.getElementById('dashUsers').textContent = u.length;
+      const [u, c, a] = await Promise.all([api.getUsers(orgParams()), api.getCourses(orgParams()), api.getAssignments({ ...dashParams(), active_only: 1 })]);
+      dashUsersAll = u;
+      renderDashCatBar();   // теперь с числом сотрудников в каждой категории
+      document.getElementById('dashUsers').textContent = u.filter(x => !dashCategory || (x.staff_category || 'employee') === dashCategory).length;
 
       const now = new Date();
       // «Прошли обучение», «Ожидают», «Не сдали», «Просрочено» считаем по количеству
@@ -2991,6 +2998,45 @@ async function clearSavedSignature() {
 let dashCourseStats = [];
 let dashSelectedCourseId = null;
 let dashMainGroup = 'biot';   // активный дашборд: 'biot' | 'internal' | 'external' (у каждого своя система записи)
+// Категория сотрудников на дашборде: '' (все) | 'manager' | 'specialist' | 'employee' — действует на все показатели главной
+let dashCategory = (() => { try { const v = sessionStorage.getItem('dashCategory') || ''; return ['manager', 'specialist', 'employee'].includes(v) ? v : ''; } catch (e) { return ''; } })();
+const DASH_CATS = [
+  { key: '', ru: 'Все', kz: 'Барлығы' },
+  { key: 'manager', ru: 'Руководители', kz: 'Басшылар' },
+  { key: 'specialist', ru: 'Специалисты', kz: 'Мамандар' },
+  { key: 'employee', ru: 'Работники', kz: 'Жұмысшылар' }
+];
+let dashUsersAll = [];
+function dashParams() { return { ...orgParams(), category: dashCategory }; }
+function dashCatLabel(key) {
+  const c = DASH_CATS.find(x => x.key === (key || 'employee')) || DASH_CATS[3];
+  return _L(c.ru, c.kz);
+}
+function dashCatChip(key) {
+  const k = key || 'employee';
+  const cls = k === 'manager' ? 'bg-indigo-100 text-indigo-700' : k === 'specialist' ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-600';
+  const one = { manager: ['Руководитель', 'Басшы'], specialist: ['Специалист', 'Маман'], employee: ['Работник', 'Жұмысшы'] }[k];
+  return `<span class="text-[10px] font-bold px-1.5 py-0.5 rounded ${cls}">${_L(one[0], one[1])}</span>`;
+}
+function renderDashCatBar() {
+  const box = document.getElementById('dashCatBar');
+  if (!box) return;
+  const cnt = key => dashUsersAll.filter(u => !key || (u.staff_category || 'employee') === key).length;
+  box.innerHTML = `<span class="text-xs font-bold text-slate-500 uppercase mr-1">${_L('Категория', 'Санат')}:</span>` + DASH_CATS.map(c => {
+    const on = c.key === dashCategory;
+    return `<button type="button" onclick="selectDashCategory('${c.key}')" class="px-3 py-1.5 rounded-full text-xs font-bold border ${on ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}">${esc(_L(c.ru, c.kz))} <span class="tabular-nums ${on ? 'text-blue-100' : 'text-slate-400'}">${dashUsersAll.length ? cnt(c.key) : ''}</span></button>`;
+  }).join('');
+}
+function selectDashCategory(key) {
+  dashCategory = key || '';
+  try { sessionStorage.setItem('dashCategory', dashCategory); } catch (e) {}
+  renderDashCatBar();
+  loadTabContent();   // перерисовать главную: карточки, статистика по курсам, список просроченных
+}
+function dashCategoryNoteHtml() {
+  if (!dashCategory) return '';
+  return `<div class="mb-4 text-xs text-indigo-800 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">👤 ${_L('Показатели — только по категории:', 'Көрсеткіштер тек санат бойынша:')} <b>${esc(dashCatLabel(dashCategory))}</b></div>`;
+}
 let dashExpAll = true;        // список «Просрочено и скоро истекает» снизу: true — по всем категориям, false — по выбранному дашборду/курсу
 let dashAssignData = null;
 let dashPlanned = [];  // запланированные группы обучения (для строки «Записаны в группу» на панели курса)  // активные назначения (с учётом фильтра объект/отдел): уникальные подсчёты и «записать всех»
@@ -3059,8 +3105,8 @@ async function loadDashboardCourseStats() {
   if (!tabsDiv || !panelDiv) return;
   try {
     const [summary, assigns, allCourses, planned] = await Promise.all([
-      api.getCourseStatsSummary(orgParams()),
-      api.getAssignments({ ...orgParams(), active_only: 1 }).catch(() => null),
+      api.getCourseStatsSummary(dashParams()),
+      api.getAssignments({ ...dashParams(), active_only: 1 }).catch(() => null),
       api.getCourses().catch(() => null),
       api.req('/api/training-sessions?status=planned').catch(() => [])
     ]);
@@ -3368,7 +3414,7 @@ function dashCourseUserSets(courseId) {
 async function dashAssignProblem(courseId) {
   const ids = new Set();
   try {
-    const untrained = await api.getUntrainedEmployees(courseId, orgParams());
+    const untrained = await api.getUntrainedEmployees(courseId, dashParams());
     (untrained || []).forEach(u => ids.add(Number(u.id)));
   } catch (e) {
     alert(e && e.message ? e.message : t('error_generic'));
@@ -3404,7 +3450,7 @@ async function loadExpiringWidget() {
   const div = document.getElementById('expiringList');
   if (!div) return;
   try {
-    expData = await api.getExpiring(expState.days, orgParams());
+    expData = await api.getExpiring(expState.days, dashParams());
     expSelected = new Set();
     renderExpiringFilters();
     renderExpiringList();
@@ -3552,6 +3598,7 @@ function renderExpiringList() {
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
               <button onclick="openUserProfile(${a.user_id})" class="font-semibold text-slate-900 text-sm hover:text-blue-600 hover:underline text-left">${esc(a.last_name)} ${esc(a.first_name)}</button>
+              ${dashCatChip(a.staff_category)}
               <span class="text-xs font-mono text-slate-500" title="${_L('Логин', 'Логин')}">${_L('логин', 'логин')}: ${a.login ? esc(a.login) : '—'}</span>
               <span class="text-xs font-semibold px-2 py-0.5 rounded-md" style="border:1.5px solid ${col.fg};background:${col.bg};color:${col.fg}" title="${esc(catLabelOf(a))}">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</span>
             </div>
@@ -5202,9 +5249,11 @@ async function sessionsComplete() {
 }
 
 // ---------- выбор сотрудников ----------
-const sessPick = { users: [], q: '', object: '', department: '', selected: new Set() };
+const SESS_EXPIRING_DAYS = 30;   // окно «истекает срок действия» в окне выбора сотрудников: сколько дней вперёд
+const sessPick = { users: [], q: '', object: '', department: '', selected: new Set(), onShift: false, expiring: false, exp: new Map(), expLoaded: false };
 async function sessionsOpenPicker() {
   sessPick.q = ''; sessPick.object = ''; sessPick.department = ''; sessPick.selected = new Set();
+  sessPick.onShift = false; sessPick.expiring = false; sessPick.exp = new Map(); sessPick.expLoaded = false;
   if (!state.metaLoaded) { try { await refreshOrgMeta(); } catch (e) { /* список объектов не критичен */ } }
   sessionsModalShell('sessPickModal', '<div class="text-slate-400 text-sm">Загрузка…</div>', 'max-w-3xl');
   await sessionsPickLoad();
@@ -5214,12 +5263,31 @@ async function sessionsPickLoad() {
   if (sessPick.object) qs.set('object', sessPick.object);
   if (sessPick.department) qs.set('department', sessPick.department);
   try { sessPick.users = await api.req('/api/users' + (qs.toString() ? '?' + qs : '')); } catch (e) { return sessErr(e); }
+  // Просрочено / истекает по курсу этой заявки: последняя запись «сдал» по сотруднику с next_test_date в ближайшие N дней
+  // (или уже в прошлом). Тот же эндпоинт, что и «Просрочено и скоро истекает» на главной; бессрочные курсы он не отдаёт.
+  if (!sessPick.expLoaded) {
+    try {
+      const rows = await api.getExpiring(SESS_EXPIRING_DAYS, {});
+      const cid = String((sessionsState.detail || {}).course_id);
+      const m = new Map();
+      (rows || []).forEach((a) => { if (String(a.course_id) === cid) m.set(Number(a.user_id), a.next_test_date); });
+      sessPick.exp = m;
+    } catch (e) { sessPick.exp = new Map(); }
+    sessPick.expLoaded = true;
+  }
   sessionsPickRender();
+}
+function sessPickDaysLeft(uid) {
+  const d = sessPick.exp.get(Number(uid));
+  return d ? Math.ceil((new Date(d) - new Date()) / 86400000) : null;
 }
 function sessionsPickFiltered() {
   const words = String(sessPick.q || '').toLowerCase().split(/\s+/).filter(Boolean);
-  if (!words.length) return sessPick.users;
-  return sessPick.users.filter((u) => {
+  let list = sessPick.users;
+  if (sessPick.onShift) list = list.filter((u) => u.rotation_status === 'on_shift');
+  if (sessPick.expiring) list = list.filter((u) => sessPick.exp.has(Number(u.id)));
+  if (!words.length) return list;
+  return list.filter((u) => {
     const hay = `${u.last_name || ''} ${u.first_name || ''} ${u.login || ''} ${u.position || ''} ${u.department || ''}`.toLowerCase();
     return words.every((w) => hay.includes(w));
   });
@@ -5234,12 +5302,17 @@ function sessionsPickRender() {
   const depOpts = ['<option value="">Все отделы</option>'].concat((meta.departments || []).map((o) => `<option ${sessPick.department === o ? 'selected' : ''}>${esc(o)}</option>`)).join('');
   const shown = sessionsPickFiltered();
   const free = shown.filter((u) => !inSession.has(u.id));
+  // числа на кнопках — сколько человек попадёт, если включить именно этот фильтр (с учётом поиска и второго фильтра)
+  const onShiftCount = (() => { const k = sessPick.onShift; sessPick.onShift = true; const n = sessionsPickFiltered().length; sessPick.onShift = k; return n; })();
+  const expCount = (() => { const k = sessPick.expiring; sessPick.expiring = true; const n = sessionsPickFiltered().length; sessPick.expiring = k; return n; })();
   const rows = shown.map((u) => {
     const already = inSession.has(u.id);
     return `<label class="flex items-center gap-2 py-1.5 border-t ${already ? 'opacity-40' : 'cursor-pointer hover:bg-slate-50'}">
       <input type="checkbox" ${already ? 'disabled checked' : ''} ${sessPick.selected.has(u.id) ? 'checked' : ''} onchange="sessionsPickToggle(${u.id}, this.checked)">
       <span class="font-medium text-sm">${esc(u.last_name || '')} ${esc(u.first_name || '')}</span>
       <span class="text-xs text-slate-500">${esc(u.position || '')}${u.department ? ' · ' + esc(u.department) : ''}</span>
+      ${u.rotation_status === 'on_shift' ? `<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded ${rotBadgeClass('on_shift')}" title="${esc(rotStatusLabel('on_shift'))}">${ROT_ICON.on_shift}${u.rotation_days_left != null ? ' ' + esc(rotNoteText(u)) : ''}</span>` : ''}
+      ${(() => { const dl = sessPickDaysLeft(u.id); if (dl == null) return ''; return dl < 0 ? `<span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700">${_L('просрочено', 'мерзімі өткен')} ${Math.abs(dl)} ${_L('дн.', 'күн')}</span>` : `<span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">${dl === 0 ? _L('истекает сегодня', 'бүгін аяқталады') : _L('истекает через', 'аяқталуына') + ' ' + dl + ' ' + _L('дн.', 'күн')}</span>`; })()}
       ${already ? '<span class="ml-auto text-xs text-slate-400">уже в заявке</span>' : ''}
     </label>`;
   }).join('');
@@ -5250,6 +5323,10 @@ function sessionsPickRender() {
       <input id="spQ" type="text" value="${esc(sessPick.q)}" placeholder="Поиск по ФИО / логину" oninput="sessPick.q=this.value;sessionsPickRender()" class="border rounded-lg px-3 py-1.5 text-sm flex-1 min-w-[160px]">
       <select onchange="sessPick.object=this.value;sessionsPickLoad()" class="border rounded-lg px-2 py-1.5 text-sm">${objOpts}</select>
       <select onchange="sessPick.department=this.value;sessionsPickLoad()" class="border rounded-lg px-2 py-1.5 text-sm">${depOpts}</select>
+    </div>
+    <div class="flex flex-wrap items-center gap-2 mb-2 text-xs">
+      <button type="button" onclick="sessPick.onShift=!sessPick.onShift;sessionsPickRender()" class="px-3 py-1.5 rounded-full border font-bold ${sessPick.onShift ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-emerald-700 border-emerald-300 hover:bg-emerald-50'}">👷 ${_L('На вахте', 'Вахтада')} <span class="tabular-nums">${onShiftCount}</span></button>
+      <button type="button" onclick="sessPick.expiring=!sessPick.expiring;sessionsPickRender()" title="${esc(_L('Срок действия курса уже истёк или истекает в ближайшие', 'Курс мерзімі өтті немесе жақын арада аяқталады') + ' ' + SESS_EXPIRING_DAYS + ' ' + _L('дн.', 'күн'))}" class="px-3 py-1.5 rounded-full border font-bold ${sessPick.expiring ? 'bg-red-600 text-white border-red-600' : 'bg-white text-red-700 border-red-300 hover:bg-red-50'}">⏰ ${_L('Просрочено и истекает', 'Мерзімі өткен және аяқталады')} <span class="tabular-nums">${expCount}</span></button>
     </div>
     <div class="flex flex-wrap items-center gap-2 mb-2 text-xs">
       <button onclick="sessionsPickAll()" class="px-3 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 font-semibold">Выбрать всех найденных (${free.length})</button>
@@ -5635,7 +5712,7 @@ async function openUntrainedModal(courseId, title) {
   body.innerHTML = `<div class="text-slate-400 text-sm">${t('loading')}</div>`;
   modal.classList.remove('hidden');
   try {
-    const list = await api.getUntrainedEmployees(courseId, orgParams());
+    const list = await api.getUntrainedEmployees(courseId, dashParams());
     untrainedModalUserIds = list.map(u => u.id);
     if (btn) btn.classList.toggle('hidden', list.length === 0);
     if (!list.length) {
@@ -5683,7 +5760,7 @@ async function openMandatoryMissingList() {
   body.innerHTML = `<div class="text-slate-400 text-sm">${t('loading')}</div>`;
   modal.classList.remove('hidden');
   try {
-    const lists = await Promise.all(missingCourses.map(c => api.getUntrainedEmployees(c.id, orgParams())));
+    const lists = await Promise.all(missingCourses.map(c => api.getUntrainedEmployees(c.id, dashParams())));
     body.innerHTML = missingCourses.map((c, idx) => {
       const list = lists[idx] || [];
       const title = CURRENT_LANG === 'kz' ? (c.title_kz || c.title_ru) : (c.title_ru || c.title_kz);
