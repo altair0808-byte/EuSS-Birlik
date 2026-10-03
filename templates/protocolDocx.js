@@ -22,6 +22,7 @@ const fs = require('fs');
 const path = require('path');
 const JSZip = require('jszip');
 const { measureTextPt } = require('./lib/textWidth');
+const { resolveCleanImage } = require('./lib/imageAssets');
 
 const TEMPLATE_PATH = path.join(__dirname, 'templates', 'protocol_template.docx');
 
@@ -102,7 +103,8 @@ const EMU_PER_PT = 12700;
 const SIGN_FONT_PT = 8;
 const SIGN_NAME_RPR = '<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="Times New Roman" w:cs="Times New Roman"/><w:b/><w:bCs/></w:rPr>';
 // Одинаковая предельная высота картинки подписи у всех ролей (pt).
-const SIGN_IMG_MAX_H_PT = 22;
+const SIGN_IMG_MAX_H_PT = 28;   // подпись обрезана по штриху (без белых полей), поэтому 28 pt ≈ в 1.5 раза крупнее прежней
+const SIGN_IMG_MAX_W_PT = 135;
 
 // ---------- Печать организации ----------
 // Печать ставится РОВНО ОДИН раз на весь документ, привязана к блоку подписи
@@ -420,14 +422,15 @@ async function embedSignaturesIntoXml(zip, xml, signaturesByRole, companyStamp) 
     const sigBlankRun = `<w:r>${rPrMatch[1]}<w:t xml:space="preserve">${xmlEscape(parts.sigBlank)}</w:t></w:r>`;
 
     let sigAnchor = '';
-    const imgBuf = decodePngImage(sig.signature_data);
+    // Подпись сохранялась с белым фоном (canvas был залит белым) — белая «бумага» вокруг штриха
+    // убирается (становится прозрачной), лишние поля обрезаются: resolveCleanImage из lib/imageAssets.js
+    const imgBuf = await resolveCleanImage(sig.signature_data);
     const dims = imgBuf ? pngDimensions(imgBuf) : null;
     if (imgBuf && dims && dims.width && dims.height) {
       const relId = await addMedia(imgBuf, `media/sig-${target.role}-${Date.now()}-${Math.floor(Math.random() * 1e6)}.png`);
       const wPtFull = dims.width * 72 / 96;
       const hPtFull = dims.height * 72 / 96;
-      const maxW = Math.min(target.maxWidthPt, sigZonePt);
-      const scale = Math.min(maxW / wPtFull, SIGN_IMG_MAX_H_PT / hPtFull, 1);
+      const scale = Math.min(SIGN_IMG_MAX_W_PT / wPtFull, SIGN_IMG_MAX_H_PT / hPtFull, 1);
       const wPt = wPtFull * scale;
       const hPt = hPtFull * scale;
       // низ картинки — на уровне линии подписи: базовая линия строки ≈ 0.89 от кегля самой крупной вставки
@@ -436,8 +439,8 @@ async function embedSignaturesIntoXml(zip, xml, signaturesByRole, companyStamp) 
         relId,
         cx: Math.round(wPt * EMU_PER_PT),
         cy: Math.round(hPt * EMU_PER_PT),
-        offsetXEmu: Math.round(Math.max(0, (sigZonePt - wPt) / 2) * EMU_PER_PT),
-        offsetYEmu: Math.round((lineSz * 0.89 - hPt + 1) * EMU_PER_PT)
+        offsetXEmu: Math.round(Math.max(-15, (sigZonePt - wPt) / 2) * EMU_PER_PT),
+        offsetYEmu: Math.round((lineSz * 0.89 - hPt - 2) * EMU_PER_PT)
       });
     }
 
