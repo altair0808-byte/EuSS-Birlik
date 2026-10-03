@@ -89,6 +89,8 @@ initDb()
       restoreExpiredLeaves();
       setInterval(restoreExpiredLeaves, 60 * 60 * 1000);
       // Фоновая отправка файлов в Google Drive (если заданы GDRIVE_*); сайт от неё не зависит
+      // Прогрев конвертера PDF (создаёт профиль LibreOffice заранее), чтобы первый «Скачать PDF» не ждал
+      setTimeout(() => { try { require('./protocolPdf').warmUpPdfConverter(); } catch (e) { /* ignore */ } }, 20000);
       try { require('./driveSync').startWorker(); } catch (e) { console.error('[drive] не удалось запустить воркер:', e.message); }
     });
   })

@@ -188,6 +188,45 @@ async function normalizeStampToPng(value) {
   }
 }
 
+// Подпись из канваса часто тонкая и бледная (светло-синяя/серая, штрих 1–2 px), а после уменьшения до
+// 28 pt почти пропадает. Делаем штрих тёмным (почти чёрно-синий) и чуть толще: цвет затемняется,
+// прозрачность усиливается, штрих расширяется на radiusPx пикселей (максимум по соседям).
+const SIGN_DARKEN = 0.35;       // 1 = цвет как был, 0 = чёрный
+const SIGN_ALPHA_BOOST = 1.8;   // усиление непрозрачности полупрозрачных краёв штриха
+async function darkenSignature(buf, radiusPx) {
+  let sharp;
+  try { sharp = require('sharp'); } catch (e) { return buf; }
+  try {
+    const r = Math.max(0, Math.min(3, Math.round(radiusPx)));
+    const { data, info } = await sharp(buf).ensureAlpha().extend({ top: r, bottom: r, left: r, right: r, background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .raw().toBuffer({ resolveWithObject: true });
+    const { width: w, height: h } = info;
+    const out = Buffer.from(data);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        let a = 0, br = 0, bg = 0, bb = 0;
+        for (let dy = -r; dy <= r; dy++) {
+          const yy = y + dy; if (yy < 0 || yy >= h) continue;
+          for (let dx = -r; dx <= r; dx++) {
+            const xx = x + dx; if (xx < 0 || xx >= w) continue;
+            const j = (yy * w + xx) * 4;
+            if (data[j + 3] > a) { a = data[j + 3]; br = data[j]; bg = data[j + 1]; bb = data[j + 2]; }
+          }
+        }
+        const i = (y * w + x) * 4;
+        out[i] = Math.round(br * SIGN_DARKEN);
+        out[i + 1] = Math.round(bg * SIGN_DARKEN);
+        out[i + 2] = Math.round(bb * SIGN_DARKEN);
+        out[i + 3] = Math.min(255, Math.round(a * SIGN_ALPHA_BOOST));
+      }
+    }
+    return await sharp(out, { raw: { width: w, height: h, channels: 4 } }).png().toBuffer();
+  } catch (e) {
+    console.warn('[protocolDocx] Не удалось затемнить подпись, используется исходная:', e.message);
+    return buf;
+  }
+}
+
 let sigDocPrCounter = 900001; // произвольный диапазон id/z-order, не пересекающийся с шаблоном
 
 function buildInlineImageXml({ relId, cx, cy }) {
@@ -430,8 +469,14 @@ async function embedSignaturesIntoXml(zip, xml, signaturesByRole, companyStamp) 
     let sigAnchor = '';
     // Подпись сохранялась с белым фоном (canvas был залит белым) — белая «бумага» вокруг штриха
     // убирается (становится прозрачной), лишние поля обрезаются: resolveCleanImage из lib/imageAssets.js
-    const imgBuf = await resolveCleanImage(sig.signature_data);
-    const dims = imgBuf ? pngDimensions(imgBuf) : null;
+    let imgBuf = await resolveCleanImage(sig.signature_data);
+    let dims = imgBuf ? pngDimensions(imgBuf) : null;
+    if (imgBuf && dims && dims.width && dims.height) {
+      // сколько пикселей картинки приходится на 1 pt после вписывания в SIGN_IMG_MAX_*: от этого зависит толщина штриха
+      const pxPerPt = Math.max(dims.width * 72 / 96 / SIGN_IMG_MAX_W_PT, dims.height * 72 / 96 / SIGN_IMG_MAX_H_PT, 1) * 96 / 72;
+      imgBuf = await darkenSignature(imgBuf, pxPerPt * 0.3);
+      dims = pngDimensions(imgBuf) || dims;
+    }
     if (imgBuf && dims && dims.width && dims.height) {
       const relId = await addMedia(imgBuf, `media/sig-${target.role}-${Date.now()}-${Math.floor(Math.random() * 1e6)}.png`);
       const wPtFull = dims.width * 72 / 96;

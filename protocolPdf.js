@@ -216,32 +216,49 @@ function writeTmpDocx(docxBuffer) {
   };
 }
 
-function convertViaSofficeDirect(docxPath, tmpDir, sofficeBin) {
+// Общий (постоянный) профиль LibreOffice + очередь. Раньше профиль создавался заново на каждый
+// вызов — это самая долгая часть холодного старта (на слабом сервере десятки секунд). Теперь профиль
+// создаётся один раз и переиспользуется, а чтобы два запроса не упирались в его lock-файл
+// ("another instance is already running"), конвертации идут строго по очереди.
+const SHARED_PROFILE_DIR = path.join(os.tmpdir(), 'lo-profile-shared');
+let convertQueue = Promise.resolve();
+
+function runSoffice(docxPath, tmpDir, sofficeBin) {
   return new Promise((resolve, reject) => {
     const soffice = sofficeBin || process.env.SOFFICE_PATH || 'soffice';
-    // Отдельный профиль LibreOffice на КАЖДЫЙ вызов (в той же tmpDir, что и сам
-    // docx/pdf): без общего фонового демона (start.sh больше его не поднимает,
-    // см. вариант А по OOM) несколько запросов на PDF могут прийти почти
-    // одновременно, а soffice с общим профилем в этом случае падает с "another
-    // instance is already running" / зависает на lock-файле. Изолированный
-    // -env:UserInstallation исключает это полностью, ценой чуть большего
-    // времени на холодный старт каждого вызова (обычно 3-10 сек).
-    const profileDir = path.join(tmpDir, 'lo-profile');
     execFile(
       soffice,
       [
         '--headless', '--invisible', '--nocrashreport', '--nodefault', '--nologo',
         '--nofirststartwizard', '--norestore',
-        `-env:UserInstallation=file://${profileDir}`,
+        `-env:UserInstallation=file://${SHARED_PROFILE_DIR}`,
         '--convert-to', 'pdf', '--outdir', tmpDir, docxPath
       ],
-      { timeout: 45000 },
+      { timeout: 90000 },
       (err, stdout, stderr) => {
         if (err) return reject(new Error('Конвертация LibreOffice не удалась: ' + (stderr || err.message)));
         resolve();
       }
     );
   });
+}
+
+function convertViaSofficeDirect(docxPath, tmpDir, sofficeBin) {
+  const job = convertQueue.then(() => runSoffice(docxPath, tmpDir, sofficeBin));
+  convertQueue = job.catch(() => {});
+  return job;
+}
+
+// Прогрев: один раз после старта сервера конвертируем пустой шаблон, чтобы профиль LibreOffice уже
+// существовал к первому «Скачать PDF». Ошибки игнорируются (прогрев — просто ускорение).
+async function warmUpPdfConverter() {
+  try {
+    const tpl = path.join(__dirname, 'templates', 'protocol_template.docx');
+    if (!fs.existsSync(tpl)) return;
+    for (const bin of SOFFICE_CANDIDATES) {
+      try { await convertDocxToPdf(fs.readFileSync(tpl), bin); return; } catch (e) { /* пробуем следующий */ }
+    }
+  } catch (e) { /* ignore */ }
 }
 
 async function convertDocxToPdf(docxBuffer, sofficeBin) {
@@ -318,4 +335,4 @@ async function buildProtocolPdf({ protocol, members, signatures, companyName, co
   );
 }
 
-module.exports = { buildProtocolPdf, buildProtocolPdfDrawn };
+module.exports = { buildProtocolPdf, buildProtocolPdfDrawn, warmUpPdfConverter };
