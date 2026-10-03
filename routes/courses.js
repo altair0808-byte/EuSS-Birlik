@@ -79,9 +79,11 @@ function resolveCourseKind(course_kind, is_external) {
 // несколько значений через запятую, см. lib/multiFilter.js): считаем только сотрудников
 // выбранных объектов и/или отделов. Параметры $1 (объекты) и $2 (отделы) — пустой массив,
 // если фильтр не задан (тогда условие не сужает выборку).
-const ORG_SQL = `(cardinality($1::text[]) = 0 OR u.object = ANY($1::text[])) AND (cardinality($2::text[]) = 0 OR u.department = ANY($2::text[]))`;
+const ORG_SQL = `(cardinality($1::text[]) = 0 OR u.object = ANY($1::text[])) AND (cardinality($2::text[]) = 0 OR u.department = ANY($2::text[])) AND (cardinality($3::text[]) = 0 OR COALESCE(u.staff_category, 'employee') = ANY($3::text[]))`;
+// $3 — категория сотрудника (необязательный фильтр дашборда): 'manager' | 'specialist' | 'employee', через запятую; пусто — все
+const STAFF_CATS = ['manager', 'specialist', 'employee'];
 function orgParams(req) {
-  return [splitMulti(req.query.object), splitMulti(req.query.department)];
+  return [splitMulti(req.query.object), splitMulti(req.query.department), splitMulti(req.query.category).filter(c => STAFF_CATS.includes(c))];
 }
 
 // Для кого обязателен курс: 'all' (все) | 'employee' (сотрудники) | 'specialist' (специалисты) | 'manager' (руководители) | 'matrix' (по должностям из матрицы)
@@ -462,7 +464,7 @@ router.delete('/:id/video/:lang', authRequired, requireRole('admin', 'superadmin
 router.get('/:id/untrained', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
     const result = await query(`
-      SELECT u.id, u.last_name, u.first_name, u.object, u.department, u.position,
+      SELECT u.id, u.last_name, u.first_name, u.object, u.department, u.position, u.staff_category,
         EXISTS (
           SELECT 1 FROM assignments a WHERE a.user_id = u.id AND a.course_id = $1
         ) AS has_assignment
@@ -472,6 +474,7 @@ router.get('/:id/untrained', authRequired, requireRole('admin', 'superadmin'), a
                     AND ${mandatoryForSql('mc', 'u')})
         AND (cardinality($2::text[]) = 0 OR u.object = ANY($2::text[]))
         AND (cardinality($3::text[]) = 0 OR u.department = ANY($3::text[]))
+        AND (cardinality($4::text[]) = 0 OR COALESCE(u.staff_category, 'employee') = ANY($4::text[]))
         AND NOT EXISTS (
           SELECT 1 FROM assignments a WHERE a.user_id = u.id AND a.course_id = $1 AND a.status = 'passed'
         )

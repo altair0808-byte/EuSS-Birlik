@@ -366,9 +366,9 @@ router.get('/mine', authRequired, async (req, res) => {
 // ТЗ §3: ассистент видит назначения/результаты (только просмотр, без записи), в рамках зоны.
 router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   try {
-    const { status, user_id, course_id, object, department, q, date_from, date_to, active_only } = req.query;
+    const { status, user_id, course_id, object, department, q, date_from, date_to, active_only, category } = req.query;
     let sql = `
-      SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position, u.public_uid,
+      SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position, u.public_uid, u.staff_category,
              c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.no_expiry, c.pass_score_percent, c.is_external
       FROM assignments a
       JOIN users u ON u.id = a.user_id
@@ -389,6 +389,9 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), a
     const departments = scope.departments;
     if (objects.length) { params.push(objects); sql += ` AND u.object = ANY($${params.length}::text[])`; }
     if (departments.length) { params.push(departments); sql += ` AND u.department = ANY($${params.length}::text[])`; }
+    // категория сотрудника (фильтр дашборда): manager | specialist | employee, можно несколько через запятую
+    const cats = splitMulti(category).filter(c => ['manager', 'specialist', 'employee'].includes(c));
+    if (cats.length) { params.push(cats); sql += ` AND COALESCE(u.staff_category, 'employee') = ANY($${params.length}::text[])`; }
     if (q) {
       params.push(`%${q}%`);
       sql += ` AND (u.last_name ILIKE $${params.length} OR u.first_name ILIKE $${params.length} OR u.login ILIKE $${params.length})`;
@@ -409,15 +412,17 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), a
 router.get('/expiring', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
     const days = Number(req.query.days) || 30;
-    const { object, department } = req.query;
+    const { object, department, category } = req.query;
     const params = [String(days)];
     let orgSql = '';
     const objects = splitMulti(object);
     const departments = splitMulti(department);
     if (objects.length) { params.push(objects); orgSql += ` AND u.object = ANY($${params.length}::text[])`; }
     if (departments.length) { params.push(departments); orgSql += ` AND u.department = ANY($${params.length}::text[])`; }
+    const cats = splitMulti(category).filter(c => ['manager', 'specialist', 'employee'].includes(c));
+    if (cats.length) { params.push(cats); orgSql += ` AND COALESCE(u.staff_category, 'employee') = ANY($${params.length}::text[])`; }
     const result = await query(`
-      SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position, u.login,
+      SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position, u.login, u.staff_category,
              c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.is_external
       FROM assignments a
       JOIN users u ON u.id = a.user_id
