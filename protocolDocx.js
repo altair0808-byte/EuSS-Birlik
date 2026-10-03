@@ -104,8 +104,8 @@ const HEADER_ZONE_TRIM_PT = 40;   // в шапке строка чуть уко�
 const SIGN_FONT_PT = 12.8;   // было 8 pt, увеличено в 1.6 раза
 const SIGN_NAME_RPR = '<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="Times New Roman" w:cs="Times New Roman"/><w:b/><w:bCs/></w:rPr>';
 // Одинаковая предельная высота картинки подписи у всех ролей (pt).
-const SIGN_IMG_MAX_H_PT = 28;   // подпись обрезана по штриху (без белых полей), поэтому 28 pt ≈ в 1.5 раза крупнее прежней
-const SIGN_IMG_MAX_W_PT = 135;
+const SIGN_IMG_MAX_H_PT = 33.6;   // подпись обрезана по штриху (без белых полей), поэтому 28 pt ≈ в 1.5 раза крупнее прежней
+const SIGN_IMG_MAX_W_PT = 162;
 
 // ---------- Печать организации ----------
 // Печать ставится РОВНО ОДИН раз на весь документ, привязана к блоку подписи
@@ -474,7 +474,7 @@ async function embedSignaturesIntoXml(zip, xml, signaturesByRole, companyStamp) 
     if (imgBuf && dims && dims.width && dims.height) {
       // сколько пикселей картинки приходится на 1 pt после вписывания в SIGN_IMG_MAX_*: от этого зависит толщина штриха
       const pxPerPt = Math.max(dims.width * 72 / 96 / SIGN_IMG_MAX_W_PT, dims.height * 72 / 96 / SIGN_IMG_MAX_H_PT, 1) * 96 / 72;
-      imgBuf = await darkenSignature(imgBuf, pxPerPt * 0.3);
+      imgBuf = await darkenSignature(imgBuf, 0);   // 0 = штрих не утолщается (только затемняется)
       dims = pngDimensions(imgBuf) || dims;
     }
     if (imgBuf && dims && dims.width && dims.height) {
