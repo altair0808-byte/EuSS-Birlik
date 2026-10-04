@@ -1246,7 +1246,7 @@ function renderLogin(app) {
       <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-8 fade-in border border-slate-200">
         <div class="flex justify-between items-center mb-6">
           <span class="text-xs font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full">Safety & Health</span>
-          <div class="flex items-center gap-2"><button onclick="openAppSettingsModal()" title="${_L('Установить приложение и уведомления', 'Қолданбаны орнату және хабарландырулар')}" class="text-xs border px-2 py-1 rounded text-slate-600 hover:text-blue-600">📲</button>
+          <div class="flex items-center gap-2">
           <button onclick="switchLang(CURRENT_LANG === 'ru' ? 'kz' : 'ru')" class="text-xs font-medium text-slate-600 hover:text-blue-600 border px-2 py-1 rounded">
             ${CURRENT_LANG === 'ru' ? 'ҚАЗ' : 'РУС'}
           </button></div>
@@ -1348,7 +1348,7 @@ function renderMain(app) {
           </div>
         </div>
         <div class="flex items-center space-x-2 sm:space-x-3 shrink-0">
-          <button onclick="openAppSettingsModal()" title="${_L('Установить приложение и уведомления', 'Қолданбаны орнату және хабарландырулар')}" class="text-sm px-2 sm:px-2.5 py-1 border rounded-lg text-slate-700 hover:bg-slate-50">📲</button>
+          <button onclick="openAppSettingsModal()" title="${_L('Уведомления', 'Хабарландырулар')}" class="text-sm px-2 sm:px-2.5 py-1 border rounded-lg text-slate-700 hover:bg-slate-50">🔔</button>
           <button onclick="switchLang(CURRENT_LANG === 'ru' ? 'kz' : 'ru')" class="text-xs font-semibold px-2 sm:px-2.5 py-1.5 border rounded-lg text-slate-700 hover:bg-slate-50">
             ${CURRENT_LANG === 'ru' ? 'ҚАЗ' : 'РУС'}
           </button>
@@ -2177,6 +2177,7 @@ async function loadTabContent() {
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
         <h2 class="text-lg font-bold text-slate-900 mb-3">${t('nav_my_tests')}</h2>
         <div id="myTenure" class="mb-5"></div>
+        <div id="myMedbook" class="mb-5"></div>
         <div id="myTestsList" class="space-y-4"><div class="text-slate-400">Загрузка...</div></div>
       </div>
             <div id="testRunModal" class="fixed inset-0 bg-slate-900/60 hidden flex items-stretch sm:items-center justify-center p-0 sm:p-4 z-50 overflow-hidden overscroll-contain">
@@ -2215,6 +2216,7 @@ async function loadTabContent() {
     `;
     loadMyTests();
     loadMyTenure();
+    loadMyMedbook();
   }
 
   if (state.tab === 'my_id_cards') {
@@ -3166,11 +3168,12 @@ async function loadDashboardCourseStats() {
   const mandCard = document.getElementById('dashMandatoryCard');
   if (!tabsDiv || !panelDiv) return;
   try {
-    const [summary, assigns, allCourses, planned] = await Promise.all([
+    const [summary, assigns, allCourses, planned, _mb] = await Promise.all([
       api.getCourseStatsSummary(dashParams()),
       api.getAssignments({ ...dashParams(), active_only: 1 }).catch(() => null),
       api.getCourses().catch(() => null),
-      api.req('/api/training-sessions?status=planned').catch(() => [])
+      api.req('/api/training-sessions?status=planned').catch(() => []),
+      mbLoad()
     ]);
     dashPlanned = Array.isArray(planned) ? planned : [];
     dashCourseStats = summary.courses || [];
@@ -3194,7 +3197,7 @@ async function loadDashboardCourseStats() {
       document.getElementById('dashMandatoryMissing').textContent = missing;
     }
 
-    if (!DASH_GROUPS.some(g => g.key === dashMainGroup)) dashMainGroup = 'biot';
+    if (dashMainGroup !== 'medbook' && !DASH_GROUPS.some(g => g.key === dashMainGroup)) dashMainGroup = 'biot';
     ensureDashSelectedCourse();
     renderDashCourseTabs();
     renderDashCoursePanel();
@@ -3211,9 +3214,9 @@ function ensureDashSelectedCourse() {
 
 // Переключение дашборда: БиОТ / Внутренние / Внешние
 function selectDashGroup(key) {
-  if (key && DASH_GROUPS.some(g => g.key === key)) dashMainGroup = key;
+  if (key && (key === 'medbook' || DASH_GROUPS.some(g => g.key === key))) dashMainGroup = key;
   dashSelectedCourseId = null;
-  dashExpAll = false;
+  dashExpAll = (key === 'medbook');   // у мед. книжек нет курсов — внизу показываем общий список
   renderDashCourseTabs();
   renderDashCoursePanel();
   expScopeChanged();
@@ -3297,7 +3300,7 @@ function renderDashCourseTabs() {
         <div class="mt-1 text-[11px] text-slate-500 leading-tight">${esc(dashGroupHow(g.key))}</div>
         <div class="mt-2 text-xs text-slate-600"><b>${st.courses.length}</b> ${_L('курс.', 'курс')} · <b class="text-emerald-600">${st.valid}</b> ${_L('действует', 'жарамды')} · <b class="${st.overdue > 0 ? 'text-red-600' : 'text-slate-400'}">${st.overdue}</b> ${_L('просроч.', 'мерзімі өткен')}</div>
       </div>`;
-  }).join('');
+  }).join('') + mbSwitcherCardHtml(dashMainGroup === 'medbook');
   // Курсы выбранного дашборда
   const list = dashGroupCourses(dashMainGroup);
   const buttons = list.map(c => {
@@ -3306,8 +3309,8 @@ function renderDashCourseTabs() {
     return `<button type="button" onclick="selectDashCourse(${c.id})" class="px-3 py-1.5 rounded-full text-xs font-semibold border ${on ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}">${esc(dashCourseTitle(c))}${flag}</button>`;
   }).join('');
   tabsDiv.innerHTML = `
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">${switcher}</div>
-    <div class="flex flex-wrap gap-1.5">${buttons || `<div class="text-slate-400 text-sm">${_L('В этой категории пока нет курсов', 'Бұл санатта әзірге курс жоқ')}</div>`}</div>`;
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">${switcher}</div>
+    ${dashMainGroup === 'medbook' ? '' : `<div class="flex flex-wrap gap-1.5">${buttons || `<div class="text-slate-400 text-sm">${_L('В этой категории пока нет курсов', 'Бұл санатта әзірге курс жоқ')}</div>`}</div>`}`;
 }
 
 // Список групп обучения, запланированных по набору курсов
@@ -3346,6 +3349,7 @@ function renderDashCoursePanel() {
   const panelDiv = document.getElementById('dashCoursePanel');
   if (!panelDiv) return;
   const key = dashMainGroup;
+  if (key === 'medbook') { renderMedbookPanel(panelDiv); return; }
   const list = dashGroupCourses(key);
   const c = list.find(x => String(x.id) === String(dashSelectedCourseId));
   const card = x => `
@@ -3938,6 +3942,9 @@ const AUDIT_ACTION_LABELS = {
   user_updated: ['✏️', 'Изменил данные'],
   user_deleted: ['🗑', 'Удалил пользователя'],
   employment_status_changed: ['📁', 'Изменил кадровый статус'],
+  medbook_saved: ['🩺', 'Внёс / обновил мед. книжку'],
+  medbook_removed: ['🩺', 'Убрал мед. книжку'],
+  medbook_positions_saved: ['🩺', 'Изменил должности с мед. книжкой'],
   users_imported: ['📥', 'Импорт сотрудников из Excel'],
   rotation_set: ['👷', 'Указал вахту (заезд / отъезд)'],
   overtime_set: ['⏱', 'Указал овертайм'],
@@ -7986,9 +7993,10 @@ async function loadUserProfile(userId) {
   const div = document.getElementById('profileContent');
   if (!div) return;
   try {
-    const [user, assignments] = await Promise.all([
+    const [user, assignments, medbook] = await Promise.all([
       api.getUser(userId),
-      api.getAssignments({ user_id: userId })
+      api.getAssignments({ user_id: userId }),
+      api.req('/api/medbooks/user/' + userId).catch(() => null)
     ]);
     const roleName = t('role_' + user.role) || user.role;
     // «Осталось дней» показываем только у актуального (последнего успешного) прохождения курса
@@ -8034,6 +8042,7 @@ async function loadUserProfile(userId) {
           </div>
         </div>
       </div>
+      ${user.role === 'employee' ? mbCardHtml(medbook, true, user.id) : ''}
       <div id="assistantEditModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
         <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6">
           <h3 class="text-lg font-bold mb-4">Редактировать карточку</h3>
@@ -8875,8 +8884,341 @@ async function bootstrap() {
 bootstrap();
 </script>
 <script>
-// --- PWA: установка на телефон как приложения + уведомления (service worker: /sw.js, сервер: /api/push) ---
-const PWA = { deferred: null, cfg: null };
+// =====================================================================================================
+// ЛИЧНЫЕ МЕДИЦИНСКИЕ КНИЖКИ (санкнижки). Сервер: routes/medbooks.js, lib/medbook.js.
+//  • Должностям задаётся «нужна книжка» и период напоминания: 6 или 12 месяцев.
+//  • Дата начала книжки вносится у сотрудника → считается срок, статистика, уведомление.
+//  • Можно добавить книжку и сотруднику вне этих должностей. Если книжка не нужна — нигде не показывается.
+// =====================================================================================================
+const MEDBOOK_GROUP = { key: 'medbook', icon: '🩺', ru: 'Личные мед. книжки', kz: 'Жеке медициналық кітапшалар' };
+const mbState = { rows: [], stats: null, status: '', q: '' };
+const MB_STATUS = {
+  valid:   { ru: 'Действует',        kz: 'Жарамды',          cls: 'bg-emerald-100 text-emerald-700' },
+  soon:    { ru: 'Скоро истекает',   kz: 'Жақында аяқталады', cls: 'bg-amber-100 text-amber-700' },
+  overdue: { ru: 'Просрочена',       kz: 'Мерзімі өткен',    cls: 'bg-red-100 text-red-700' },
+  no_date: { ru: 'Дата не внесена',  kz: 'Күні енгізілмеген', cls: 'bg-slate-100 text-slate-600' }
+};
+function mbBadge(st) {
+  const m = MB_STATUS[st] || MB_STATUS.no_date;
+  return `<span class="text-[11px] font-semibold px-2 py-0.5 rounded whitespace-nowrap ${m.cls}">${esc(_L(m.ru, m.kz))}</span>`;
+}
+function mbPeriodText(n) { return n === 6 ? _L('6 мес. (полугодичная)', '6 ай (жарты жылдық)') : _L('12 мес. (годичная)', '12 ай (жылдық)'); }
+function mbLeftText(e) {
+  if (e.days_left == null) return '—';
+  const d = e.days_left;
+  if (d < 0) return _L(`просрочена на ${-d} дн.`, `${-d} күнге кешіктірілген`);
+  if (d === 0) return _L('истекает сегодня', 'бүгін аяқталады');
+  return _L(`${d} дн.`, `${d} күн`);
+}
+
+// ---- загрузка для главной ----
+async function mbLoad() {
+  try {
+    const r = await api.req('/api/medbooks/overview' + qs({ ...orgParams(), category: dashCategory }));
+    mbState.rows = r.rows || []; mbState.stats = r.stats || null;
+  } catch (e) { mbState.rows = []; mbState.stats = null; }
+}
+async function mbReload() {
+  await mbLoad();
+  if (document.getElementById('dashCourseTabs')) { renderDashCourseTabs(); renderDashCoursePanel(); }
+}
+
+// ---- карточка вкладки на главной ----
+function mbSwitcherCardHtml(on) {
+  const s = mbState.stats || { total: 0, valid: 0, soon: 0, overdue: 0, no_date: 0 };
+  const alert = s.overdue > 0;
+  return `
+    <div onclick="selectDashGroup('medbook')" class="cursor-pointer rounded-xl border-2 p-3 transition ${on ? 'border-blue-600 bg-blue-50 shadow-md' : alert ? 'border-red-200 bg-red-50/40 hover:border-red-300' : 'border-slate-200 bg-white hover:border-blue-300'}">
+      <div class="flex items-center gap-2">
+        <span class="text-xl leading-none">${MEDBOOK_GROUP.icon}</span>
+        <div class="text-sm font-black text-slate-900 leading-tight">${esc(_L(MEDBOOK_GROUP.ru, MEDBOOK_GROUP.kz))}</div>
+        ${alert ? `<span class="ml-auto text-[11px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700">⚠</span>` : ''}
+      </div>
+      <div class="mt-1 text-[11px] text-slate-500 leading-tight">${esc(_L('Санкнижки: по должностям, срок 6 или 12 мес.', 'Санкнижкалар: лауазым бойынша, мерзімі 6 немесе 12 ай'))}</div>
+      <div class="mt-2 text-xs text-slate-600"><b>${s.total}</b> ${_L('чел.', 'адам')} · <b class="text-emerald-600">${s.valid + s.soon}</b> ${_L('действует', 'жарамды')} · <b class="${s.overdue > 0 ? 'text-red-600' : 'text-slate-400'}">${s.overdue}</b> ${_L('просроч.', 'мерзімі өткен')}</div>
+    </div>`;
+}
+
+// ---- панель на главной ----
+function renderMedbookPanel(panelDiv) {
+  const s = mbState.stats || { total: 0, valid: 0, soon: 0, overdue: 0, no_date: 0 };
+  const kpi = (label, value, cls, status) => `
+    <div onclick="mbSetStatus('${status}')" class="border rounded-lg p-3 flex flex-col cursor-pointer hover:bg-slate-50 ${mbState.status === status ? 'border-blue-500 ring-1 ring-blue-300' : 'border-slate-200'}">
+      <div class="text-[11px] font-bold text-slate-500 uppercase leading-tight min-h-[2.4em] flex items-start">${esc(label)}</div>
+      <div class="text-xl font-black mt-1 tabular-nums ${cls}">${value}</div>
+    </div>`;
+  const q = mbState.q.trim().toLowerCase();
+  const rows = mbState.rows.filter(e => (!mbState.status || e.status === mbState.status)
+    && (!q || `${e.last_name} ${e.first_name} ${e.position}`.toLowerCase().includes(q)));
+  const order = { overdue: 0, soon: 1, no_date: 2, valid: 3 };
+  rows.sort((a, b) => (order[a.status] - order[b.status]) || ((a.days_left ?? 1e9) - (b.days_left ?? 1e9)) || a.last_name.localeCompare(b.last_name, 'ru'));
+  const canConfig = !isObserverUser();
+  const tr = e => `
+    <tr class="border-t border-slate-100 hover:bg-slate-50">
+      <td class="px-3 py-2"><a href="#" onclick="openUserProfile(${e.user_id});return false;" class="font-semibold text-blue-700 hover:underline">${esc(e.last_name)} ${esc(e.first_name)}</a>
+        ${e.manual ? `<span class="ml-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-violet-100 text-violet-700" title="${esc(_L('Добавлена вручную, не зависит от должности', 'Қолмен қосылған, лауазымға тәуелсіз'))}">${_L('вне должности', 'лауазымнан тыс')}</span>` : ''}</td>
+      <td class="px-3 py-2 text-xs text-slate-600">${esc(posLabel(e.position) || '—')}<div class="text-[11px] text-slate-400">${esc(e.object || '')}${e.department ? ' / ' + esc(e.department) : ''}</div></td>
+      <td class="px-3 py-2 text-xs whitespace-nowrap">${e.period_months} ${_L('мес.', 'ай')}</td>
+      <td class="px-3 py-2 text-xs whitespace-nowrap">${e.start_date ? fmtDate(e.start_date) : '—'}</td>
+      <td class="px-3 py-2 text-xs whitespace-nowrap font-semibold">${e.expires ? fmtDate(e.expires) : '—'}</td>
+      <td class="px-3 py-2 text-xs whitespace-nowrap ${e.status === 'overdue' ? 'text-red-600 font-semibold' : e.status === 'soon' ? 'text-amber-600 font-semibold' : 'text-slate-600'}">${esc(mbLeftText(e))}</td>
+      <td class="px-3 py-2">${mbBadge(e.status)}</td>
+      <td class="px-3 py-2 text-right whitespace-nowrap">
+        <button type="button" onclick="mbOpenForm(${e.user_id})" class="text-xs font-semibold text-blue-600 hover:underline">${e.start_date ? _L('Обновить', 'Жаңарту') : _L('Внести дату', 'Күнін енгізу')}</button>
+        ${e.manual || e.start_date ? `<button type="button" onclick="mbRemove(${e.user_id}, ${e.manual ? 'true' : 'false'})" class="ml-2 text-xs text-slate-400 hover:text-red-600" title="${esc(e.manual ? _L('Убрать книжку у сотрудника', 'Қызметкерден кітапшаны алып тастау') : _L('Сбросить дату', 'Күнді тастау'))}">✕</button>` : ''}
+      </td>
+    </tr>`;
+  const chip = (key, label) => `<button type="button" onclick="mbSetStatus('${key}')" class="px-2.5 py-1 rounded-full text-xs font-semibold border ${mbState.status === key ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}">${esc(label)}</button>`;
+  panelDiv.innerHTML = `
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+      ${kpi(_L('Книжка нужна', 'Кітапша қажет'), s.total, 'text-slate-900', '')}
+      ${kpi(_L('Действует', 'Жарамды'), s.valid, 'text-emerald-600', 'valid')}
+      ${kpi(_L('Истекает ≤ 30 дн.', '≤ 30 күнде аяқталады'), s.soon, s.soon > 0 ? 'text-amber-600' : 'text-slate-400', 'soon')}
+      ${kpi(_L('Просрочена', 'Мерзімі өткен'), s.overdue, s.overdue > 0 ? 'text-red-600' : 'text-slate-400', 'overdue')}
+      ${kpi(_L('Дата не внесена', 'Күні енгізілмеген'), s.no_date, s.no_date > 0 ? 'text-orange-600' : 'text-slate-400', 'no_date')}
+    </div>
+    <div class="mt-4 flex flex-wrap items-center gap-2">
+      <input id="mbSearch" oninput="mbSetQuery(this.value)" value="${esc(mbState.q)}" placeholder="${esc(_L('Поиск по ФИО или должности', 'Аты-жөні немесе лауазымы бойынша іздеу'))}" class="border rounded-lg px-3 py-1.5 text-sm w-64 max-w-full">
+      ${chip('', _L('Все', 'Барлығы'))}${chip('overdue', _L('Просрочены', 'Мерзімі өткен'))}${chip('soon', _L('Скоро истекают', 'Жақында аяқталады'))}${chip('no_date', _L('Без даты', 'Күнсіз'))}
+      <span class="flex-1"></span>
+      ${canConfig ? `<button type="button" onclick="mbOpenPositions()" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 text-slate-800 hover:bg-slate-200">⚙ ${_L('Должности и периодичность', 'Лауазымдар және мерзімділік')}</button>` : ''}
+      <button type="button" onclick="mbOpenAdd()" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700">➕ ${_L('Добавить сотрудника вне должности', 'Лауазымнан тыс қызметкерді қосу')}</button>
+    </div>
+    <div id="mbTableWrap" class="mt-3 overflow-x-auto border border-slate-200 rounded-lg">
+      ${rows.length ? `<table class="w-full text-left text-sm">
+        <thead class="bg-slate-50 text-[11px] uppercase text-slate-500"><tr>
+          <th class="px-3 py-2">${_L('Сотрудник', 'Қызметкер')}</th><th class="px-3 py-2">${_L('Должность', 'Лауазым')}</th><th class="px-3 py-2">${_L('Период', 'Мерзімі')}</th>
+          <th class="px-3 py-2">${_L('Начало', 'Басталуы')}</th><th class="px-3 py-2">${_L('Действует до', 'Дейін жарамды')}</th><th class="px-3 py-2">${_L('Осталось', 'Қалды')}</th><th class="px-3 py-2">${_L('Статус', 'Күйі')}</th><th></th>
+        </tr></thead><tbody>${rows.map(tr).join('')}</tbody></table>`
+      : `<div class="p-6 text-center text-sm text-slate-400">${s.total ? _L('Нет сотрудников по выбранному фильтру', 'Таңдалған сүзгі бойынша қызметкер жоқ') : _L('Пока никому не нужна книжка. Нажмите «Должности и периодичность» и отметьте должности, у которых она должна быть.', 'Әзірге ешкімге кітапша қажет емес. «Лауазымдар және мерзімділік» түймесін басып, кітапша қажет лауазымдарды белгілеңіз.')}</div>`}
+    </div>
+    <div class="mt-2 text-[11px] text-slate-400">${_L('Сотрудники считаются по выбранным выше объекту/отделу и категории. Уведомления приходят за 30 и 7 дней до окончания и когда срок истёк.', 'Қызметкерлер жоғарыда таңдалған объект/бөлім және санат бойынша есептеледі. Хабарландырулар аяқталуына 30 және 7 күн қалғанда және мерзімі өткенде келеді.')}</div>`;
+}
+function mbSetStatus(v) { mbState.status = mbState.status === v ? '' : v; renderDashCoursePanel(); }
+function mbSetQuery(v) {
+  mbState.q = v;
+  const pos = document.getElementById('mbSearch') ? document.getElementById('mbSearch').selectionStart : null;
+  renderDashCoursePanel();
+  const el = document.getElementById('mbSearch');
+  if (el) { el.focus(); if (pos != null) try { el.setSelectionRange(pos, pos); } catch (e) {} }
+}
+
+// ---- модальные окна ----
+function mbModal(html) {
+  let m = document.getElementById('mbModal');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'mbModal';
+    m.className = 'fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-[110]';
+    m.onclick = ev => { if (ev.target === m) mbCloseModal(); };
+    document.body.appendChild(m);
+  }
+  m.innerHTML = `<div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-5">${html}</div>`;
+}
+function mbCloseModal() { const m = document.getElementById('mbModal'); if (m) m.remove(); }
+function mbAfterChange() {
+  mbCloseModal();
+  if (state.tab === 'user_profile' && state.profileUserId) loadUserProfile(state.profileUserId);
+  if (document.getElementById('dashCourseTabs')) mbReload();
+}
+
+// Форма «дата начала книжки» для сотрудника
+async function mbOpenForm(userId, preset) {
+  mbModal(`<div class="text-sm text-slate-400">${t('loading')}</div>`);
+  try {
+    const [e, u] = await Promise.all([api.req('/api/medbooks/user/' + userId), preset ? Promise.resolve(preset) : api.getUser(userId)]);
+    const name = `${u.last_name || ''} ${u.first_name || ''}`.trim();
+    const today = new Date().toISOString().slice(0, 10);
+    const fixed = e.applicable && e.required;
+    const period = e.applicable ? e.period_months : 12;
+    mbModal(`
+      <div class="flex justify-between items-start mb-1">
+        <h3 class="text-base font-bold text-slate-900">🩺 ${_L('Личная медицинская книжка', 'Жеке медициналық кітапша')}</h3>
+        <button onclick="mbCloseModal()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none">&times;</button>
+      </div>
+      <p class="text-sm text-slate-700 font-semibold">${esc(name)}</p>
+      <p class="text-xs text-slate-500 mb-4">${esc(posLabel(u.position) || '—')} · ${esc(u.object || '—')} / ${esc(u.department || '—')}</p>
+      <form onsubmit="mbSubmitForm(event, ${userId})" class="space-y-3">
+        <div>
+          <label class="text-xs font-semibold text-slate-600">${_L('Дата начала книжки', 'Кітапша басталған күні')}</label>
+          <input type="date" id="mbStart" required max="${today}" value="${esc((e.applicable && e.start_date) || '')}" class="w-full border p-2 rounded text-sm">
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-slate-600">${_L('Напоминание', 'Еске салу')}</label>
+          ${fixed
+            ? `<div class="text-sm border rounded p-2 bg-slate-50">${esc(mbPeriodText(period))} <span class="text-xs text-slate-400">· ${_L('задано для должности', 'лауазымға тағайындалған')}</span></div>`
+            : `<div class="flex gap-4 text-sm pt-1">
+                <label class="flex items-center gap-1.5"><input type="radio" name="mbPeriod" value="6" ${period === 6 ? 'checked' : ''}> ${_L('Полугодичное (6 мес.)', 'Жарты жылдық (6 ай)')}</label>
+                <label class="flex items-center gap-1.5"><input type="radio" name="mbPeriod" value="12" ${period !== 6 ? 'checked' : ''}> ${_L('Годичное (12 мес.)', 'Жылдық (12 ай)')}</label>
+              </div>
+              <p class="text-[11px] text-slate-400 mt-1">${_L('Для этой должности книжка не обязательна — сотрудник добавлен вручную.', 'Бұл лауазымға кітапша міндетті емес — қызметкер қолмен қосылған.')}</p>`}
+        </div>
+        <p id="mbFormMsg" class="text-xs text-red-600"></p>
+        <div class="flex justify-end gap-2 pt-3 border-t">
+          <button type="button" onclick="mbCloseModal()" class="px-4 py-2 border rounded-lg text-sm">${_L('Отмена', 'Бас тарту')}</button>
+          <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">${_L('Сохранить', 'Сақтау')}</button>
+        </div>
+      </form>`);
+  } catch (err) { mbModal(`<p class="text-sm text-red-600">${esc(err.message)}</p><div class="text-right mt-3"><button onclick="mbCloseModal()" class="px-4 py-2 border rounded-lg text-sm">OK</button></div>`); }
+}
+async function mbSubmitForm(ev, userId) {
+  ev.preventDefault();
+  const radio = document.querySelector('input[name="mbPeriod"]:checked');
+  try {
+    await api.req('/api/medbooks/user/' + userId, { method: 'PUT', body: { start_date: document.getElementById('mbStart').value, period_months: radio ? Number(radio.value) : undefined } });
+    mbAfterChange();
+  } catch (err) { const el = document.getElementById('mbFormMsg'); if (el) el.textContent = err.message; }
+}
+async function mbRemove(userId, manual) {
+  const msg = manual ? _L('Убрать мед. книжку у этого сотрудника?', 'Осы қызметкерден медициналық кітапшаны алып тастау керек пе?') : _L('Сбросить дату книжки?', 'Кітапша күнін тастау керек пе?');
+  if (!confirm(msg)) return;
+  try { await api.req('/api/medbooks/user/' + userId, { method: 'DELETE' }); mbAfterChange(); }
+  catch (err) { alert(err.message); }
+}
+
+// Добавить сотрудника вне должностей: поиск → форма
+let mbSearchTimer = null;
+function mbOpenAdd() {
+  mbModal(`
+    <div class="flex justify-between items-start mb-2">
+      <h3 class="text-base font-bold text-slate-900">➕ ${_L('Добавить сотрудника вне должности', 'Лауазымнан тыс қызметкерді қосу')}</h3>
+      <button onclick="mbCloseModal()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none">&times;</button>
+    </div>
+    <p class="text-xs text-slate-500 mb-3">${_L('Для тех, у кого должность не входит в список, но книжка есть. Выберите сотрудника, затем укажите дату начала и период.', 'Лауазымы тізімде жоқ, бірақ кітапшасы бар қызметкерлер үшін. Қызметкерді таңдап, басталу күні мен мерзімін көрсетіңіз.')}</p>
+    <input id="mbAddQ" oninput="mbAddSearch(this.value)" placeholder="${esc(_L('Начните вводить ФИО', 'Аты-жөнін енгізіңіз'))}" class="w-full border p-2 rounded text-sm" autofocus>
+    <div id="mbAddList" class="mt-2 divide-y border rounded-lg max-h-72 overflow-y-auto text-sm"><div class="p-3 text-slate-400 text-xs">${_L('Введите минимум 2 буквы', 'Кемінде 2 әріп енгізіңіз')}</div></div>`);
+}
+function mbAddSearch(v) {
+  clearTimeout(mbSearchTimer);
+  const box = document.getElementById('mbAddList');
+  if (v.trim().length < 2) { box.innerHTML = `<div class="p-3 text-slate-400 text-xs">${_L('Введите минимум 2 буквы', 'Кемінде 2 әріп енгізіңіз')}</div>`; return; }
+  mbSearchTimer = setTimeout(async () => {
+    try {
+      const list = await api.getUsers({ q: v.trim() });
+      const b = document.getElementById('mbAddList'); if (!b) return;
+      b.innerHTML = list.length ? list.slice(0, 30).map(u => `
+        <div onclick="mbOpenForm(${u.id})" class="p-2 cursor-pointer hover:bg-blue-50">
+          <div class="font-semibold">${esc(u.last_name)} ${esc(u.first_name)}</div>
+          <div class="text-[11px] text-slate-500">${esc(posLabel(u.position) || '—')} · ${esc(u.object || '')}${u.department ? ' / ' + esc(u.department) : ''}</div>
+        </div>`).join('') : `<div class="p-3 text-slate-400 text-xs">${_L('Никого не найдено', 'Ешкім табылмады')}</div>`;
+    } catch (e) { /* ignore */ }
+  }, 250);
+}
+
+// Настройка: каким должностям нужна книжка и период (6 / 12 мес.)
+let mbPos = { items: [], q: '' };
+async function mbOpenPositions() {
+  mbModal(`<div class="text-sm text-slate-400">${t('loading')}</div>`);
+  try {
+    const r = await api.req('/api/medbooks/positions');
+    mbPos = { items: r.items || [], q: '' };
+    mbRenderPositions();
+  } catch (err) { mbModal(`<p class="text-sm text-red-600">${esc(err.message)}</p>`); }
+}
+function mbPosGroups() {
+  const q = mbPos.q.trim().toLowerCase();
+  const groups = new Map();
+  mbPos.items.forEach((it, i) => {
+    if (q && !`${it.position} ${it.department} ${it.object}`.toLowerCase().includes(q)) return;
+    const k = `${it.object}\u0001${it.department}`;
+    if (!groups.has(k)) groups.set(k, { object: it.object, department: it.department, idx: [] });
+    groups.get(k).idx.push(i);
+  });
+  return [...groups.values()];
+}
+function mbRenderPositions() {
+  const sel = (i, v) => `<select onchange="mbPosSet(${i}, this.value)" class="border rounded px-1.5 py-1 text-xs ${v ? 'bg-emerald-50 border-emerald-300 font-semibold' : ''}">
+      <option value="" ${!v ? 'selected' : ''}>${_L('не нужна', 'қажет емес')}</option>
+      <option value="6" ${v === 6 ? 'selected' : ''}>${_L('6 мес.', '6 ай')}</option>
+      <option value="12" ${v === 12 ? 'selected' : ''}>${_L('12 мес.', '12 ай')}</option></select>`;
+  const groups = mbPosGroups();
+  const count = mbPos.items.filter(x => x.period_months).length;
+  const body = groups.map((g, gi) => `
+    <div class="border rounded-lg mb-2">
+      <div class="flex items-center justify-between gap-2 bg-slate-50 px-3 py-1.5 rounded-t-lg">
+        <div class="text-xs font-bold text-slate-700">${esc(g.object)} / ${esc(g.department)}</div>
+        <select onchange="mbPosSetGroup(${gi}, this.value); this.value='-'" class="border rounded px-1.5 py-1 text-[11px] bg-white">
+          <option value="-">${_L('Для всего отдела…', 'Бүкіл бөлімге…')}</option>
+          <option value="">${_L('не нужна', 'қажет емес')}</option><option value="6">${_L('6 мес.', '6 ай')}</option><option value="12">${_L('12 мес.', '12 ай')}</option>
+        </select>
+      </div>
+      ${g.idx.map(i => `<div class="flex items-center justify-between gap-2 px-3 py-1.5 border-t border-slate-100"><span class="text-xs text-slate-700">${esc(posLabel(mbPos.items[i].position) || mbPos.items[i].position)}</span>${sel(i, mbPos.items[i].period_months)}</div>`).join('')}
+    </div>`).join('');
+  mbModal(`
+    <div class="flex justify-between items-start mb-1">
+      <h3 class="text-base font-bold text-slate-900">⚙ ${_L('Должности с мед. книжкой', 'Медициналық кітапшасы бар лауазымдар')}</h3>
+      <button onclick="mbCloseModal()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none">&times;</button>
+    </div>
+    <p class="text-xs text-slate-500 mb-3">${_L('Отметьте должности, у которых должна быть санкнижка, и выберите напоминание: полугодичное (6 мес.) или годичное (12 мес.). Сотрудникам с другими должностями книжка не показывается.', 'Санкнижка қажет лауазымдарды белгілеп, еске салуды таңдаңыз: жарты жылдық (6 ай) немесе жылдық (12 ай). Басқа лауазымдағы қызметкерлерге кітапша көрсетілмейді.')}</p>
+    <input id="mbPosQ" value="${esc(mbPos.q)}" oninput="mbPos.q=this.value; mbRenderPositionsKeep()" placeholder="${esc(_L('Поиск по должности или отделу', 'Лауазым немесе бөлім бойынша іздеу'))}" class="w-full border p-2 rounded text-sm mb-3">
+    <div class="max-h-[50vh] overflow-y-auto pr-1">${body || `<div class="text-sm text-slate-400 p-3">${_L('В «Настройках» нет структуры «Объект → Отдел → Должность» или ничего не найдено.', '«Баптаулар» бөлімінде «Объект → Бөлім → Лауазым» құрылымы жоқ немесе ештеңе табылмады.')}</div>`}</div>
+    <p id="mbFormMsg" class="text-xs text-red-600 mt-2"></p>
+    <div class="flex items-center justify-between gap-2 pt-3 mt-3 border-t">
+      <span class="text-xs text-slate-500">${_L('Выбрано должностей', 'Таңдалған лауазымдар')}: <b>${count}</b></span>
+      <div class="flex gap-2">
+        <button type="button" onclick="mbCloseModal()" class="px-4 py-2 border rounded-lg text-sm">${_L('Отмена', 'Бас тарту')}</button>
+        <button type="button" onclick="mbSavePositions()" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">${_L('Сохранить', 'Сақтау')}</button>
+      </div>
+    </div>`);
+}
+function mbRenderPositionsKeep() {
+  mbRenderPositions();
+  const el = document.getElementById('mbPosQ');
+  if (el) { el.focus(); const n = el.value.length; try { el.setSelectionRange(n, n); } catch (e) {} }
+}
+function mbPosSet(i, v) { mbPos.items[i].period_months = v ? Number(v) : null; mbRenderPositionsKeepScroll(); }
+function mbPosSetGroup(gi, v) {
+  if (v === '-') return;
+  const g = mbPosGroups()[gi]; if (!g) return;
+  g.idx.forEach(i => { mbPos.items[i].period_months = v ? Number(v) : null; });
+  mbRenderPositionsKeepScroll();
+}
+function mbRenderPositionsKeepScroll() {
+  const box = document.querySelector('#mbModal .max-h-\\[50vh\\]');
+  const top = box ? box.scrollTop : 0;
+  mbRenderPositions();
+  const nb = document.querySelector('#mbModal .max-h-\\[50vh\\]');
+  if (nb) nb.scrollTop = top;
+}
+async function mbSavePositions() {
+  try {
+    const items = mbPos.items.filter(x => x.period_months).map(x => ({ object: x.object, department: x.department, position: x.position, period_months: x.period_months }));
+    await api.req('/api/medbooks/positions', { method: 'PUT', body: { items } });
+    mbAfterChange();
+  } catch (err) { const el = document.getElementById('mbFormMsg'); if (el) el.textContent = err.message; }
+}
+
+// ---- блок в карточке сотрудника и в кабинете сотрудника ----
+// Показывается ТОЛЬКО если книжка нужна (по должности или добавлена вручную); иначе пустая строка.
+function mbCardHtml(e, canEdit, userId) {
+  if (!e || !e.applicable) return '';
+  const tone = e.status === 'overdue' ? 'border-red-200 bg-red-50/40' : e.status === 'soon' ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200 bg-white';
+  return `
+    <div class="p-4 rounded-xl border shadow-sm mb-6 ${tone}">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 class="text-sm font-bold text-slate-900">🩺 ${_L('Личная медицинская книжка', 'Жеке медициналық кітапша')} ${mbBadge(e.status)}</h3>
+          ${e.start_date
+            ? `<p class="text-xs text-slate-600 mt-1.5">${_L('Начало', 'Басталуы')}: <b>${fmtDate(e.start_date)}</b> · ${_L('Действует до', 'Дейін жарамды')}: <b>${fmtDate(e.expires)}</b> · ${esc(mbLeftText(e))}</p>`
+            : `<p class="text-xs text-slate-600 mt-1.5">${_L('Дата начала книжки ещё не внесена.', 'Кітапшаның басталу күні әлі енгізілмеген.')}</p>`}
+          <p class="text-[11px] text-slate-400 mt-1">${_L('Напоминание', 'Еске салу')}: ${esc(mbPeriodText(e.period_months))}${e.manual ? ' · ' + _L('добавлена вручную', 'қолмен қосылған') : ''}</p>
+        </div>
+        ${canEdit ? `<div class="flex gap-2">
+          <button type="button" onclick="mbOpenForm(${userId})" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700">${e.start_date ? _L('Обновить книжку', 'Кітапшаны жаңарту') : _L('Внести дату', 'Күнін енгізу')}</button>
+          ${e.manual || e.start_date ? `<button type="button" onclick="mbRemove(${userId}, ${e.manual ? 'true' : 'false'})" class="px-3 py-1.5 rounded-lg text-xs font-semibold border hover:bg-slate-50">${e.manual ? _L('Убрать', 'Алып тастау') : _L('Сбросить дату', 'Күнді тастау')}</button>` : ''}
+        </div>` : ''}
+      </div>
+    </div>`;
+}
+async function loadMyMedbook() {
+  const box = document.getElementById('myMedbook');
+  if (!box) return;
+  try { const e = await api.req('/api/medbooks/me'); box.innerHTML = e.applicable ? mbCardHtml(e, false, 0).replace('mb-6', 'mb-0') : ''; }
+  catch (e) { /* вспомогательный блок — ошибку не показываем */ }
+}
+
+// --- Уведомления (веб-пуши) (service worker: /sw.js, сервер: /api/push) ---
+const PWA = { cfg: null };
 function pwaStandalone() { return (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true; }
 const PWA_IOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 function pwaPushSupported() { return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window; }
@@ -8884,9 +9226,6 @@ function pwaPushSupported() { return 'serviceWorker' in navigator && 'PushManage
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(e => console.warn('service worker:', e)); });
 }
-// Android/Chrome сам сообщает, что приложение можно установить: запоминаем событие и показываем кнопку «Установить»
-window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); PWA.deferred = e; pwaRefreshModal(); });
-window.addEventListener('appinstalled', () => { PWA.deferred = null; pwaRefreshModal(); });
 
 function pwaKeyToBytes(b64) {
   const pad = '='.repeat((4 - b64.length % 4) % 4);
@@ -8943,14 +9282,6 @@ function pwaOnLogout(token) {
   })).catch(() => {});
 }
 
-async function pwaInstall() {
-  if (!PWA.deferred) return;
-  PWA.deferred.prompt();
-  try { await PWA.deferred.userChoice; } catch (e) { /* ignore */ }
-  PWA.deferred = null;
-  pwaRefreshModal();
-}
-
 function pwaShowMsg(text, ok) {
   const el = document.getElementById('pwaMsg');
   if (!el) return;
@@ -8990,22 +9321,6 @@ async function pwaRefreshModal() {
   const box = 'rounded-xl border border-slate-200 p-4';
   const btn = 'w-full px-4 py-2.5 text-sm font-semibold rounded-lg ';
 
-  // --- установка ---
-  let install;
-  if (pwaStandalone()) {
-    install = `<p class="text-sm text-emerald-700">✅ ${_L('Приложение установлено — вы открыли его с главного экрана.', 'Қолданба орнатылған — сіз оны басты экраннан аштыңыз.')}</p>`;
-  } else if (PWA.deferred) {
-    install = `<button onclick="pwaInstall()" class="${btn}bg-blue-600 hover:bg-blue-700 text-white">📲 ${_L('Установить приложение', 'Қолданбаны орнату')}</button>`;
-  } else if (PWA_IOS) {
-    install = `<ol class="text-sm text-slate-700 list-decimal pl-5 space-y-1">
-      <li>${_L('Откройте этот сайт в браузере <b>Safari</b>.', 'Бұл сайтты <b>Safari</b> браузерінде ашыңыз.')}</li>
-      <li>${_L('Нажмите кнопку <b>«Поделиться»</b> (квадрат со стрелкой вверх).', '<b>«Бөлісу»</b> түймесін басыңыз (жоғары көрсеткісі бар шаршы).')}</li>
-      <li>${_L('Выберите <b>«На экран “Домой”»</b> → <b>«Добавить»</b>.', '<b>«Басты экранға»</b> → <b>«Қосу»</b> таңдаңыз.')}</li>
-      <li>${_L('Откройте приложение с главного экрана.', 'Қолданбаны басты экраннан ашыңыз.')}</li></ol>`;
-  } else {
-    install = `<p class="text-sm text-slate-700">${_L('Откройте меню браузера (⋮) и выберите <b>«Установить приложение»</b> или <b>«Добавить на главный экран»</b>.', 'Браузер мәзірін (⋮) ашып, <b>«Қолданбаны орнату»</b> немесе <b>«Басты экранға қосу»</b> таңдаңыз.')}</p>`;
-  }
-
   // --- уведомления ---
   let notif;
   let sub = null;
@@ -9014,7 +9329,7 @@ async function pwaRefreshModal() {
     notif = `<p class="text-sm text-slate-600">${_L('Войдите в систему, чтобы включить уведомления.', 'Хабарландыруды қосу үшін жүйеге кіріңіз.')}</p>`;
   } else if (!pwaPushSupported()) {
     notif = PWA_IOS && !pwaStandalone()
-      ? `<p class="text-sm text-amber-700">${_L('На iPhone и iPad уведомления работают только после установки приложения на главный экран (iOS 16.4 и новее). Установите приложение по шагам выше, откройте его с главного экрана и включите уведомления здесь.', 'iPhone және iPad-та хабарландырулар қолданба басты экранға орнатылғаннан кейін ғана жұмыс істейді (iOS 16.4 және одан жаңа). Жоғарыдағы қадамдармен орнатып, басты экраннан ашып, осы жерден қосыңыз.')}</p>`
+      ? `<p class="text-sm text-amber-700">${_L('На iPhone и iPad уведомления работают только если сайт добавлен на экран «Домой» (iOS 16.4 и новее) и открыт оттуда.', 'iPhone және iPad-та хабарландырулар сайт «Басты экранға» қосылып, содан ашылғанда ғана жұмыс істейді (iOS 16.4 және одан жаңа).')}</p>`
       : `<p class="text-sm text-slate-600">${_L('Этот браузер не поддерживает уведомления.', 'Бұл браузер хабарландыруды қолдамайды.')}</p>`;
   } else if (Notification.permission === 'denied') {
     notif = `<p class="text-sm text-red-600">${_L('Уведомления заблокированы. Разрешите их для этого сайта в настройках браузера или телефона.', 'Хабарландырулар бұғатталған. Оларды браузер немесе телефон баптауларында осы сайтқа рұқсат етіңіз.')}</p>`;
@@ -9025,19 +9340,18 @@ async function pwaRefreshModal() {
       <div class="flex gap-2"><button onclick="pwaTestClick()" class="${btn}bg-slate-100 hover:bg-slate-200 text-slate-800">${_L('Тест', 'Сынақ')}</button>
       <button onclick="pwaDisableClick()" class="${btn}bg-slate-100 hover:bg-slate-200 text-slate-800">${_L('Отключить', 'Өшіру')}</button></div>`;
   } else {
-    notif = `<p class="text-sm text-slate-600 mb-3">${_L('Получайте сообщения о новых курсах, пересдачах и сроках обучения.', 'Жаңа курстар, қайта тапсыру және оқу мерзімдері туралы хабарлама алыңыз.')}</p>
+    notif = `<p class="text-sm text-slate-600 mb-3">${_L('Получайте сообщения о новых курсах, пересдачах, сроках обучения и мед. книжки.', 'Жаңа курстар, қайта тапсыру, оқу және медициналық кітапша мерзімдері туралы хабарлама алыңыз.')}</p>
       <button onclick="pwaEnableClick()" class="${btn}bg-blue-600 hover:bg-blue-700 text-white">🔔 ${_L('Включить уведомления', 'Хабарландыруды қосу')}</button>`;
   }
 
   m.innerHTML = `
     <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto p-5">
       <div class="flex justify-between items-start mb-4">
-        <h3 class="text-base font-bold text-slate-900">${_L('Приложение и уведомления', 'Қолданба және хабарландырулар')}</h3>
+        <h3 class="text-base font-bold text-slate-900">${_L('Уведомления', 'Хабарландырулар')}</h3>
         <button onclick="pwaCloseModal()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none">&times;</button>
       </div>
       <div class="space-y-3">
-        <div class="${box}"><h4 class="text-sm font-bold text-slate-900 mb-2">${_L('Установка на телефон', 'Телефонға орнату')}</h4>${install}</div>
-        <div class="${box}"><h4 class="text-sm font-bold text-slate-900 mb-2">${_L('Уведомления', 'Хабарландырулар')}</h4>${notif}</div>
+        <div class="${box}">${notif}</div>
       </div>
       <p id="pwaMsg" class="text-xs mt-2"></p>
     </div>`;

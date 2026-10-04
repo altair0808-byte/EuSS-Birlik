@@ -44,6 +44,8 @@ app.use('/api/training-sessions', require('./routes/trainingSessions'));
 app.use('/api/protocols', require('./routes/protocols'));
 // Курсы по должностям: привязка курсов к должностям, Excel-матрица, автозапись
 app.use('/api/course-positions', require('./routes/coursePositions'));
+// Личные медицинские книжки (санкнижки): должности, сроки, статистика
+app.use('/api/medbooks', require('./routes/medbooks'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/export', require('./routes/export'));
 app.use('/api/certificates', require('./routes/certificate'));

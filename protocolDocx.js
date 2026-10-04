@@ -201,18 +201,15 @@ async function normalizeStampToPng(value) {
 // оттиску (один край печати чуть бледнее) и лёгкое растекание краски по краям (микро-размытие).
 // Всё подстраивается только константами ниже:
 //   STAMP_INK_LIGHT_RGB / STAMP_INK_DARK_RGB — цвет краски в тонких / плотных местах;
-//   STAMP_MAX_ALPHA — максимальная непрозрачность штриха. Должна быть ~1: если краска заметно прозрачная,
-//                     чёрный текст и тёмная подпись под печатью просвечивают и печать выглядит лежащей ПОД ними;
-//   STAMP_ALPHA_GRAIN — зернистость по непрозрачности (маленькая, чтобы не «пробивало» текст под печатью);
-//   STAMP_GRAIN     — неравномерность краски по ЦВЕТУ (часть штрихов светлее, как у реального оттиска);
-//   STAMP_UNEVEN    — перепад нажима по диагонали оттиска, тоже по цвету (0 = ровно);
+//   STAMP_MAX_ALPHA — максимальная непрозрачность (<1: краска чуть просвечивает, как настоящая);
+//   STAMP_GRAIN     — глубина зернистости (0 = ровная заливка);
+//   STAMP_UNEVEN    — перепад нажима по диагонали оттиска (0 = ровно);
 //   STAMP_BLEED_SIGMA — растекание краски, px (0 = резкие края).
 const STAMP_INK_LIGHT_RGB = [96, 124, 222];   // синяя штемпельная краска с фиолетовым оттенком — тонкие края
 const STAMP_INK_DARK_RGB = [44, 64, 178];     // она же в плотных местах
-const STAMP_MAX_ALPHA = 0.99;
-const STAMP_ALPHA_GRAIN = 0.04;
-const STAMP_GRAIN = 0.22;
-const STAMP_UNEVEN = 0.14;
+const STAMP_MAX_ALPHA = 0.94;
+const STAMP_GRAIN = 0.2;
+const STAMP_UNEVEN = 0.12;
 const STAMP_BLEED_SIGMA = 0.45;
 const STAMP_DENSITY_GAMMA = 0.75;   // <1 — серые/бледные штрихи скана становятся насыщеннее (1 = как в исходнике)
 async function tuneStampColor(buf) {
@@ -229,17 +226,12 @@ async function tuneStampColor(buf) {
       for (let x = 0; x < w; x++) {
         const i = (y * w + x) * 4;
         const dens = data[i + 3] / 255;                                   // плотность штриха
-        const grain = STAMP_GRAIN * rnd();                                // насколько этот пиксель светлее
-        const pressure = STAMP_UNEVEN * ((x / w + y / h) / 2);            // справа-снизу прижато слабее
-        const lighten = Math.min(0.6, grain + pressure);
         // RGB задаём у ВСЕХ пикселей (и у прозрачных) — иначе размытие края даёт тёмную кайму
-        for (let k = 0; k < 3; k++) {
-          const v = STAMP_INK_LIGHT_RGB[k] + (STAMP_INK_DARK_RGB[k] - STAMP_INK_LIGHT_RGB[k]) * dens;
-          data[i + k] = Math.round(v + (255 - v) * lighten);
-        }
+        for (let k = 0; k < 3; k++) data[i + k] = Math.round(STAMP_INK_LIGHT_RGB[k] + (STAMP_INK_DARK_RGB[k] - STAMP_INK_LIGHT_RGB[k]) * dens);
         if (dens === 0) continue;
-        // штрих почти непрозрачный: тонкие края тоже набирают плотность, чтобы текст под печатью не просвечивал
-        data[i + 3] = Math.round(255 * Math.min(STAMP_MAX_ALPHA, Math.pow(dens, STAMP_DENSITY_GAMMA) * 1.6) * (1 - STAMP_ALPHA_GRAIN * rnd()));
+        const grain = 1 - STAMP_GRAIN * rnd();
+        const pressure = 1 - STAMP_UNEVEN * ((x / w + y / h) / 2);       // слева-сверху прижато сильнее
+        data[i + 3] = Math.round(255 * Math.min(STAMP_MAX_ALPHA, Math.pow(dens, STAMP_DENSITY_GAMMA) * 1.2) * grain * pressure);
       }
     }
     let img = sharp(data, { raw: { width: w, height: h, channels: 4 } });

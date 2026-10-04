@@ -631,6 +631,38 @@ async function initDb() {
     );
   `);
 
+  // Личные медицинские книжки (routes/medbooks.js, lib/medbook.js):
+  //  medbook_positions — должности («Объект → Отдел → Должность»), которым книжка нужна, и период напоминания (6/12 мес.);
+  //  medbook_records   — дата начала книжки у конкретного сотрудника (manual = внесён вне должности);
+  //  medbook_push_log  — какие напоминания о сроке уже отправлены (чтобы не слать дважды).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS medbook_positions (
+      id BIGSERIAL PRIMARY KEY,
+      object TEXT NOT NULL DEFAULT '',
+      department TEXT NOT NULL DEFAULT '',
+      position TEXT NOT NULL DEFAULT '',
+      key TEXT NOT NULL UNIQUE,
+      period_months SMALLINT NOT NULL CHECK (period_months IN (6, 12))
+    );
+    CREATE TABLE IF NOT EXISTS medbook_records (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+      start_date DATE NOT NULL,
+      period_months SMALLINT NOT NULL DEFAULT 12 CHECK (period_months IN (6, 12)),
+      manual BOOLEAN NOT NULL DEFAULT FALSE,
+      updated_by BIGINT,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS medbook_push_log (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expires DATE NOT NULL,
+      kind TEXT NOT NULL,
+      sent_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (user_id, expires, kind)
+    );
+  `);
+
   // Цвет удостоверения по виду обучения: у каждого курса свой (см. lib/cardColors.js).
   await pool.query(`ALTER TABLE courses ADD COLUMN IF NOT EXISTS card_color TEXT;`);
 
