@@ -57,6 +57,16 @@ app.use('/api/audit', require('./routes/audit'));
 // Запасное хранилище в Google Drive: статус, «Выгрузить всё» (только суперадмин)
 app.use('/api/drive', require('./routes/drive'));
 
+// Иконка сайта (favicon). Корень проекта не раздаётся как статика, а catch-all `app.get('*')` ниже отдаёт
+// index.html на любой неизвестный путь — поэтому иконки отдаются явно и ДО него. /favicon.ico нужен тем
+// браузерам и программам, которые просят его по умолчанию, не читая теги <link>.
+const ICONS_DIR = path.join(__dirname, 'assets', 'icons');
+app.use('/icons', express.static(ICONS_DIR, { maxAge: '7d' }));
+app.get('/favicon.ico', (req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=604800');
+  res.sendFile(path.join(ICONS_DIR, 'favicon.ico'));
+});
+
 // Публичная страница проверки подлинности удостоверения (QR-код на удостоверении
 // ведёт сюда) — отдельная лёгкая статическая страница, без авторизации и без
 // загрузки всего SPA (index.html). Данные подтягивает сама через
