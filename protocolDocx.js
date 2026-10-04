@@ -250,10 +250,14 @@ async function tuneStampColor(buf) {
 // (SIGN_INK_LIGHT_RGB), в местах нажима и пересечений паста густая, тёмно-синяя (SIGN_INK_DARK_RGB);
 // цвет плавно зависит от плотности штриха. Паста почти непрозрачная (SIGN_ALPHA_MAX), поэтому линия
 // «Подпись» и буквы под штрихом не просвечивают.
-const SIGN_INK_LIGHT_RGB = [70, 98, 204];   // светлая синяя паста
-const SIGN_INK_DARK_RGB = [22, 32, 124];    // густая тёмно-синяя паста в местах нажима
+const SIGN_INK_LIGHT_RGB = [56, 122, 228];  // светлая голубовато-синяя паста
+const SIGN_INK_DARK_RGB = [18, 52, 150];    // густая синяя паста в местах нажима (без фиолетового оттенка)
 const SIGN_ALPHA_BOOST = 2.2;   // усиление непрозрачности полупрозрачных краёв штриха
 const SIGN_ALPHA_MAX = 250;     // потолок непрозрачности (из 255)
+// Утончение штриха: с каждой стороны штриха «съедается» SIGN_THIN_PX доли крайнего пикселя
+// (0.25 px × 2 стороны ≈ 10% от типичной видимой толщины штриха ~5 px с учётом усиления краёв).
+// 0 = толщина как в оригинале; 0.5 ≈ тоньше на 20%.
+const SIGN_THIN_PX = 0.25;
 async function darkenSignature(buf, radiusPx) {
   let sharp;
   try { sharp = require('sharp'); } catch (e) { return buf; }
@@ -275,9 +279,22 @@ async function darkenSignature(buf, radiusPx) {
           }
         }
         const i = (y * w + x) * 4;
-        const dens = Math.min(1, (a * SIGN_ALPHA_BOOST) / 255);      // плотность пасты в этой точке
+        // непрозрачность после усиления (усиливаем и соседей — утончение считаем уже по итоговой плотности,
+        // иначе усиление краёв «забивает» эффект)
+        const boost = (v) => Math.min(SIGN_ALPHA_MAX, v * SIGN_ALPHA_BOOST);
+        let ab = boost(a);
+        // утончение: крайние пиксели штриха (рядом с пустотой) ослабляем, середина штриха не меняется
+        if (SIGN_THIN_PX > 0 && ab > 0) {
+          let mn = ab;
+          for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) {
+            if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;   // край картинки не считаем «пустотой»
+            mn = Math.min(mn, boost(data[(ny * w + nx) * 4 + 3]));
+          }
+          ab = ab - SIGN_THIN_PX * (ab - mn);
+        }
+        const dens = ab / 255;                                       // плотность пасты в этой точке
         for (let k = 0; k < 3; k++) out[i + k] = Math.round(SIGN_INK_LIGHT_RGB[k] + (SIGN_INK_DARK_RGB[k] - SIGN_INK_LIGHT_RGB[k]) * dens);
-        out[i + 3] = Math.min(SIGN_ALPHA_MAX, Math.round(a * SIGN_ALPHA_BOOST));
+        out[i + 3] = Math.round(ab);
       }
     }
     return await sharp(out, { raw: { width: w, height: h, channels: 4 } }).png().toBuffer();
@@ -328,15 +345,16 @@ function buildSignatureAnchorXml({ relId, cx, cy, offsetXEmu, offsetYEmu }) {
     + '</pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>';
 }
 
-// Плавающая картинка печати. behindDoc="0" — печать лежит НАД текстом документа (как настоящий оттиск на
-// бумаге: линии подчёркивания и буквы не должны «просвечивать сверху» печати). Порядок слоёв:
-// текст → печать (relativeHeight=2) → подпись (relativeHeight = id ≥ 900001, всегда больше), т.е. подпись
-// ложится поверх печати и остаётся читаемой. allowOverlap="1" — разрешаем перекрытие с картинкой подписи,
-// иначе Word может попытаться «оттолкнуть» соседний контент.
+// Плавающая картинка печати. behindDoc="0" — печать лежит НАД текстом документа, а relativeHeight
+// (STAMP_Z_ORDER) заведомо больше, чем у любой подписи (у подписей это счётчик id от 900001), поэтому
+// печать — САМЫЙ ВЕРХНИЙ слой: текст → подписи → печать. Краска печати полупрозрачная (STAMP_MAX_ALPHA),
+// так что подпись под ней просвечивает, как под настоящим оттиском. allowOverlap="1" — разрешаем
+// перекрытие с картинкой подписи, иначе Word может попытаться «оттолкнуть» соседний контент.
+const STAMP_Z_ORDER = 4000000000;   // допустимый максимум для relativeHeight — unsignedInt (≤ 4294967295)
 function buildStampAnchorXml({ relId, cx, cy, offsetXEmu, offsetYEmu }) {
   const id = sigDocPrCounter++;
   return '<w:r><w:rPr><w:noProof/></w:rPr><w:drawing>'
-    + `<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="2" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">`
+    + `<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="${STAMP_Z_ORDER}" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">`
     + '<wp:simplePos x="0" y="0"/>'
     + `<wp:positionH relativeFrom="page"><wp:posOffset>${offsetXEmu}</wp:posOffset></wp:positionH>`
     + `<wp:positionV relativeFrom="paragraph"><wp:posOffset>${offsetYEmu}</wp:posOffset></wp:positionV>`
