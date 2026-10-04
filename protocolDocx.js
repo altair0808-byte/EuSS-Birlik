@@ -211,6 +211,7 @@ const STAMP_MAX_ALPHA = 0.94;
 const STAMP_GRAIN = 0.2;
 const STAMP_UNEVEN = 0.12;
 const STAMP_BLEED_SIGMA = 0.45;
+const STAMP_DENSITY_GAMMA = 0.75;   // <1 — серые/бледные штрихи скана становятся насыщеннее (1 = как в исходнике)
 async function tuneStampColor(buf) {
   if (!buf) return buf;
   let sharp;
@@ -230,7 +231,7 @@ async function tuneStampColor(buf) {
         if (dens === 0) continue;
         const grain = 1 - STAMP_GRAIN * rnd();
         const pressure = 1 - STAMP_UNEVEN * ((x / w + y / h) / 2);       // слева-сверху прижато сильнее
-        data[i + 3] = Math.round(255 * Math.min(STAMP_MAX_ALPHA, dens * 1.15) * grain * pressure);
+        data[i + 3] = Math.round(255 * Math.min(STAMP_MAX_ALPHA, Math.pow(dens, STAMP_DENSITY_GAMMA) * 1.2) * grain * pressure);
       }
     }
     let img = sharp(data, { raw: { width: w, height: h, channels: 4 } });
@@ -350,7 +351,7 @@ function buildSignatureAnchorXml({ relId, cx, cy, offsetXEmu, offsetYEmu }) {
 // печать — САМЫЙ ВЕРХНИЙ слой: текст → подписи → печать. Краска печати полупрозрачная (STAMP_MAX_ALPHA),
 // так что подпись под ней просвечивает, как под настоящим оттиском. allowOverlap="1" — разрешаем
 // перекрытие с картинкой подписи, иначе Word может попытаться «оттолкнуть» соседний контент.
-const STAMP_Z_ORDER = 4000000000;   // допустимый максимум для relativeHeight — unsignedInt (≤ 4294967295)
+const STAMP_Z_ORDER = 2000000000;   // больше любого id подписи, но < 2^31: часть программ (LibreOffice) читает это поле как знаковое int32
 function buildStampAnchorXml({ relId, cx, cy, offsetXEmu, offsetYEmu }) {
   const id = sigDocPrCounter++;
   return '<w:r><w:rPr><w:noProof/></w:rPr><w:drawing>'
