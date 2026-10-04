@@ -193,31 +193,49 @@ async function normalizeStampToPng(value) {
   }
 }
 
-// Цвет печати в протоколе: чуть светлее и голубее оригинала загруженного файла (в готовом документе печать
-// выглядела темнее и серее, чем у исходного оттиска). Подстройка — только константами ниже:
-//   STAMP_BLUE_MIX — доля «голубого» (0 = цвет как был, 1 = целиком STAMP_BLUE_RGB);
-//   STAMP_LIGHTEN  — осветление цвета к белому (0 = как было);
-//   STAMP_ALPHA    — множитель непрозрачности штрихов (1 = как было); вместе с осветлением даёт «чуть светлее».
-const STAMP_BLUE_RGB = [66, 96, 214];    // голубой с лёгким фиолетовым оттенком, как у настоящей печати
-const STAMP_BLUE_MIX = 0.40;
-const STAMP_LIGHTEN = 0.05;
-const STAMP_ALPHA = 0.95;
+// Цвет печати в протоколе. Раньше цвет оригинала лишь подмешивался к голубому (40%), поэтому серый/чёрный
+// скан печати оставался сероватым и плоским. Теперь печать перекрашивается как настоящий оттиск штемпельной
+// краской: форма и плотность берутся из исходника (чем плотнее штрих, тем он непрозрачнее), а цвет —
+// из пары «светлая краска (тонкие края) → тёмная краска (плотные места)», как у реального оттиска.
+// Плюс три приметы живого оттиска: зернистость (краска ложится неравномерно), перепад нажима по
+// оттиску (один край печати чуть бледнее) и лёгкое растекание краски по краям (микро-размытие).
+// Всё подстраивается только константами ниже:
+//   STAMP_INK_LIGHT_RGB / STAMP_INK_DARK_RGB — цвет краски в тонких / плотных местах;
+//   STAMP_MAX_ALPHA — максимальная непрозрачность (<1: краска чуть просвечивает, как настоящая);
+//   STAMP_GRAIN     — глубина зернистости (0 = ровная заливка);
+//   STAMP_UNEVEN    — перепад нажима по диагонали оттиска (0 = ровно);
+//   STAMP_BLEED_SIGMA — растекание краски, px (0 = резкие края).
+const STAMP_INK_LIGHT_RGB = [96, 124, 222];   // синяя штемпельная краска с фиолетовым оттенком — тонкие края
+const STAMP_INK_DARK_RGB = [44, 64, 178];     // она же в плотных местах
+const STAMP_MAX_ALPHA = 0.94;
+const STAMP_GRAIN = 0.2;
+const STAMP_UNEVEN = 0.12;
+const STAMP_BLEED_SIGMA = 0.45;
 async function tuneStampColor(buf) {
   if (!buf) return buf;
   let sharp;
   try { sharp = require('sharp'); } catch (e) { return buf; }
   try {
     const { data, info } = await sharp(buf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-    for (let i = 0; i < data.length; i += 4) {
-      if (data[i + 3] === 0) continue;
-      for (let k = 0; k < 3; k++) {
-        let v = data[i + k] * (1 - STAMP_BLUE_MIX) + STAMP_BLUE_RGB[k] * STAMP_BLUE_MIX;
-        v = v + (255 - v) * STAMP_LIGHTEN;
-        data[i + k] = Math.max(0, Math.min(255, Math.round(v)));
+    const { width: w, height: h } = info;
+    // детерминированный генератор: один и тот же оттиск выглядит одинаково при каждой выгрузке
+    let seed = (w * 73856093) ^ (h * 19349663);
+    const rnd = () => { seed |= 0; seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        const dens = data[i + 3] / 255;                                   // плотность штриха
+        // RGB задаём у ВСЕХ пикселей (и у прозрачных) — иначе размытие края даёт тёмную кайму
+        for (let k = 0; k < 3; k++) data[i + k] = Math.round(STAMP_INK_LIGHT_RGB[k] + (STAMP_INK_DARK_RGB[k] - STAMP_INK_LIGHT_RGB[k]) * dens);
+        if (dens === 0) continue;
+        const grain = 1 - STAMP_GRAIN * rnd();
+        const pressure = 1 - STAMP_UNEVEN * ((x / w + y / h) / 2);       // слева-сверху прижато сильнее
+        data[i + 3] = Math.round(255 * Math.min(STAMP_MAX_ALPHA, dens * 1.15) * grain * pressure);
       }
-      data[i + 3] = Math.round(data[i + 3] * STAMP_ALPHA);
     }
-    return await sharp(data, { raw: { width: info.width, height: info.height, channels: 4 } }).png().toBuffer();
+    let img = sharp(data, { raw: { width: w, height: h, channels: 4 } });
+    if (STAMP_BLEED_SIGMA > 0) img = img.blur(STAMP_BLEED_SIGMA);
+    return await img.png().toBuffer();
   } catch (e) {
     console.warn('[protocolDocx] Не удалось подкорректировать цвет печати, берём как есть:', e.message);
     return buf;
@@ -228,10 +246,14 @@ async function tuneStampColor(buf) {
 // 28 pt почти пропадает. Перекрашиваем штрих в цвет синей шариковой ручки (какой бы цвет ни был у
 // нарисованной подписи — чёрный, серый, любой), усиливаем непрозрачность тонких краёв и при необходимости
 // утолщаем штрих на radiusPx пикселей (максимум по соседям).
-// Цвет чернил — SIGN_INK_RGB (чуть темнее на самых плотных местах штриха, как у настоящей ручки при нажиме).
-const SIGN_INK_RGB = [58, 66, 204];    // шариковая ручка: голубовато-синий с лёгким фиолетовым оттенком
-const SIGN_INK_PRESS_DARKEN = 0.78;    // множитель яркости в самых плотных местах штриха (1 = без нажима)
-const SIGN_ALPHA_BOOST = 1.8;   // усиление непрозрачности полупрозрачных краёв штриха
+// Цвет пасты — как у настоящей шариковой ручки: тонкие/быстрые участки штриха светлее и голубее
+// (SIGN_INK_LIGHT_RGB), в местах нажима и пересечений паста густая, тёмно-синяя (SIGN_INK_DARK_RGB);
+// цвет плавно зависит от плотности штриха. Паста почти непрозрачная (SIGN_ALPHA_MAX), поэтому линия
+// «Подпись» и буквы под штрихом не просвечивают.
+const SIGN_INK_LIGHT_RGB = [70, 98, 204];   // светлая синяя паста
+const SIGN_INK_DARK_RGB = [22, 32, 124];    // густая тёмно-синяя паста в местах нажима
+const SIGN_ALPHA_BOOST = 2.2;   // усиление непрозрачности полупрозрачных краёв штриха
+const SIGN_ALPHA_MAX = 250;     // потолок непрозрачности (из 255)
 async function darkenSignature(buf, radiusPx) {
   let sharp;
   try { sharp = require('sharp'); } catch (e) { return buf; }
@@ -253,11 +275,9 @@ async function darkenSignature(buf, radiusPx) {
           }
         }
         const i = (y * w + x) * 4;
-        const press = 1 - (1 - SIGN_INK_PRESS_DARKEN) * (a / 255);   // чем плотнее штрих, тем чернила темнее
-        out[i] = Math.round(SIGN_INK_RGB[0] * press);
-        out[i + 1] = Math.round(SIGN_INK_RGB[1] * press);
-        out[i + 2] = Math.round(SIGN_INK_RGB[2] * press);
-        out[i + 3] = Math.min(255, Math.round(a * SIGN_ALPHA_BOOST));
+        const dens = Math.min(1, (a * SIGN_ALPHA_BOOST) / 255);      // плотность пасты в этой точке
+        for (let k = 0; k < 3; k++) out[i + k] = Math.round(SIGN_INK_LIGHT_RGB[k] + (SIGN_INK_DARK_RGB[k] - SIGN_INK_LIGHT_RGB[k]) * dens);
+        out[i + 3] = Math.min(SIGN_ALPHA_MAX, Math.round(a * SIGN_ALPHA_BOOST));
       }
     }
     return await sharp(out, { raw: { width: w, height: h, channels: 4 } }).png().toBuffer();
@@ -308,14 +328,15 @@ function buildSignatureAnchorXml({ relId, cx, cy, offsetXEmu, offsetYEmu }) {
     + '</pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>';
 }
 
-// Плавающая картинка печати. behindDoc="1" и минимальный relativeHeight — печать лежит САМЫМ НИЖНИМ слоем,
-// под текстом и под подписью (подпись и ФИО читаются поверх печати, печать их не затирает);
-// allowOverlap="1" — разрешаем перекрытие с инлайн-картинкой подписи, иначе Word может попытаться
-// «оттолкнуть» соседний контент.
+// Плавающая картинка печати. behindDoc="0" — печать лежит НАД текстом документа (как настоящий оттиск на
+// бумаге: линии подчёркивания и буквы не должны «просвечивать сверху» печати). Порядок слоёв:
+// текст → печать (relativeHeight=2) → подпись (relativeHeight = id ≥ 900001, всегда больше), т.е. подпись
+// ложится поверх печати и остаётся читаемой. allowOverlap="1" — разрешаем перекрытие с картинкой подписи,
+// иначе Word может попытаться «оттолкнуть» соседний контент.
 function buildStampAnchorXml({ relId, cx, cy, offsetXEmu, offsetYEmu }) {
   const id = sigDocPrCounter++;
   return '<w:r><w:rPr><w:noProof/></w:rPr><w:drawing>'
-    + `<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="1" locked="0" layoutInCell="1" allowOverlap="1">`
+    + `<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="2" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">`
     + '<wp:simplePos x="0" y="0"/>'
     + `<wp:positionH relativeFrom="page"><wp:posOffset>${offsetXEmu}</wp:posOffset></wp:positionH>`
     + `<wp:positionV relativeFrom="paragraph"><wp:posOffset>${offsetYEmu}</wp:posOffset></wp:positionV>`
