@@ -62,9 +62,13 @@ app.use('/api/drive', require('./routes/drive'));
 // браузерам и программам, которые просят его по умолчанию, не читая теги <link>.
 const ICONS_DIR = path.join(__dirname, 'assets', 'icons');
 app.use('/icons', express.static(ICONS_DIR, { maxAge: '7d' }));
+// Если файла иконки нет на сервере — честный 404, а не index.html из catch-all (иначе браузер получает HTML вместо картинки).
+app.use('/icons', (req, res) => res.status(404).end());
 app.get('/favicon.ico', (req, res) => {
+  const f = path.join(ICONS_DIR, 'favicon.ico');
+  if (!fs.existsSync(f)) return res.status(404).end();
   res.setHeader('Cache-Control', 'public, max-age=604800');
-  res.sendFile(path.join(ICONS_DIR, 'favicon.ico'));
+  res.sendFile(f);
 });
 
 // Публичная страница проверки подлинности удостоверения (QR-код на удостоверении
