@@ -15,6 +15,8 @@ const { ensureCertificateForAssignment } = require('../certificateService');
 // Удостоверение — ВТОРОЙ, отдельный документ на то же назначение (idCardService.js).
 const { ensureIdCardForAssignment } = require('../idCardService');
 const driveSync = require('../driveSync');
+// Веб-пуши сотруднику: назначен курс / разрешена пересдача (lib/push.js; без VAPID-ключей ничего не делает)
+const push = require('../lib/push');
 
 const uploadImport = makeUploader('imports');
 
@@ -231,6 +233,7 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
       entityType: 'user', entityId: user_id, entityName: nm.userName,
       details: { course: nm.courseTitle, course_id: Number(course_id), protocol_number, historical: false, assignment_id: result.rows[0].id }
     });
+    push.notifyCourseAssigned([user_id], course_id).catch(() => {});
     res.json({ id: result.rows[0].id });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
@@ -334,6 +337,9 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (re
         }
       });
     } catch (logErr) { console.error('audit (bulk assign):', logErr.message); }
+    if (!historical && !external && createdIds.length) {
+      push.notifyCourseAssigned([...validIds], course_id).catch(() => {});
+    }
     res.json({ created: createdIds.length, ids: createdIds, skipped: skippedIds.length });
   } catch (e) {
     await client.query('ROLLBACK');
@@ -664,6 +670,7 @@ router.post('/:id/allow-retake', authRequired, requireRole('admin', 'superadmin'
         });
       }
     } catch (logErr) { console.error('audit (retake):', logErr.message); }
+    push.notifyRetakeAllowed(req.params.id).catch(() => {});
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
