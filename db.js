@@ -607,6 +607,30 @@ async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_course_positions_key ON course_positions(key);
   `);
 
+  // Веб-пуши (lib/push.js, routes/push.js): подписки устройств и журнал уже отправленных напоминаний
+  // о сроке обучения (чтобы одно и то же напоминание по одной записи не уходило дважды).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      endpoint TEXT NOT NULL UNIQUE,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      lang TEXT NOT NULL DEFAULT 'ru',
+      user_agent TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      last_seen_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions(user_id);
+    CREATE TABLE IF NOT EXISTS push_log (
+      id BIGSERIAL PRIMARY KEY,
+      assignment_id BIGINT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      sent_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (assignment_id, kind)
+    );
+  `);
+
   // Цвет удостоверения по виду обучения: у каждого курса свой (см. lib/cardColors.js).
   await pool.query(`ALTER TABLE courses ADD COLUMN IF NOT EXISTS card_color TEXT;`);
 

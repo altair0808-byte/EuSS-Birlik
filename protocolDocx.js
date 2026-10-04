@@ -133,9 +133,11 @@ const SIGN_IMG_MAX_W_PT = 162;
 // Печать уменьшена на 15% (150 → 127.5 pt, ~45 мм) с сохранением центра круга: центр был
 // (440 + 75, -14 + 75) = (515, 61), теперь (451.25 + 63.75, -2.75 + 63.75) = (515, 61).
 // Правый край = 451.25 + 127.5 = 578.75 pt (< 595 pt, ширина A4), верх ниже прежнего — на таблицу не заходит.
-const STAMP_DIAMETER_PT = 127.5;      // ~45 мм
-const STAMP_OFFSET_X_PT = 451.25;     // от левого края страницы (positionH relativeFrom="page")
-const STAMP_OFFSET_Y_PT = -2.75;      // от верха абзаца со строкой подписи председателя (relativeFrom="paragraph")
+// Печать увеличена на 7% (127.5 → 136.425 pt, ~48 мм) с сохранением центра круга (515, 61):
+// X = 515 − 68.2125 = 446.7875, Y = 61 − 68.2125 = −7.2125. Правый край = 583.2 pt (< 595 pt), таблицу выше не задевает.
+const STAMP_DIAMETER_PT = 136.425;    // ~48 мм
+const STAMP_OFFSET_X_PT = 446.7875;   // от левого края страницы (positionH relativeFrom="page")
+const STAMP_OFFSET_Y_PT = -7.2125;    // от верха абзаца со строкой подписи председателя (relativeFrom="paragraph")
 const SIGN_SHIFT_LEFT_PT = 24;        // сдвиг картинок подписей влево (у всех ролей одинаковый)
 
 // Ширина/высота PNG из заголовка (IHDR), без внешних зависимостей.
@@ -191,10 +193,44 @@ async function normalizeStampToPng(value) {
   }
 }
 
+// Цвет печати в протоколе: чуть светлее и голубее оригинала загруженного файла (в готовом документе печать
+// выглядела темнее и серее, чем у исходного оттиска). Подстройка — только константами ниже:
+//   STAMP_BLUE_MIX — доля «голубого» (0 = цвет как был, 1 = целиком STAMP_BLUE_RGB);
+//   STAMP_LIGHTEN  — осветление цвета к белому (0 = как было);
+//   STAMP_ALPHA    — множитель непрозрачности штрихов (1 = как было); вместе с осветлением даёт «чуть светлее».
+const STAMP_BLUE_RGB = [38, 110, 215];
+const STAMP_BLUE_MIX = 0.40;
+const STAMP_LIGHTEN = 0.05;
+const STAMP_ALPHA = 0.95;
+async function tuneStampColor(buf) {
+  if (!buf) return buf;
+  let sharp;
+  try { sharp = require('sharp'); } catch (e) { return buf; }
+  try {
+    const { data, info } = await sharp(buf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] === 0) continue;
+      for (let k = 0; k < 3; k++) {
+        let v = data[i + k] * (1 - STAMP_BLUE_MIX) + STAMP_BLUE_RGB[k] * STAMP_BLUE_MIX;
+        v = v + (255 - v) * STAMP_LIGHTEN;
+        data[i + k] = Math.max(0, Math.min(255, Math.round(v)));
+      }
+      data[i + 3] = Math.round(data[i + 3] * STAMP_ALPHA);
+    }
+    return await sharp(data, { raw: { width: info.width, height: info.height, channels: 4 } }).png().toBuffer();
+  } catch (e) {
+    console.warn('[protocolDocx] Не удалось подкорректировать цвет печати, берём как есть:', e.message);
+    return buf;
+  }
+}
+
 // Подпись из канваса часто тонкая и бледная (светло-синяя/серая, штрих 1–2 px), а после уменьшения до
-// 28 pt почти пропадает. Делаем штрих тёмным (почти чёрно-синий) и чуть толще: цвет затемняется,
-// прозрачность усиливается, штрих расширяется на radiusPx пикселей (максимум по соседям).
-const SIGN_DARKEN = 0.35;       // 1 = цвет как был, 0 = чёрный
+// 28 pt почти пропадает. Перекрашиваем штрих в цвет синей шариковой ручки (какой бы цвет ни был у
+// нарисованной подписи — чёрный, серый, любой), усиливаем непрозрачность тонких краёв и при необходимости
+// утолщаем штрих на radiusPx пикселей (максимум по соседям).
+// Цвет чернил — SIGN_INK_RGB (чуть темнее на самых плотных местах штриха, как у настоящей ручки при нажиме).
+const SIGN_INK_RGB = [26, 58, 176];    // синяя шариковая ручка
+const SIGN_INK_PRESS_DARKEN = 0.78;    // множитель яркости в самых плотных местах штриха (1 = без нажима)
 const SIGN_ALPHA_BOOST = 1.8;   // усиление непрозрачности полупрозрачных краёв штриха
 async function darkenSignature(buf, radiusPx) {
   let sharp;
@@ -217,9 +253,10 @@ async function darkenSignature(buf, radiusPx) {
           }
         }
         const i = (y * w + x) * 4;
-        out[i] = Math.round(br * SIGN_DARKEN);
-        out[i + 1] = Math.round(bg * SIGN_DARKEN);
-        out[i + 2] = Math.round(bb * SIGN_DARKEN);
+        const press = 1 - (1 - SIGN_INK_PRESS_DARKEN) * (a / 255);   // чем плотнее штрих, тем чернила темнее
+        out[i] = Math.round(SIGN_INK_RGB[0] * press);
+        out[i + 1] = Math.round(SIGN_INK_RGB[1] * press);
+        out[i + 2] = Math.round(SIGN_INK_RGB[2] * press);
         out[i + 3] = Math.min(255, Math.round(a * SIGN_ALPHA_BOOST));
       }
     }
@@ -271,13 +308,14 @@ function buildSignatureAnchorXml({ relId, cx, cy, offsetXEmu, offsetYEmu }) {
     + '</pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>';
 }
 
-// Плавающая картинка печати. behindDoc="0" — печать поверх подписи (как в жизни, штамп
-// кладут поверх уже расписанного листа); allowOverlap="1" — разрешаем перекрытие с
-// инлайн-картинкой подписи, иначе Word может попытаться «оттолкнуть» соседний контент.
+// Плавающая картинка печати. behindDoc="1" и минимальный relativeHeight — печать лежит САМЫМ НИЖНИМ слоем,
+// под текстом и под подписью (подпись и ФИО читаются поверх печати, печать их не затирает);
+// allowOverlap="1" — разрешаем перекрытие с инлайн-картинкой подписи, иначе Word может попытаться
+// «оттолкнуть» соседний контент.
 function buildStampAnchorXml({ relId, cx, cy, offsetXEmu, offsetYEmu }) {
   const id = sigDocPrCounter++;
   return '<w:r><w:rPr><w:noProof/></w:rPr><w:drawing>'
-    + `<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="${id}" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">`
+    + `<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="1" locked="0" layoutInCell="1" allowOverlap="1">`
     + '<wp:simplePos x="0" y="0"/>'
     + `<wp:positionH relativeFrom="page"><wp:posOffset>${offsetXEmu}</wp:posOffset></wp:positionH>`
     + `<wp:positionV relativeFrom="paragraph"><wp:posOffset>${offsetYEmu}</wp:posOffset></wp:positionV>`
@@ -696,7 +734,7 @@ async function buildProtocolDocx({ protocolNumber, openDate, members, signatures
 
   if (Array.isArray(signatures) && signatures.length) {
     const byRole = Object.fromEntries(signatures.map((s) => [s.committee_role, s]));
-    xml = await embedSignaturesIntoXml(zip, xml, byRole, byRole.chairman ? await normalizeStampToPng(companyStamp) : null);
+    xml = await embedSignaturesIntoXml(zip, xml, byRole, byRole.chairman ? await tuneStampColor(await normalizeStampToPng(companyStamp)) : null);
     xml = embedHeaderNamesIntoXml(xml, byRole);
   }
 

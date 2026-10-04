@@ -56,6 +56,8 @@ app.use('/api/signatures', require('./routes/signatures'));
 app.use('/api/audit', require('./routes/audit'));
 // Запасное хранилище в Google Drive: статус, «Выгрузить всё» (только суперадмин)
 app.use('/api/drive', require('./routes/drive'));
+// Веб-пуши: ключ, подписка устройства, тестовое уведомление (lib/push.js)
+app.use('/api/push', require('./routes/push'));
 
 // Иконка сайта (favicon). Корень проекта не раздаётся как статика, а catch-all `app.get('*')` ниже отдаёт
 // index.html на любой неизвестный путь — поэтому иконки отдаются явно и ДО него. /favicon.ico нужен тем
@@ -69,6 +71,20 @@ app.get('/favicon.ico', (req, res) => {
   if (!fs.existsSync(f)) return res.status(404).end();
   res.setHeader('Cache-Control', 'public, max-age=604800');
   res.sendFile(f);
+});
+
+// PWA: манифест (установка на Android/iOS как приложения) и service worker (уведомления + офлайн-заглушка).
+// sw.js отдаётся с корня и без кеша — иначе обновления приложения подхватываются с задержкой.
+app.get('/manifest.webmanifest', (req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.type('application/manifest+json');
+  res.sendFile(path.join(__dirname, 'public', 'manifest.webmanifest'));
+});
+app.get('/sw.js', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Service-Worker-Allowed', '/');
+  res.type('application/javascript');
+  res.sendFile(path.join(__dirname, 'public', 'sw.js'));
 });
 
 // Публичная страница проверки подлинности удостоверения (QR-код на удостоверении
@@ -105,6 +121,8 @@ initDb()
       // Фоновая отправка файлов в Google Drive (если заданы GDRIVE_*); сайт от неё не зависит
       // Прогрев конвертера PDF (создаёт профиль LibreOffice заранее), чтобы первый «Скачать PDF» не ждал
       setTimeout(() => { try { require('./protocolPdf').warmUpPdfConverter(); } catch (e) { /* ignore */ } }, 20000);
+      // Напоминания о сроках обучения по пушам (если заданы VAPID_*)
+      try { require('./lib/push').startReminderWorker(); } catch (e) { console.error('[push] не удалось запустить напоминания:', e.message); }
       try { require('./driveSync').startWorker(); } catch (e) { console.error('[drive] не удалось запустить воркер:', e.message); }
     });
   })
