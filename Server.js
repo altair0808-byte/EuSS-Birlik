@@ -65,11 +65,16 @@ app.use('/api/push', require('./routes/push'));
 // index.html на любой неизвестный путь — поэтому иконки отдаются явно и ДО него. /favicon.ico нужен тем
 // браузерам и программам, которые просят его по умолчанию, не читая теги <link>.
 const ICONS_DIR = path.join(__dirname, 'assets', 'icons');
+// Запасная папка: при загрузке на GitHub иконки уже оказывались в assets/fonts/icons/ — без неё манифест
+// ссылался на несуществующие файлы, и телефон добавлял на экран «Домой» обычную закладку (сайт в браузере).
+const ICONS_DIR_FALLBACK = path.join(__dirname, 'assets', 'fonts', 'icons');
 app.use('/icons', express.static(ICONS_DIR, { maxAge: '7d' }));
+app.use('/icons', express.static(ICONS_DIR_FALLBACK, { maxAge: '7d' }));
 // Если файла иконки нет на сервере — честный 404, а не index.html из catch-all (иначе браузер получает HTML вместо картинки).
 app.use('/icons', (req, res) => res.status(404).end());
 app.get('/favicon.ico', (req, res) => {
-  const f = path.join(ICONS_DIR, 'favicon.ico');
+  let f = path.join(ICONS_DIR, 'favicon.ico');
+  if (!fs.existsSync(f)) f = path.join(ICONS_DIR_FALLBACK, 'favicon.ico');
   if (!fs.existsSync(f)) return res.status(404).end();
   res.setHeader('Cache-Control', 'public, max-age=604800');
   res.sendFile(f);
