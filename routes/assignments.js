@@ -3,6 +3,7 @@ const router = express.Router();
 const ExcelJS = require('exceljs');
 const { query, pool } = require('../db');
 const { authRequired, requireRole } = require('./auth');
+const { requireAdminFunction, requireCourseFunction, requireAssignmentFunction, kindSqlFilter } = require('../lib/adminFunctions');
 const { logAction } = require('../lib/audit');
 const { makeUploader } = require('../upload');
 const { findActiveProtocol, nextProtocolNumber } = require('./protocols');
@@ -100,7 +101,7 @@ async function peekNextProtocolNumber() {
 }
 
 // Last numbers
-router.get('/last-numbers', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.get('/last-numbers', authRequired, requireRole('admin', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
   try {
     const nextProtocol = await peekNextProtocolNumber();
     const sRes = await query('SELECT certificate_prefix, certificate_digits, certificate_next_number FROM settings WHERE id = 1');
@@ -176,7 +177,7 @@ async function auditNames(userId, courseId) {
 }
 
 // Create assignment
-router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.post('/', authRequired, requireRole('admin', 'superadmin'), requireCourseFunction((req) => req.body && req.body.course_id), async (req, res) => {
   let { user_id, course_id, protocol_number, protocol_date, historical, test_date, next_test_date, certificate_number, score_percent } = req.body;
   let external = false;
   let noProtocol = false;
@@ -245,7 +246,7 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
 // один протокол комиссии обычно покрывает сразу нескольких проверяемых сотрудников.
 // historical=true — внесение уже пройденного ранее обучения (старые данные сотрудников),
 // без прохождения теста в системе: сразу проставляется статус "passed".
-router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), requireCourseFunction((req) => req.body && req.body.course_id), async (req, res) => {
   let { user_ids, course_id, protocol_number, protocol_date, historical, test_date, next_test_date, score_percent } = req.body;
   let external = false;
   let noProtocol = false;
@@ -379,7 +380,7 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), a
       FROM assignments a
       JOIN users u ON u.id = a.user_id
       JOIN courses c ON c.id = a.course_id
-      WHERE u.role = 'employee'
+      WHERE u.role = 'employee' AND ${kindSqlFilter(req.user, 'c')}
     `;
     const params = [];
     // active_only=1 — используется сводкой на главной странице (карточки/статистика), чтобы
@@ -438,6 +439,7 @@ router.get('/expiring', authRequired, requireRole('admin', 'superadmin'), async 
         AND a.status = 'passed'
         AND a.next_test_date IS NOT NULL
         AND c.no_expiry = FALSE
+        AND ${kindSqlFilter(req.user, 'c')}
         AND a.next_test_date::timestamptz <= NOW() + ($1 || ' days')::interval
         AND NOT EXISTS (
           SELECT 1 FROM assignments n
@@ -469,7 +471,7 @@ router.get('/certificates', authRequired, requireRole('admin', 'assistant', 'sup
       FROM assignments a
       JOIN users u ON u.id = a.user_id
       JOIN courses c ON c.id = a.course_id
-      WHERE a.certificate_number IS NOT NULL AND u.role = 'employee'
+      WHERE a.certificate_number IS NOT NULL AND u.role = 'employee' AND ${kindSqlFilter(req.user, 'c')}
     `;
     const params = [];
     const scope = scopedFilter(req.user, splitMulti(object), splitMulti(department));
@@ -657,7 +659,7 @@ router.get('/:id/answers', authRequired, async (req, res) => {
 });
 
 // Allow retake
-router.post('/:id/allow-retake', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.post('/:id/allow-retake', authRequired, requireRole('admin', 'superadmin'), requireAssignmentFunction((req) => req.params.id), async (req, res) => {
   try {
     await query(`UPDATE assignments SET retake_allowed = 1, status = 'pending' WHERE id = $1`, [req.params.id]);
     try {

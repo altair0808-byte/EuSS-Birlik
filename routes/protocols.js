@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { query } = require('../db');
 const { authRequired, requireRole } = require('./auth');
+const { requireAdminFunction } = require('../lib/adminFunctions');
 const { buildProtocolDocx, protocolFileName } = require('../protocolDocx');
 const { buildProtocolPdf } = require('../protocolPdf');
 const { splitMulti, scopedFilter } = require('../lib/multiFilter');
@@ -152,7 +153,7 @@ async function assistantCanAccessProtocol(user, protocolId) {
 
 // List all protocols (newest first)
 // ТЗ §9: assistant допущен к списку, но только протоколы, где есть сотрудники его зоны.
-router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
+router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
   try {
     // Единый фильтр по объекту/отделу (мульти-выбор — несколько значений через запятую):
     // считаем только сотрудников выбранных объектов/отделов и показываем только те
@@ -195,7 +196,7 @@ router.get('/active', authRequired, requireRole('admin', 'superadmin'), async (r
 });
 
 // Предлагаемый номер нового протокола для года: ?year=2026
-router.get('/next-number', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.get('/next-number', authRequired, requireRole('admin', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
   try {
     const year = parseInt(req.query.year, 10) || new Date().getFullYear();
     res.json({ year, next_number: await nextProtocolNumber(year) });
@@ -207,7 +208,7 @@ router.get('/next-number', authRequired, requireRole('admin', 'superadmin'), asy
 // Список сотрудников, попавших в протокол — что показывает «№ протокола» при клике во
 // вкладке «Протоколы» (п.4 запроса): ФИО, курс, статус (сдал/не сдал), результат %,
 // номер сертификата. Тот же состав участников, что уходит в Word-протокол (MEMBER_JOIN).
-router.get('/:id/members', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
+router.get('/:id/members', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
   try {
     const pRes = await query(`SELECT ${PROTOCOL_COLS} FROM protocols p WHERE p.id = $1`, [req.params.id]);
     const p = pRes.rows[0];
@@ -298,7 +299,7 @@ async function checkDeletable(protocolId, res) {
 
 // Скачать протокол в Word (.docx): дата открытия и номер подставляются в шапку,
 // сотрудники протокола — в таблицу (ФИО кириллицей).
-router.get('/:id/download', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
+router.get('/:id/download', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
   try {
     if (!(await assistantCanAccessProtocol(req.user, req.params.id))) {
       return res.status(403).json({ error: 'forbidden', message: 'Протокол вне вашей зоны доступа' });
@@ -347,7 +348,7 @@ router.get('/:id/download', authRequired, requireRole('admin', 'assistant', 'sup
 // Статус подписания по всем трём ролям комиссии (п.2, п.7 запроса) + может ли
 // ТЕКУЩИЙ пользователь подписать прямо сейчас (своя роль, ещё не подписано,
 // протокол не заблокирован).
-router.get('/:id/signatures', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
+router.get('/:id/signatures', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
   try {
     const pRes = await query(`SELECT ${PROTOCOL_COLS} FROM protocols p WHERE p.id = $1`, [req.params.id]);
     const p = pRes.rows[0];
@@ -392,7 +393,7 @@ router.get('/:id/signatures', authRequired, requireRole('admin', 'assistant', 's
 // заранее сохранённый образец подписи (см. routes/signatures.js). Когда подписаны
 // все три роли — протокол «запечатывается» (п.6, п.8): формируется и сохраняется
 // итоговый PDF, фиксируется его контрольная сумма, редактирование блокируется.
-router.post('/:id/sign', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
+router.post('/:id/sign', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
   const { password } = req.body || {};
   if (!password) {
     return res.status(400).json({ error: 'password_required', message: 'Для подтверждения подписи введите пароль аккаунта' });
@@ -505,7 +506,7 @@ router.post('/:id/sign', authRequired, requireRole('admin', 'assistant', 'supera
 // (сессия суперадмина уже аутентифицирована), но причина аннулирования обязательна
 // для журнала. Повторное аннулирование уже аннулированного протокола — не ошибка,
 // просто ничего не меняет.
-router.post('/:id/revoke', authRequired, requireRole('superadmin'), async (req, res) => {
+router.post('/:id/revoke', authRequired, requireRole('superadmin'), requireAdminFunction('biot'), async (req, res) => {
   const reason = String((req.body && req.body.reason) || '').trim();
   if (!reason) {
     return res.status(400).json({ error: 'reason_required', message: 'Укажите причину аннулирования протокола' });
@@ -531,7 +532,7 @@ router.post('/:id/revoke', authRequired, requireRole('superadmin'), async (req, 
 });
 
 // Журнал подписания (п.5 запроса): ФИО, роль, дата и время, IP, браузер/устройство, № протокола
-router.get('/:id/journal', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
+router.get('/:id/journal', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
   try {
     if (!(await assistantCanAccessProtocol(req.user, req.params.id))) {
       return res.status(403).json({ error: 'forbidden', message: 'Протокол вне вашей зоны доступа' });
@@ -555,7 +556,7 @@ router.get('/:id/journal', authRequired, requireRole('admin', 'assistant', 'supe
 // / Ожидает»). Пока протокол не подписан всеми — формируется «на лету» (предпросмотр,
 // уже проставленные подписи видны). После полного подписания отдаётся ровно тот файл,
 // что был сохранён при запечатывании (см. POST /:id/sign) — чтобы pdf_hash не «расходился».
-router.get('/:id/pdf', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
+router.get('/:id/pdf', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
   try {
     if (!(await assistantCanAccessProtocol(req.user, req.params.id))) {
       return res.status(403).json({ error: 'forbidden', message: 'Протокол вне вашей зоны доступа' });
@@ -592,7 +593,7 @@ router.get('/:id/pdf', authRequired, requireRole('admin', 'assistant', 'superadm
 });
 
 // Открыть новый протокол
-router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.post('/', authRequired, requireRole('admin', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
   const { open_date, close_date } = req.body;
   let protocol_number = String(req.body.protocol_number ?? '').trim();
   if (!open_date || !close_date) {
@@ -621,7 +622,7 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
 
 // Изменить номер/даты протокола — ТЗ §9: сужено до суперадмина (admin теперь не может
 // менять номер/даты уже открытого протокола, только открывать/закрывать/переоткрывать).
-router.patch('/:id', authRequired, requireRole('superadmin'), async (req, res) => {
+router.patch('/:id', authRequired, requireRole('superadmin'), requireAdminFunction('biot'), async (req, res) => {
   const { protocol_number, open_date, close_date, status } = req.body;
   const fields = [];
   const params = [];
@@ -659,7 +660,7 @@ router.patch('/:id', authRequired, requireRole('superadmin'), async (req, res) =
 });
 
 // Закрыть протокол вручную (до истечения даты закрытия)
-router.post('/:id/close', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.post('/:id/close', authRequired, requireRole('admin', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
   try {
     if (!(await checkNotLocked(req.params.id, res))) return;
     const result = await query(`UPDATE protocols SET status = 'closed' WHERE id = $1 RETURNING id, status`, [req.params.id]);
@@ -671,7 +672,7 @@ router.post('/:id/close', authRequired, requireRole('admin', 'superadmin'), asyn
 });
 
 // Снова открыть протокол
-router.post('/:id/reopen', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.post('/:id/reopen', authRequired, requireRole('admin', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
   try {
     if (!(await checkNotLocked(req.params.id, res))) return;
     const result = await query(`UPDATE protocols SET status = 'open' WHERE id = $1 RETURNING id, status`, [req.params.id]);
@@ -688,7 +689,7 @@ router.post('/:id/reopen', authRequired, requireRole('admin', 'superadmin'), asy
 // потеряется), явно помечаем REVOKED все удостоверения, которые на него ссылались.
 // Заодно отвязываем assignments.protocol_id (у него нет FK-констрейнта, поэтому сам
 // по себе не очищается) — чтобы не оставалось ссылок на несуществующий протокол.
-router.delete('/:id', authRequired, requireRole('superadmin'), async (req, res) => {
+router.delete('/:id', authRequired, requireRole('superadmin'), requireAdminFunction('biot'), async (req, res) => {
   try {
     if (!(await checkDeletable(req.params.id, res))) return;
     await revokeCertificatesForProtocol(req.params.id);

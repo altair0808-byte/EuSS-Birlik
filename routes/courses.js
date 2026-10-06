@@ -7,6 +7,7 @@ const { makeMemoryUploader } = require('../upload');
 const supabaseStorage = require('../supabaseStorage');
 const { splitMulti } = require('../lib/multiFilter');
 const { normalizeCardColor, pickFreeColor } = require('../lib/cardColors');
+const { requireAdminFunction, requireCourseFunction, canUseCourseKind, kindSqlFilter, DENIED } = require('../lib/adminFunctions');
 
 // Материалы курса — презентация или PDF-методичка. Загружаются в память и сразу
 // отправляются в Supabase Storage (п.2 запроса) — файл не хранится на локальном
@@ -130,6 +131,8 @@ router.get('/', authRequired, async (req, res) => {
         ) ELSE NULL END AS untrained_count
       FROM courses c ORDER BY c.created_at DESC
     `, orgParams(req));
+    // Админ видит только курсы тех видов, функции по которым ему выданы
+    if (req.user.role === 'admin') return res.json(result.rows.filter((c) => canUseCourseKind(req.user, c.course_kind)));
     res.json(result.rows);
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
@@ -142,7 +145,7 @@ router.get('/', authRequired, async (req, res) => {
 router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
   try {
     const coursesRes = await query(`
-      SELECT c.id, c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.is_mandatory, c.mandatory_for,
+      SELECT c.id, c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.is_mandatory, c.mandatory_for, c.course_kind,
         (SELECT COUNT(*)::int FROM users u WHERE u.role = 'employee' AND u.active = 1 AND ${ORG_SQL}) AS total_employees,
         -- «Прошли обучение» — только ДЕЙСТВУЮЩЕЕ обучение по этому курсу: берём актуальную
         -- (последнюю) запись 'passed' по каждому сотруднику и убираем из неё тех, у кого срок
@@ -192,6 +195,7 @@ router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), a
              AND EXISTS (
                SELECT 1 FROM courses c
                WHERE c.is_mandatory = true
+                 AND ${kindSqlFilter(req.user, 'c')}
                  AND ${mandatoryForSql('c', 'u')}
                  AND NOT EXISTS (
                    SELECT 1 FROM assignments a
@@ -201,7 +205,9 @@ router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), a
         ) AS employees_missing_mandatory
     `, orgParams(req));
 
-    res.json({ courses: coursesRes.rows, overall: overallRes.rows[0] });
+    // Админ видит в статистике только курсы тех видов, функции по которым ему выданы
+    const statCourses = req.user.role === 'admin' ? coursesRes.rows.filter((c) => canUseCourseKind(req.user, c.course_kind)) : coursesRes.rows;
+    res.json({ courses: statCourses, overall: overallRes.rows[0] });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }
@@ -209,7 +215,7 @@ router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), a
 
 // Excel-шаблон для загрузки тестов (10 билетов x 10 вопросов x 4 варианта ответа)
 // Должен быть объявлен раньше '/:id', иначе Express примет "questions-template.xlsx" за id
-router.get('/questions-template.xlsx', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.get('/questions-template.xlsx', authRequired, requireRole('admin', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
   try {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('Тесты');
@@ -266,7 +272,7 @@ router.get('/questions-template.xlsx', authRequired, requireRole('admin', 'super
 
 // Single course with questions (includes correct_index — admin/superadmin only,
 // otherwise employees could fetch the answer key before taking the test)
-router.get('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.get('/:id', authRequired, requireRole('admin', 'superadmin'), requireCourseFunction((req) => req.params.id), async (req, res) => {
   try {
     const courseRes = await query('SELECT * FROM courses WHERE id = $1', [req.params.id]);
     const course = courseRes.rows[0];
@@ -286,6 +292,7 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
   const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry, is_mandatory, card_color, is_external, course_kind } = req.body;
   if (!title_ru || !title_kz) return res.status(400).json({ error: 'missing_title' });
   const kind = resolveCourseKind(course_kind, is_external) || 'internal';
+  if (!canUseCourseKind(req.user, kind)) return res.status(403).json(DENIED);
 
   try {
     // Цвет не выбран -> первый свободный из палитры, чтобы у нового вида обучения был свой цвет
@@ -316,12 +323,13 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), async (req, r
 });
 
 // Update course
-router.put('/:id', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.put('/:id', authRequired, requireRole('admin', 'superadmin'), requireCourseFunction((req) => req.params.id), async (req, res) => {
   const { title_ru, title_kz, description_ru, description_kz, video_url, video_url_ru, video_url_kz, time_limit_minutes, pass_score_percent, validity_months, category_ru, category_kz, no_expiry, is_mandatory, card_color, is_external, course_kind } = req.body;
   try {
     const prev = (await query('SELECT no_expiry, is_external FROM courses WHERE id = $1', [req.params.id])).rows[0];
     // is_external не пришёл (старый клиент) -> null -> COALESCE оставляет прежнее значение
     const kind = resolveCourseKind(course_kind, is_external); // null -> не менять
+    if (kind !== null && !canUseCourseKind(req.user, kind)) return res.status(403).json(DENIED);
     const external = kind === null ? null : kind !== 'internal';
     // Тип курса (наш / внешний) нельзя переключать, когда по нему уже есть назначения: наши записи
     // имеют протокол, подпись и сертификат, внешние — нет, и «на лету» их не превратить друг в друга.
@@ -400,7 +408,7 @@ function langCol(base, lang) {
 }
 
 // Upload material file. :lang = ru|kz — материалы на разных языках грузятся отдельно (п.3 запроса)
-router.post('/:id/material/:lang', authRequired, requireRole('admin', 'superadmin'), (req, res) => {
+router.post('/:id/material/:lang', authRequired, requireRole('admin', 'superadmin'), requireCourseFunction((req) => req.params.id), (req, res) => {
   uploadMaterial.single('file')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: 'bad_file_type', message: 'Допустимы файлы PDF, PPT или PPTX' });
     if (!req.file) return res.status(400).json({ error: 'no_file' });
@@ -416,7 +424,7 @@ router.post('/:id/material/:lang', authRequired, requireRole('admin', 'superadmi
 });
 
 // Remove material file for a given language (course can exist without materials)
-router.delete('/:id/material/:lang', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.delete('/:id/material/:lang', authRequired, requireRole('admin', 'superadmin'), requireCourseFunction((req) => req.params.id), async (req, res) => {
   const col = langCol('material_pdf_path', req.params.lang);
   try {
     await query(`UPDATE courses SET ${col} = NULL WHERE id = $1`, [req.params.id]);
@@ -429,7 +437,7 @@ router.delete('/:id/material/:lang', authRequired, requireRole('admin', 'superad
 // ===================== Видео (файл или ссылка, необязательно), отдельно RU и KZ =====================
 
 // Upload video file. :lang = ru|kz
-router.post('/:id/video/:lang', authRequired, requireRole('admin', 'superadmin'), (req, res) => {
+router.post('/:id/video/:lang', authRequired, requireRole('admin', 'superadmin'), requireCourseFunction((req) => req.params.id), (req, res) => {
   uploadVideo.single('file')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: 'bad_file_type', message: 'Допустимы видеофайлы (mp4, webm, mov и т.п.)' });
     if (!req.file) return res.status(400).json({ error: 'no_file' });
@@ -445,7 +453,7 @@ router.post('/:id/video/:lang', authRequired, requireRole('admin', 'superadmin')
 });
 
 // Remove video (file and/or link) for a given language — video is optional and may simply not exist
-router.delete('/:id/video/:lang', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.delete('/:id/video/:lang', authRequired, requireRole('admin', 'superadmin'), requireCourseFunction((req) => req.params.id), async (req, res) => {
   const pathCol = langCol('video_path', req.params.lang);
   const urlCol = langCol('video_url', req.params.lang);
   try {
@@ -461,7 +469,7 @@ router.delete('/:id/video/:lang', authRequired, requireRole('admin', 'superadmin
 // Сводка по вариантам — сколько вопросов заполнено в каждом из 10 билетов
 // Список активных сотрудников, которые ещё ни разу не сдали этот курс (п.4 запроса).
 // Работает для любого курса, но осмысленно использовать именно для обязательных.
-router.get('/:id/untrained', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.get('/:id/untrained', authRequired, requireRole('admin', 'superadmin'), requireCourseFunction((req) => req.params.id), async (req, res) => {
   try {
     const result = await query(`
       SELECT u.id, u.last_name, u.first_name, u.object, u.department, u.position, u.staff_category,
@@ -486,7 +494,7 @@ router.get('/:id/untrained', authRequired, requireRole('admin', 'superadmin'), a
   }
 });
 
-router.get('/:id/variants', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.get('/:id/variants', authRequired, requireRole('admin', 'superadmin'), requireCourseFunction((req) => req.params.id), async (req, res) => {
   try {
     const result = await query(
       'SELECT variant_number, COUNT(*)::int AS count FROM questions WHERE course_id = $1 GROUP BY variant_number ORDER BY variant_number',
@@ -506,7 +514,7 @@ router.get('/:id/variants', authRequired, requireRole('admin', 'superadmin'), as
 
 // Bulk import вопросов из Excel — автоматическая загрузка теста
 // mode=replace (по умолчанию) удаляет все текущие вопросы курса перед загрузкой; mode=append — добавляет к существующим
-router.post('/:id/questions/import', authRequired, requireRole('admin', 'superadmin'), (req, res) => {
+router.post('/:id/questions/import', authRequired, requireRole('admin', 'superadmin'), requireCourseFunction((req) => req.params.id), (req, res) => {
   uploadImport.single('file')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: 'bad_file_type', message: 'Загрузите файл Excel (.xlsx)' });
     if (!req.file) return res.status(400).json({ error: 'no_file' });
@@ -617,7 +625,7 @@ router.post('/:id/questions/import', authRequired, requireRole('admin', 'superad
 });
 
 // Add question
-router.post('/:id/questions', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.post('/:id/questions', authRequired, requireRole('admin', 'superadmin'), requireCourseFunction((req) => req.params.id), async (req, res) => {
   const { question_ru, question_kz, options_ru, options_kz, correct_index, sort_order, variant_number } = req.body;
   try {
     const result = await query(`
@@ -636,7 +644,7 @@ router.post('/:id/questions', authRequired, requireRole('admin', 'superadmin'), 
 });
 
 // Update question
-router.put('/:id/questions/:qid', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.put('/:id/questions/:qid', authRequired, requireRole('admin', 'superadmin'), requireCourseFunction((req) => req.params.id), async (req, res) => {
   const { question_ru, question_kz, options_ru, options_kz, correct_index, sort_order, variant_number } = req.body;
   try {
     await query(`
@@ -656,7 +664,7 @@ router.put('/:id/questions/:qid', authRequired, requireRole('admin', 'superadmin
 });
 
 // Delete question
-router.delete('/:id/questions/:qid', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.delete('/:id/questions/:qid', authRequired, requireRole('admin', 'superadmin'), requireCourseFunction((req) => req.params.id), async (req, res) => {
   try {
     await query('DELETE FROM questions WHERE id = $1', [req.params.qid]);
     res.json({ ok: true });
@@ -666,7 +674,7 @@ router.delete('/:id/questions/:qid', authRequired, requireRole('admin', 'superad
 });
 
 // Delete all questions of one variant (удобно перед ручным пересозданием билета)
-router.delete('/:id/variants/:variant', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.delete('/:id/variants/:variant', authRequired, requireRole('admin', 'superadmin'), requireCourseFunction((req) => req.params.id), async (req, res) => {
   try {
     await query('DELETE FROM questions WHERE course_id = $1 AND variant_number = $2', [req.params.id, clampVariant(req.params.variant)]);
     res.json({ ok: true });

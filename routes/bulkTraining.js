@@ -22,6 +22,7 @@ const ExcelJS = require('exceljs');
 const XLSX = require('xlsx');
 const { query } = require('../db');
 const { authRequired, requireRole } = require('./auth');
+const { kindSqlFilter, canUseCourseKind, requireAdminFunction } = require('../lib/adminFunctions');
 const { makeMemoryUploader } = require('../upload');
 const { computeFioFields, compareFio } = require('../lib/fio.js');
 const { splitMulti } = require('../lib/multiFilter');
@@ -108,7 +109,7 @@ const CARD_LABEL = {
 };
 
 // ---------- ВЫГРУЗКА ----------
-router.get('/export', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.get('/export', authRequired, requireRole('admin', 'superadmin'), requireAdminFunction('biot', 'internal', 'external'), async (req, res) => {
   try {
     const objects = splitMulti(req.query.object);
     const departments = splitMulti(req.query.department);
@@ -120,7 +121,7 @@ router.get('/export', authRequired, requireRole('admin', 'superadmin'), async (r
     sql += ' ORDER BY last_name, first_name';
     const users = (await query(sql, params)).rows;
     const courses = (await query(
-      `SELECT id, title_ru, course_kind, validity_months, no_expiry FROM courses ORDER BY title_ru`
+      `SELECT id, title_ru, course_kind, validity_months, no_expiry FROM courses WHERE ${kindSqlFilter(req.user, 'courses')} ORDER BY title_ru`
     )).rows;
 
     const wb = new ExcelJS.Workbook();
@@ -206,7 +207,7 @@ router.get('/export', authRequired, requireRole('admin', 'superadmin'), async (r
         `SELECT DISTINCT ON (a.user_id, a.course_id)
                 a.user_id, c.title_ru, a.test_date, a.next_test_date, a.protocol_number
            FROM assignments a JOIN courses c ON c.id = a.course_id
-          WHERE a.user_id = ANY($1::bigint[]) AND a.status = 'passed'
+          WHERE a.user_id = ANY($1::bigint[]) AND a.status = 'passed' AND ${kindSqlFilter(req.user, 'c')}
           ORDER BY a.user_id, a.course_id, COALESCE(a.test_date, '') DESC, a.id DESC`,
         [ids]
       );
@@ -254,7 +255,7 @@ router.get('/export', authRequired, requireRole('admin', 'superadmin'), async (r
 });
 
 // ---------- ПЛАН (общий для «Проверить» и «Применить») ----------
-async function buildPlan(buffer) {
+async function buildPlan(buffer, actor) {
   let rows;
   try {
     const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
@@ -383,6 +384,10 @@ async function buildPlan(buffer) {
       continue;
     }
     const kind = course.course_kind || (course.is_external ? 'external' : 'internal');
+    if (!canUseCourseKind(actor, kind)) {
+      plan.errors.push(`Строка ${rowNum}: курс «${course.title_ru}» относится к функции, которая вам не назначена.`);
+      continue;
+    }
     const td = parseDateCell(get('test_date'));
     if (td.empty) { plan.errors.push(`Строка ${rowNum}: для курса «${course.title_ru}» не указана Дата прохождения.`); continue; }
     if (td.invalid) { plan.errors.push(`Строка ${rowNum}: Дата прохождения не распознана (пример: 15.01.2026).`); continue; }
@@ -451,7 +456,7 @@ function summarize(plan) {
 }
 
 // ---------- ЗАГРУЗКА ----------
-router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.single('file'), async (req, res) => {
+router.post('/import', authRequired, requireRole('admin', 'superadmin'), requireAdminFunction('biot', 'internal', 'external'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'no_file', message: 'Файл не передан.' });
   if (!String(req.file.originalname || '').toLowerCase().endsWith('.xlsx')) {
     return res.status(400).json({ error: 'invalid_format', message: 'Поддерживается только .xlsx. Сохраните файл в Excel как «Книга Excel (.xlsx)».' });
@@ -459,7 +464,7 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
   const dry = req.query.dry === '1' || req.query.dry === 'true';
   let plan;
   try {
-    plan = await buildPlan(req.file.buffer);
+    plan = await buildPlan(req.file.buffer, req.user);
   } catch (e) {
     if (e.code) return res.status(400).json({ error: e.code, message: e.message });
     console.error('bulk-training plan:', e);

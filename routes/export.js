@@ -4,6 +4,7 @@ const ExcelJS = require('exceljs');
 const bcrypt = require('bcryptjs');
 const { query } = require('../db');
 const { authRequired, requireRole } = require('./auth');
+const { kindSqlFilter } = require('../lib/adminFunctions');
 const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 
 // Экспорт журнала обучения в Excel.
@@ -566,7 +567,7 @@ router.get('/excel', authRequired, requireRole('admin', 'assistant', 'superadmin
       FROM assignments a
       JOIN users u ON u.id = a.user_id
       JOIN courses c ON c.id = a.course_id
-      WHERE u.role = 'employee'
+      WHERE u.role = 'employee' AND ${kindSqlFilter(req.user, 'c')}
     `;
     const params = [];
     const objects = scope.objects;

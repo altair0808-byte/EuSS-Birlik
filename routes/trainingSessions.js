@@ -32,7 +32,24 @@ const { ensureIdCardForAssignment } = require('../idCardService');
 const driveSync = require('../driveSync');
 
 const buildHistoricalFields = assignmentsRouter.buildHistoricalFields;
+const { requireCourseFunction, canUseCourseKind, kindSqlFilter, functionOfCourse, hasFunction, DENIED } = require('../lib/adminFunctions');
 const adminOnly = [authRequired, requireRole('admin', 'superadmin')];
+
+// Группа обучения принадлежит курсу, а курс — одной из функций админа (БиОТ / внутреннее / внешнее обучение).
+// Админ работает только с группами по курсам своих функций; суперадмин — со всеми.
+const sessionCourseGuard = async (req, res, next) => {
+  if (!req.user || req.user.role !== 'admin') return next();
+  try {
+    const r = await query('SELECT course_id FROM training_sessions WHERE id = $1', [req.params.id]);
+    if (!r.rows[0]) return next();
+    const fn = await functionOfCourse(r.rows[0].course_id);
+    if (!fn || hasFunction(req.user, fn)) return next();
+    return res.status(403).json(DENIED);
+  } catch (e) {
+    return res.status(500).json({ error: 'server_error', details: e.message });
+  }
+};
+const bodyCourseGuard = requireCourseFunction((req) => req.body && req.body.course_id);
 
 const SESSION_COLS = `s.id, s.course_id, c.title_ru AS course_title, c.course_kind, s.title, s.protocol_number, s.note, s.status,
   s.score_percent, s.completed_at,
@@ -143,6 +160,7 @@ router.get('/', ...adminOnly, async (req, res) => {
       params.push('%' + String(req.query.q).trim() + '%');
       where.push(`(s.title ILIKE $${params.length} OR c.title_ru ILIKE $${params.length} OR s.protocol_number ILIKE $${params.length})`);
     }
+    where.push(kindSqlFilter(req.user, 'c'));
     const r = await query(
       `SELECT ${SESSION_COLS},
               (SELECT COUNT(*) FROM training_session_members m WHERE m.session_id = s.id) AS members_count,
@@ -169,6 +187,7 @@ router.get('/stats', ...adminOnly, async (req, res) => {
       params.push(Number(req.query.year));
       yearSql = `AND EXTRACT(YEAR FROM COALESCE(s.test_date, s.planned_date, s.created_at::date)) = $${params.length}`;
     }
+    yearSql += ` AND s.course_id IN (SELECT cc.id FROM courses cc WHERE ${kindSqlFilter(req.user, 'cc')})`;
     const totals = await query(
       `SELECT
          COUNT(*) FILTER (WHERE s.status = 'planned')   AS planned_sessions,
@@ -232,7 +251,7 @@ router.get('/stats', ...adminOnly, async (req, res) => {
 });
 
 // ---------- одна заявка со списком людей ----------
-router.get('/:id', ...adminOnly, async (req, res) => {
+router.get('/:id', ...adminOnly, sessionCourseGuard, async (req, res) => {
   try {
     const s = await loadSession(req.params.id);
     if (!s) return res.status(404).json({ error: 'not_found' });
@@ -254,7 +273,7 @@ router.get('/:id', ...adminOnly, async (req, res) => {
 });
 
 // ---------- создать ----------
-router.post('/', ...adminOnly, async (req, res) => {
+router.post('/', ...adminOnly, bodyCourseGuard, async (req, res) => {
   const b = req.body || {};
   const planned = isoDate(b.planned_date);
   if (planned === undefined) return bad(res, 'Некорректная дата проведения');
@@ -293,7 +312,7 @@ router.post('/', ...adminOnly, async (req, res) => {
 });
 
 // ---------- изменить данные заявки ----------
-router.put('/:id', ...adminOnly, async (req, res) => {
+router.put('/:id', ...adminOnly, sessionCourseGuard, async (req, res) => {
   try {
     const cur = await loadSession(req.params.id);
     if (!cur) return res.status(404).json({ error: 'not_found' });
@@ -309,6 +328,7 @@ router.put('/:id', ...adminOnly, async (req, res) => {
       if (b.course_id !== undefined && Number(b.course_id) !== Number(cur.course_id)) {
         const chk = await requireSessionCourse(b.course_id);
         if (chk.error) return bad(res, chk.error);
+        if (req.user.role === 'admin' && !canUseCourseKind(req.user, chk.course.course_kind)) return res.status(403).json(DENIED);
         set('course_id', b.course_id);
       }
       for (const [key, col] of [['planned_date', 'planned_date'], ['protocol_date', 'protocol_date'], ['test_date', 'test_date'], ['next_test_date', 'next_test_date']]) {
@@ -337,7 +357,7 @@ router.put('/:id', ...adminOnly, async (req, res) => {
 });
 
 // ---------- добавить людей ----------
-router.post('/:id/members', ...adminOnly, async (req, res) => {
+router.post('/:id/members', ...adminOnly, sessionCourseGuard, async (req, res) => {
   const client = await pool.connect();
   let createdAssignmentIds = [];
   let sessionKind = 'internal';
@@ -378,7 +398,7 @@ router.post('/:id/members', ...adminOnly, async (req, res) => {
 // Записанные в заявку по умолчанию считаются присутствующими (attended = TRUE): не пришедшего убирают из заявки
 // («Убрать выбранных») или снимают с него отметку, а при закрытии прохождение вносится всем, кто остался.
 // ---------- отметить присутствие ----------
-router.patch('/:id/members', ...adminOnly, async (req, res) => {
+router.patch('/:id/members', ...adminOnly, sessionCourseGuard, async (req, res) => {
   try {
     const s = await loadSession(req.params.id);
     if (!s) return res.status(404).json({ error: 'not_found' });
@@ -403,7 +423,7 @@ router.patch('/:id/members', ...adminOnly, async (req, res) => {
 });
 
 // ---------- убрать человека ----------
-router.delete('/:id/members/:userId', ...adminOnly, async (req, res) => {
+router.delete('/:id/members/:userId', ...adminOnly, sessionCourseGuard, async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -429,7 +449,7 @@ router.delete('/:id/members/:userId', ...adminOnly, async (req, res) => {
 });
 
 // ---------- ЗАКРЫТЬ ЗАЯВКУ: всем присутствующим разом ----------
-router.post('/:id/complete', ...adminOnly, async (req, res) => {
+router.post('/:id/complete', ...adminOnly, sessionCourseGuard, async (req, res) => {
   const b = req.body || {};
   const client = await pool.connect();
   let createdIds = [];
@@ -537,7 +557,7 @@ router.post('/:id/reopen', authRequired, requireRole('superadmin'), async (req, 
 });
 
 // ---------- удалить заявку ----------
-router.delete('/:id', ...adminOnly, async (req, res) => {
+router.delete('/:id', ...adminOnly, sessionCourseGuard, async (req, res) => {
   try {
     const s = await loadSession(req.params.id);
     if (!s) return res.status(404).json({ error: 'not_found' });

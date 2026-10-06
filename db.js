@@ -360,6 +360,17 @@ async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_users_iin ON users(iin);
   `);
 
+  // Функции администратора (БиОТ / внутреннее обучение / внешнее обучение / мед. книжки) — см. lib/adminFunctions.js.
+  // При первом добавлении колонки уже существующим админам выдаются все функции, чтобы ничего не пропало;
+  // дальше суперадмин сам ограничивает каждого. Новые админы по умолчанию без функций, пока суперадмин их не выдаст.
+  const hadAdminFunctions = (await pool.query(
+    `SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'admin_functions'`
+  )).rows.length > 0;
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_functions TEXT[] NOT NULL DEFAULT '{}';`);
+  if (!hadAdminFunctions) {
+    await pool.query(`UPDATE users SET admin_functions = ARRAY['biot','internal','external','medbook'] WHERE role = 'admin'`);
+  }
+
   // ===================== Журнал действий (для суперадмина) =====================
   // Кто (админ / ассистент) и когда добавил или изменил сотрудника, назначил курс и т.д.
   // Намеренно БЕЗ внешнего ключа на users: при удалении учётной записи админа журнал остаётся,

@@ -14,6 +14,7 @@ const { buildHistoricalFields } = require('./assignments');
 const { computeFioFields, transliterate, compareFio } = require('../lib/fio.js');
 const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 const { COMMITTEE_ROLES } = require('../lib/committeeRoles');
+const { normalizeAdminFunctions } = require('../lib/adminFunctions');
 const { logAction, fullName } = require('../lib/audit');
 const driveSync = require('../driveSync');
 const { buildRotationCalendarPdf } = require('../rotationCalendarPdf');
@@ -218,7 +219,7 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), a
                       leave_reason, leave_note,
                       staff_category, to_char(hire_date, 'YYYY-MM-DD') AS hire_date,
                       created_at, permanent_certificate_number, tco_badge,
-                      committee_role, iin, assistant_objects, assistant_departments,
+                      committee_role, iin, assistant_objects, assistant_departments, admin_functions,
                       ${ROTATION_SELECT}
                FROM users WHERE role = ANY($1::text[])`;
     const params = [roles];
@@ -1041,7 +1042,7 @@ router.get('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
               leave_reason, leave_note,
               staff_category, to_char(hire_date, 'YYYY-MM-DD') AS hire_date,
               created_at, permanent_certificate_number, tco_badge,
-              committee_role, iin, public_uid, assistant_objects, assistant_departments,
+              committee_role, iin, public_uid, assistant_objects, assistant_departments, admin_functions,
               ${ROTATION_SELECT}
        FROM users WHERE id = $1 AND role != 'superadmin'`,
       [req.params.id]
@@ -1213,7 +1214,7 @@ router.post('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), 
   // Ассистент создаёт только сотрудников своей зоны: без логина/пароля, роли, № сертификата и
   // комиссии — эти поля игнорируем, даже если их прислал фронтенд.
   if (req.user.role === 'assistant') {
-    for (const f of ['login', 'password', 'role', 'permanent_certificate_number', 'committee_role', 'assistant_objects', 'assistant_departments']) {
+    for (const f of ['login', 'password', 'role', 'permanent_certificate_number', 'committee_role', 'assistant_objects', 'assistant_departments', 'admin_functions']) {
       delete req.body[f];
     }
     let o = String(req.body.object || '').trim();
@@ -1267,6 +1268,15 @@ router.post('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), 
   // Зона видимости — только суперадмин может её выдавать, и только для роли assistant
   const zoneObjects = targetRole === 'assistant' ? (normalizeZoneArray(assistant_objects) || []) : [];
   const zoneDepartments = targetRole === 'assistant' ? (normalizeZoneArray(assistant_departments) || []) : [];
+  // Функции администратора — только суперадмин и только для роли admin
+  let adminFunctionsVal = [];
+  if (targetRole === 'admin' && req.user.role === 'superadmin') {
+    try {
+      adminFunctionsVal = normalizeAdminFunctions(req.body.admin_functions) || [];
+    } catch (e) {
+      return res.status(400).json({ error: 'invalid_admin_function', message: 'Недопустимая функция администратора' });
+    }
+  }
 
   try {
     if (loginVal) {
@@ -1285,13 +1295,13 @@ router.post('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), 
     const hash = loginVal ? bcrypt.hashSync(String(password), 10) : null;
     const { normalized, translit } = computeFioFields(last_name, first_name);
     const result = await query(
-      `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role, permanent_certificate_number, tco_badge, full_name_normalized, full_name_translit, committee_role, iin, assistant_objects, assistant_departments, staff_category, hire_date)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING id`,
+      `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role, permanent_certificate_number, tco_badge, full_name_normalized, full_name_translit, committee_role, iin, assistant_objects, assistant_departments, staff_category, hire_date, admin_functions)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) RETURNING id`,
       [last_name, first_name, object || '', department || '', position || '', loginVal, hash, targetRole,
        String(permanent_certificate_number || '').trim() || null,
        String(tco_badge || '').trim() || null,
        normalized, translit, committeeRoleVal, iinVal, zoneObjects, zoneDepartments,
-       targetRole === 'employee' ? staffCategoryVal : 'employee', hireDateVal]
+       targetRole === 'employee' ? staffCategoryVal : 'employee', hireDateVal, adminFunctionsVal]
     );
     await logAction(req, 'user_created', {
       entityType: 'user', entityId: result.rows[0].id, entityName: `${last_name} ${first_name}`.trim(),
@@ -1393,6 +1403,24 @@ router.put('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
       }
       params.push(iinVal);
       fields.push(`iin = $${params.length}`);
+    }
+
+    // Функции администратора — только суперадмин. Если пользователь перестаёт быть админом, набор очищается.
+    if (req.user.role === 'superadmin') {
+      let af;
+      try {
+        af = normalizeAdminFunctions(req.body.admin_functions);
+      } catch (e) {
+        return res.status(400).json({ error: 'invalid_admin_function', message: 'Недопустимая функция администратора' });
+      }
+      const finalRole = (role !== undefined && ['admin', 'assistant', 'employee'].includes(role)) ? role : target.role;
+      if (finalRole !== 'admin' && (target.admin_functions || []).length) {
+        params.push([]);
+        fields.push(`admin_functions = $${params.length}`);
+      } else if (af !== undefined && finalRole === 'admin') {
+        params.push(af);
+        fields.push(`admin_functions = $${params.length}`);
+      }
     }
 
     // Зона видимости ассистента (ТЗ §4) — только суперадмин может её менять, и видна
@@ -1510,6 +1538,12 @@ router.put('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
       if (b.iin !== undefined && String(target.iin || '') !== String(b.iin || '')) changed.iin = { changed: true };
       if (b.password) changed.password = { changed: true };
       if (b.active !== undefined && Number(target.active) !== (b.active ? 1 : 0)) changed.active = { from: Number(target.active), to: b.active ? 1 : 0 };
+      if (req.user.role === 'superadmin' && b.admin_functions !== undefined) {
+        const oldF = JSON.stringify(target.admin_functions || []);
+        let newF = oldF;
+        try { newF = JSON.stringify(normalizeAdminFunctions(b.admin_functions) || []); } catch (e) { /* уже отвергнуто выше */ }
+        if (oldF !== newF) changed.admin_functions = { from: target.admin_functions || [], to: JSON.parse(newF) };
+      }
       if (req.user.role === 'superadmin' && (b.assistant_objects !== undefined || b.assistant_departments !== undefined)) {
         const oldZ = JSON.stringify([target.assistant_objects || [], target.assistant_departments || []]);
         const newZ = JSON.stringify([

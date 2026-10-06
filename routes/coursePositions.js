@@ -19,6 +19,7 @@ const router = express.Router();
 const ExcelJS = require('exceljs');
 const { query, pool } = require('../db');
 const { authRequired, requireRole } = require('./auth');
+const { requireAdminFunction, requireCourseFunction, kindSqlFilter } = require('../lib/adminFunctions');
 const { makeMemoryUploader } = require('../upload');
 const { logAction } = require('../lib/audit');
 const { norm, keyOf, countWouldEnroll, enrollExistingForKeys } = require('../lib/positionCourses');
@@ -52,7 +53,7 @@ function structureIndex(rows) {
 }
 
 // ---------- курс: должности ----------
-router.get('/course/:id', authRequired, ADMIN, async (req, res) => {
+router.get('/course/:id', authRequired, ADMIN, requireCourseFunction((req) => req.params.id), async (req, res) => {
   try {
     const c = (await query('SELECT id, course_kind FROM courses WHERE id = $1', [req.params.id])).rows[0];
     if (!c) return res.status(404).json({ error: 'not_found' });
@@ -78,7 +79,7 @@ function resolveItems(rawItems, sIndex) {
   return { map: out, dropped };
 }
 
-router.post('/course/:id/preview', authRequired, ADMIN, async (req, res) => {
+router.post('/course/:id/preview', authRequired, ADMIN, requireCourseFunction((req) => req.params.id), async (req, res) => {
   try {
     const courseId = Number(req.params.id);
     const c = (await query('SELECT id, course_kind FROM courses WHERE id = $1', [courseId])).rows[0];
@@ -95,7 +96,7 @@ router.post('/course/:id/preview', authRequired, ADMIN, async (req, res) => {
   }
 });
 
-router.put('/course/:id', authRequired, ADMIN, async (req, res) => {
+router.put('/course/:id', authRequired, ADMIN, requireCourseFunction((req) => req.params.id), async (req, res) => {
   const courseId = Number(req.params.id);
   const client = await pool.connect();
   try {
@@ -143,13 +144,13 @@ router.put('/course/:id', authRequired, ADMIN, async (req, res) => {
 // ---------- Excel: бланк / текущая матрица ----------
 const COL_W = 18;
 
-router.get('/matrix.xlsx', authRequired, ADMIN, async (req, res) => {
+router.get('/matrix.xlsx', authRequired, ADMIN, requireAdminFunction('biot', 'internal', 'external'), async (req, res) => {
   try {
     const mode = req.query.mode === 'blank' ? 'blank' : 'current';
     const rows = await loadStructureRows();
     const courses = (await query(
       `SELECT id, title_ru, course_kind, COALESCE(category_ru, '') AS category_ru
-         FROM courses ORDER BY COALESCE(category_ru, ''), title_ru`
+         FROM courses WHERE ${kindSqlFilter(req.user, 'courses')} ORDER BY COALESCE(category_ru, ''), title_ru`
     )).rows;
     const marks = new Set();
     if (mode === 'current') {
@@ -258,7 +259,7 @@ function cellText(cell) {
   return String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
 }
 
-async function buildPlan(buffer) {
+async function buildPlan(buffer, actor) {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer);
   const ws = wb.getWorksheet('Матрица') || wb.worksheets[0];
@@ -283,7 +284,7 @@ async function buildPlan(buffer) {
   }
 
   // курсы по названию (RU или KZ)
-  const allCourses = (await query('SELECT id, title_ru, title_kz, course_kind FROM courses')).rows;
+  const allCourses = (await query(`SELECT id, title_ru, title_kz, course_kind FROM courses WHERE ${kindSqlFilter(actor, 'courses')}`)).rows;
   const byTitle = new Map();
   allCourses.forEach((c) => {
     [c.title_ru, c.title_kz].forEach((t) => {
@@ -363,7 +364,7 @@ async function buildPlan(buffer) {
   return { dataRows, courses: usedCourses.length, errors, warnings, changes };
 }
 
-router.post('/matrix/import', authRequired, ADMIN, upload.single('file'), async (req, res) => {
+router.post('/matrix/import', authRequired, ADMIN, requireAdminFunction('biot', 'internal', 'external'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'no_file', message: 'Файл не передан.' });
   if (!String(req.file.originalname || '').toLowerCase().endsWith('.xlsx')) {
     return res.status(400).json({ error: 'invalid_format', message: 'Поддерживается только .xlsx. Сохраните файл в Excel как «Книга Excel (.xlsx)».' });
@@ -372,7 +373,7 @@ router.post('/matrix/import', authRequired, ADMIN, upload.single('file'), async 
   const withExisting = req.query.existing === '1' || req.query.existing === 'true';
   let plan;
   try {
-    plan = await buildPlan(req.file.buffer);
+    plan = await buildPlan(req.file.buffer, req.user);
   } catch (e) {
     if (e.code) return res.status(400).json({ error: e.code, message: e.message });
     console.error('course-positions plan:', e);

@@ -36,6 +36,15 @@ function authRequired(req, res, next) {
         console.error('authRequired: не удалось обновить зону ассистента, беру из токена:', e.message);
       }
     }
+    // Функции админа тоже берём из БД на каждый запрос: суперадмин изменил набор — действует сразу, без перелогина.
+    if (user && user.role === 'admin') {
+      try {
+        const r = await query('SELECT admin_functions FROM users WHERE id = $1', [user.id]);
+        if (r.rows[0]) req.user.admin_functions = r.rows[0].admin_functions || [];
+      } catch (e) {
+        console.error('authRequired: не удалось обновить функции админа, беру из токена:', e.message);
+      }
+    }
     next();
   });
 }
@@ -91,7 +100,8 @@ router.post('/login', async (req, res) => {
         // в токен, чтобы фронтенд сразу показал правильную зону без лишнего запроса.
         // Сами эндпоинты всё равно перепроверяют req.user.role/зону на каждый запрос.
         assistant_objects: user.assistant_objects || [],
-        assistant_departments: user.assistant_departments || []
+        assistant_departments: user.assistant_departments || [],
+        admin_functions: user.admin_functions || []
       },
       JWT_SECRET,
       { expiresIn: '12h' }
@@ -110,11 +120,26 @@ router.post('/login', async (req, res) => {
         position: user.position,
         committee_role: user.committee_role || null,
         assistant_objects: user.assistant_objects || [],
-        assistant_departments: user.assistant_departments || []
+        assistant_departments: user.assistant_departments || [],
+        admin_functions: user.admin_functions || []
       }
     });
   } catch (err) {
     console.error('Login error:', err);
+    res.status(500).json({ error: 'server_error', details: err.message });
+  }
+});
+
+// GET /api/auth/me — актуальные роль и функции текущего пользователя из БД.
+// Фронтенд зовёт его при загрузке страницы, чтобы изменение функций админа суперадмином
+// сработало без повторного входа (в localStorage лежит снимок на момент логина).
+router.get('/me', authRequired, async (req, res) => {
+  try {
+    const r = await query('SELECT id, role, active, admin_functions FROM users WHERE id = $1', [req.user.id]);
+    const row = r.rows[0];
+    if (!row || Number(row.active) === 0) return res.status(403).json({ error: 'forbidden', message: 'Учётная запись отключена' });
+    res.json({ id: row.id, role: row.role, admin_functions: row.admin_functions || [] });
+  } catch (err) {
     res.status(500).json({ error: 'server_error', details: err.message });
   }
 });

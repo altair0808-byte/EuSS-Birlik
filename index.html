@@ -1296,6 +1296,70 @@ async function handleLogin(e) {
   }
 }
 
+// --- ФУНКЦИИ АДМИНИСТРАТОРА (выдаёт суперадмин; на сервере проверяются на каждый запрос) ---
+const ADMIN_FUNCTIONS_UI = [
+  { key: 'biot', icon: '🦺', ru: 'БиОТ', kz: 'БиОТ', hintRu: 'Курсы БиОТ с тестом, назначения, протоколы, удостоверения', hintKz: 'Тестпен БиОТ курстары, тағайындаулар, хаттамалар, куәліктер' },
+  { key: 'internal', icon: '🏢', ru: 'Внутреннее обучение', kz: 'Ішкі оқыту', hintRu: 'Внутренние курсы без протокола и группы обучения', hintKz: 'Хаттамасыз ішкі курстар және оқыту топтары' },
+  { key: 'external', icon: '🎓', ru: 'Внешнее обучение', kz: 'Сыртқы оқыту', hintRu: 'Курсы, которые провела другая организация', hintKz: 'Басқа ұйым өткізген курстар' },
+  { key: 'medbook', icon: '🩺', ru: 'Мед. книжки', kz: 'Мед. кітапшалар', hintRu: 'Личные медицинские книжки сотрудников', hintKz: 'Қызметкерлердің жеке медициналық кітапшалары' }
+];
+// Ограничения касаются только роли «Администратор». Суперадмин, ассистент и остальные — без изменений.
+function hasAdminFn(fn) {
+  const u = state.user;
+  if (!u) return false;
+  if (u.role !== 'admin') return true;
+  return Array.isArray(u.admin_functions) && u.admin_functions.includes(fn);
+}
+function hasAnyCourseFn() { return ['biot', 'internal', 'external'].some(hasAdminFn); }
+// Вкладка доступна текущему пользователю с учётом выданных функций
+function tabAllowed(tab) {
+  if (tab === 'courses' || tab === 'assignments' || tab === 'sessions' || tab === 'certificates') return hasAnyCourseFn();
+  if (tab === 'protocols') return hasAdminFn('biot');
+  return true;
+}
+function adminFunctionsCellHtml(u) {
+  const fns = Array.isArray(u.admin_functions) ? u.admin_functions : [];
+  if (!fns.length) return `<span class="text-xs text-red-600 font-semibold">${_L('Функции не выданы — работать с обучением нельзя', 'Функциялар берілмеген — оқытумен жұмыс істеу мүмкін емес')}</span>`;
+  return `<div class="flex flex-wrap gap-1">${ADMIN_FUNCTIONS_UI.filter(f => fns.includes(f.key)).map(f => `<span class="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-100 whitespace-nowrap">${f.icon} ${esc(_L(f.ru, f.kz))}</span>`).join('')}</div>`;
+}
+// Чекбоксы функций в карточке администратора (видны только суперадмину при роли «Администратор»)
+function renderAdminFunctionCheckboxes(selected) {
+  const box = document.getElementById('uAdminFunctions');
+  if (!box) return;
+  const sel = Array.isArray(selected) ? selected : [];
+  box.innerHTML = ADMIN_FUNCTIONS_UI.map(f => `
+    <label class="flex items-start gap-2 p-2 border rounded bg-white cursor-pointer hover:bg-blue-50/40">
+      <input type="checkbox" class="rounded text-blue-600 mt-0.5" value="${f.key}" ${sel.includes(f.key) ? 'checked' : ''}>
+      <span><span class="text-sm font-semibold text-slate-800">${f.icon} ${esc(_L(f.ru, f.kz))}</span><span class="block text-[11px] text-slate-500">${esc(_L(f.hintRu, f.hintKz))}</span></span>
+    </label>`).join('');
+}
+// В форме курса админ видит только те виды курса, по которым ему выдана функция
+function restrictCourseKindOptions() {
+  const sel = document.getElementById('cKind');
+  if (!sel) return;
+  const need = { internal: 'biot', no_protocol: 'internal', external: 'external' };
+  Array.from(sel.options).forEach(o => { const ok = !need[o.value] || hasAdminFn(need[o.value]); o.disabled = !ok; o.hidden = !ok; });
+  const cur = sel.options[sel.selectedIndex];
+  if (cur && cur.disabled) {
+    const first = Array.from(sel.options).find(o => !o.disabled);
+    if (first) { sel.value = first.value; onCourseKindChange(); }
+  }
+}
+// Подтягиваем свежие функции админа с сервера (суперадмин мог изменить набор, пока сессия открыта)
+async function refreshAdminFunctions() {
+  if (!state.token || !state.user || state.user.role !== 'admin') return;
+  try {
+    const me = await api.req('/api/auth/me');
+    const fresh = Array.isArray(me.admin_functions) ? me.admin_functions : [];
+    const old = Array.isArray(state.user.admin_functions) ? state.user.admin_functions : [];
+    if (JSON.stringify(fresh) !== JSON.stringify(old)) {
+      state.user.admin_functions = fresh;
+      localStorage.setItem('user', JSON.stringify(state.user));
+      render();
+    }
+  } catch (e) { /* не критично: сервер всё равно проверяет права на каждый запрос */ }
+}
+
 // Упрощённый дашборд ("наблюдатель"): роль assistant, либо любой пользователь
 // с назначенной ролью в комиссии (committee_role), кроме superadmin — ему всегда
 // показываем полный интерфейс. См. ТЗ §5.
@@ -1335,6 +1399,8 @@ function renderMain(app) {
   if ((state.tab === 'admins' || state.tab === 'audit') && state.user.role !== 'superadmin') {
     state.tab = 'dashboard';
   }
+  // Вкладка, к которой у админа нет выданной функции (например, после смены набора функций) — возвращаем на главную
+  if (!isEmployee && !isObserver && !tabAllowed(state.tab)) state.tab = 'dashboard';
   const roleName = t('role_' + state.user.role) || state.user.role;
 
   app.innerHTML = `
@@ -1394,10 +1460,10 @@ function navSections(kind) {
   return [
     { id: 'home', label: t('nav_dashboard'), tabs: [['dashboard', t('nav_dashboard')]] },
     { id: 'staff', label: t('nav_users'), tabs: [['users', _L('Список', 'Тізім')], ['archive', _L('Архив', 'Мұрағат')], ...(su ? [['admins', _L('Администраторы и ассистенты', 'Әкімшілер мен ассистенттер')]] : [])] },
-    { id: 'learn', label: _L('Обучение', 'Оқыту'), tabs: [['courses', t('nav_courses')], ['assignments', t('nav_assignments')], ['sessions', _L('Группы обучения', 'Оқыту топтары')]] },
-    { id: 'docs', label: _L('Документы', 'Құжаттар'), tabs: [['protocols', t('nav_protocols')], ['certificates', t('nav_certificates')]] },
+    { id: 'learn', label: _L('Обучение', 'Оқыту'), tabs: hasAnyCourseFn() ? [['courses', t('nav_courses')], ['assignments', t('nav_assignments')], ['sessions', _L('Группы обучения', 'Оқыту топтары')]] : [] },
+    { id: 'docs', label: _L('Документы', 'Құжаттар'), tabs: [...(hasAdminFn('biot') ? [['protocols', t('nav_protocols')]] : []), ...(hasAnyCourseFn() ? [['certificates', t('nav_certificates')]] : [])] },
     { id: 'sys', label: t('nav_settings'), tabs: [['settings', t('nav_settings')], ...(su ? [['audit', '📜 ' + _L('Журнал действий', 'Әрекеттер журналы')]] : [])] }
-  ];
+  ].filter(sec => sec.tabs.length);   // раздел без доступных вкладок (функция не выдана) не показываем
 }
 function navActiveSection(kind) {
   const tab = state.tab === 'user_profile' ? 'users' : state.tab;
@@ -1673,6 +1739,11 @@ async function loadTabContent() {
                   <div id="uAssistantDepartments" class="max-h-32 overflow-y-auto border rounded bg-white p-1.5 space-y-1 text-sm"></div>
                 </div>
               </div>
+            </div>
+            <div id="adminFunctionsWrapper" class="hidden border rounded-lg p-3 bg-blue-50/40">
+              <label class="text-xs font-semibold text-slate-600">Функции администратора</label>
+              <p class="text-[11px] text-slate-500 mb-2">Отметьте, чем занимается этот администратор — можно выбрать несколько. Работать он сможет только с отмеченным, остальное будет скрыто и закрыто на сервере.</p>
+              <div id="uAdminFunctions" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
             </div>
             <div data-staff-only>
               <label class="text-xs font-semibold text-slate-600">Роль в комиссии</label>
@@ -3110,6 +3181,10 @@ const DASH_GROUPS = [
   { key: 'internal', icon: '🏢', ru: 'Внутренние курсы', kz: 'Ішкі курстар' },
   { key: 'external', icon: '🎓', ru: 'Внешние курсы', kz: 'Сыртқы курстар' }
 ];
+// Дашборды, доступные текущему пользователю: у админа — только по выданным функциям
+function dashAllowedKeys() {
+  return [...DASH_GROUPS.map(g => g.key), 'medbook'].filter(hasAdminFn);
+}
 function dashGroupLabel(key) {
   const g = DASH_GROUPS.find(x => x.key === key);
   return g ? _L(g.ru, g.kz) : '';
@@ -3173,7 +3248,7 @@ async function loadDashboardCourseStats() {
       api.getAssignments({ ...dashParams(), active_only: 1 }).catch(() => null),
       api.getCourses().catch(() => null),
       api.req('/api/training-sessions?status=planned').catch(() => []),
-      mbLoad()
+      hasAdminFn('medbook') ? mbLoad() : Promise.resolve()
     ]);
     dashPlanned = Array.isArray(planned) ? planned : [];
     dashCourseStats = summary.courses || [];
@@ -3197,7 +3272,7 @@ async function loadDashboardCourseStats() {
       document.getElementById('dashMandatoryMissing').textContent = missing;
     }
 
-    if (dashMainGroup !== 'medbook' && !DASH_GROUPS.some(g => g.key === dashMainGroup)) dashMainGroup = 'biot';
+    { const allowed = dashAllowedKeys(); if (!allowed.includes(dashMainGroup)) dashMainGroup = allowed[0] || 'biot'; }
     ensureDashSelectedCourse();
     renderDashCourseTabs();
     renderDashCoursePanel();
@@ -3214,7 +3289,7 @@ function ensureDashSelectedCourse() {
 
 // Переключение дашборда: БиОТ / Внутренние / Внешние
 function selectDashGroup(key) {
-  if (key && (key === 'medbook' || DASH_GROUPS.some(g => g.key === key))) dashMainGroup = key;
+  if (key && dashAllowedKeys().includes(key)) dashMainGroup = key;
   dashSelectedCourseId = null;
   dashExpAll = (key === 'medbook');   // у мед. книжек нет курсов — внизу показываем общий список
   renderDashCourseTabs();
@@ -3286,7 +3361,7 @@ function renderDashCourseTabs() {
   if (!tabsDiv) return;
   tabsDiv.className = 'mb-4';
   // Три переключателя — по одному дашборду на вид курсов
-  const switcher = DASH_GROUPS.map(g => {
+  const switcher = DASH_GROUPS.filter(g => hasAdminFn(g.key)).map(g => {
     const st = dashGroupStats(g.key);
     const on = g.key === dashMainGroup;
     const alert = st.overdue > 0 || st.missingMandatory;
@@ -3300,7 +3375,7 @@ function renderDashCourseTabs() {
         <div class="mt-1 text-[11px] text-slate-500 leading-tight">${esc(dashGroupHow(g.key))}</div>
         <div class="mt-2 text-xs text-slate-600"><b>${st.courses.length}</b> ${_L('курс.', 'курс')} · <b class="text-emerald-600">${st.valid}</b> ${_L('действует', 'жарамды')} · <b class="${st.overdue > 0 ? 'text-red-600' : 'text-slate-400'}">${st.overdue}</b> ${_L('просроч.', 'мерзімі өткен')}</div>
       </div>`;
-  }).join('') + mbSwitcherCardHtml(dashMainGroup === 'medbook');
+  }).join('') + (hasAdminFn('medbook') ? mbSwitcherCardHtml(dashMainGroup === 'medbook') : '');
   // Курсы выбранного дашборда
   const list = dashGroupCourses(dashMainGroup);
   const buttons = list.map(c => {
@@ -3962,7 +4037,7 @@ const AUDIT_ACTION_LABELS = {
 const AUDIT_FIELD_LABELS = {
   last_name: 'Фамилия', first_name: 'Имя', object: 'Объект', department: 'Отдел', position: 'Должность',
   tco_badge: '№ пропуска ТШО', permanent_certificate_number: '№ сертификата', login: 'Логин',
-  committee_role: 'Роль в комиссии', role: 'Роль', iin: 'ИИН', password: 'Пароль', active: 'Доступ', zone: 'Зона ассистента'
+  committee_role: 'Роль в комиссии', role: 'Роль', iin: 'ИИН', password: 'Пароль', active: 'Доступ', zone: 'Зона ассистента', admin_functions: 'Функции администратора'
 };
 
 function auditActionLabel(row) {
@@ -4195,7 +4270,7 @@ async function loadUsersList() {
         ${(u.role === 'admin' || u.role === 'assistant') ? `${esc(u.last_name)} ${esc(u.first_name)}` : `<button onclick="openUserProfile(${u.id})" class="hover:text-blue-600 hover:underline text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>${u.staff_category === 'manager' ? `<span class="ml-1.5 align-middle text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">${_L('Руководитель', 'Басшы')}</span>` : u.staff_category === 'specialist' ? `<span class="ml-1.5 align-middle text-[10px] font-bold px-1.5 py-0.5 rounded bg-teal-100 text-teal-700">${_L('Специалист', 'Маман')}</span>` : ''}`}
       </td>
       <td class="px-4 py-3 font-mono text-slate-600">${u.login ? esc(u.login) : '<span class="text-slate-400 italic font-sans">не назначен</span>'}</td>
-      <td class="px-4 py-3 text-slate-600">${u.role === 'assistant' ? assistantZoneCellHtml(u) : `${esc(u.object || '—')} / ${esc(u.department || '—')}`}</td>
+      <td class="px-4 py-3 text-slate-600">${u.role === 'assistant' ? assistantZoneCellHtml(u) : u.role === 'admin' ? adminFunctionsCellHtml(u) : `${esc(u.object || '—')} / ${esc(u.department || '—')}`}</td>
       <td class="px-4 py-3 text-slate-600">${esc(posLabel(u.position) || '—')}</td>
       ${showRot ? `<td class="px-4 py-3 text-xs">${rotationCellHtml(u)}</td><td class="px-4 py-3 text-xs">${overtimeCellHtml(u)}</td>` : ''}
       ${!isAdminsTab ? `<td class="px-4 py-3 text-xs text-slate-600">${iinCellHtml(u.iin)}</td>` : ''}
@@ -4836,6 +4911,8 @@ async function openUserModal(u = null, presetRole = null) {
     }
   }
   renderAssistantZoneCheckboxes(u ? (u.assistant_objects || []) : [], u ? (u.assistant_departments || []) : []);
+  // Новому администратору заранее ничего не отмечаем: функции выдаёт суперадмин осознанно
+  renderAdminFunctionCheckboxes(u ? (u.admin_functions || []) : []);
   onUserRoleFieldChange();
   const roleForTitle = u ? u.role : document.getElementById('uRole').value;
   document.getElementById('userModalTitle').textContent = state.tab === 'admins'
@@ -4865,6 +4942,8 @@ function onUserRoleFieldChange() {
   const wrapper = document.getElementById('assistantZoneWrapper');
   if (!roleSel || !wrapper) return;
   wrapper.classList.toggle('hidden', roleSel.value !== 'assistant');
+  const afw = document.getElementById('adminFunctionsWrapper');
+  if (afw) afw.classList.toggle('hidden', roleSel.value !== 'admin' || !isSuperadminUser());
   // Категория и дата начала работы — только для сотрудников (не для админов/ассистентов) и не для ассистента-редактора
   const sf = document.getElementById('staffFieldsWrapper');
   if (sf) sf.classList.toggle('hidden', roleSel.value !== 'employee' || isObserverUser());
@@ -4970,6 +5049,10 @@ async function saveUserForm(e) {
     data.assistant_departments = [];
   }
   if (isObserverUser()) { delete data.assistant_objects; delete data.assistant_departments; }
+  // Функции администратора шлёт только суперадмин (сервер всё равно игнорирует их от других ролей)
+  if (isSuperadminUser() && data.role === 'admin') {
+    data.admin_functions = Array.from(document.querySelectorAll('#uAdminFunctions input:checked')).map(el => el.value);
+  }
   const pass = document.getElementById('uPass').value;
   if (pass) data.password = pass;
   if (data.login && !pass && !id) {
@@ -4994,6 +5077,8 @@ async function saveUserForm(e) {
       forbidden: 'Недостаточно прав',
       invalid_committee_role: 'Недопустимая роль в комиссии',
       invalid_iin: 'ИИН должен состоять ровно из 12 цифр',
+      invalid_admin_function: 'Недопустимая функция администратора',
+      forbidden_function: 'Эта функция вам не назначена',
       out_of_zone: 'Этот объект/отдел вне вашей зоны доступа',
       zone_required: 'Выберите объект и отдел из вашей зоны доступа',
       duplicate_employee: 'Сотрудник с таким ФИО уже есть в системе'
@@ -6222,6 +6307,7 @@ async function openCourseModal(id) {
     renderVideoStatus('kz', null);
     document.getElementById('courseModalTitle').textContent = 'Новый курс';
   }
+  restrictCourseKindOptions();
   document.getElementById('courseModal').classList.remove('hidden');
 }
 
@@ -9358,6 +9444,7 @@ async function pwaRefreshModal() {
 }
 
 pwaAfterLogin();
+refreshAdminFunctions();
 </script>
 </body>
 </html>

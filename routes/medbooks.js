@@ -11,13 +11,15 @@ const express = require('express');
 const router = express.Router();
 const { query, pool } = require('../db');
 const { authRequired, requireRole } = require('./auth');
+const { requireAdminFunction } = require('../lib/adminFunctions');
 const { logAction } = require('../lib/audit');
 const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 const { keyOf } = require('../lib/positionCourses');
 const mb = require('../lib/medbook');
 
-const STAFF = requireRole('admin', 'assistant', 'superadmin');
-const ADMIN = requireRole('admin', 'superadmin');
+// Админ работает с мед. книжками только при выданной функции «Мед. книжки»; ассистент и суперадмин — как раньше
+const STAFF = [requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('medbook')];
+const ADMIN = [requireRole('admin', 'superadmin'), requireAdminFunction('medbook')];
 
 async function structureRows() {
   const r = await query('SELECT org_structure FROM settings WHERE id = 1');
