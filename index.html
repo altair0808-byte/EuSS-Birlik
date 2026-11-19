@@ -38,18 +38,27 @@
     /* Крупнее зона нажатия у кнопок в таблицах и карточках */
     #tabContent button { min-height: 36px; }
     /* Таблицы-списки → карточки (подписи колонок подставляет JS: data-label) */
-    .overflow-x-auto { overflow-x: visible; }
+    /* широкие таблицы, которые не превращаются в карточки, листаются пальцем внутри своего блока */
+    .overflow-x-auto { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    #tabContent .overflow-x-auto:has(> table.rt) { overflow-x: visible; border: 0 !important; }
     table.rt, table.rt tbody, table.rt tr, table.rt td { display: block; width: 100%; max-width: none; }
     table.rt thead { display: none; }
     table.rt tr { border: 1px solid #e2e8f0 !important; border-radius: 12px; margin-bottom: 10px; padding: 6px 12px; background: #fff; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
-    table.rt td { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 6px 0 !important; border: 0 !important; text-align: right !important; word-break: break-word; }
-    table.rt td::before { content: attr(data-label); font-weight: 600; font-size: 12px; color: #64748b; text-align: left; flex: 0 0 38%; max-width: 38%; }
-    table.rt td[data-label=""]::before { display: none; }
-    table.rt td[data-label=""] { justify-content: flex-start; text-align: left !important; }
+    /* Ячейка = подпись слева (38%) + всё содержимое справа одной колонкой (несколько блоков — друг под другом, а не в ряд) */
+    table.rt td { display: grid; grid-template-columns: minmax(0, 38%) minmax(0, 1fr); column-gap: 12px; row-gap: 0; align-items: start; padding: 6px 0 !important; border: 0 !important; text-align: right !important; word-break: break-word; overflow-wrap: anywhere; }
+    table.rt td::before { content: attr(data-label); grid-column: 1; grid-row: 1 / span 20; font-weight: 600; font-size: 12px; color: #64748b; text-align: left; }
+    table.rt td > * { grid-column: 2; min-width: 0; justify-self: end; max-width: 100%; }
+    table.rt td > * + * { margin-top: 4px; }
+    table.rt td > .flex { justify-content: flex-end; }
+    table.rt td[data-label=""]::before, table.rt td:not([data-label])::before { display: none; }
+    table.rt td:not([data-label]) { grid-template-columns: minmax(0, 1fr); text-align: left !important; }
+    table.rt td:not([data-label]) > * { grid-column: 1; justify-self: start; }
+    table.rt td[data-label=""] { grid-template-columns: minmax(0, 1fr); text-align: left !important; }
+    table.rt td[data-label=""] > * { grid-column: 1; justify-self: start; }
     table.rt td[colspan] { display: block; text-align: center !important; }
     table.rt td[colspan]::before { display: none; }
-    table.rt td:last-child { border-top: 1px dashed #e2e8f0 !important; margin-top: 4px; padding-top: 10px !important; flex-wrap: wrap; justify-content: flex-end; }
-    table.rt td:last-child::before { flex-basis: 100%; max-width: 100%; }
+    table.rt td:last-child { border-top: 1px dashed #e2e8f0 !important; margin-top: 4px; padding-top: 10px !important; display: flex; flex-wrap: wrap; gap: 6px 12px; justify-content: flex-end; }
+    table.rt td:last-child::before { display: none; }
     /* Список сотрудников: своя компактная карточка (без подписей колонок) */
     table.rt.ulist tr { display: grid; grid-template-columns: auto 1fr auto; column-gap: 10px; row-gap: 6px; align-items: start; padding: 10px 12px; }
     table.rt.ulist td { display: block; width: auto; padding: 0 !important; text-align: left !important; }
@@ -1783,7 +1792,7 @@ async function loadTabContent() {
               ${!isAdminsTab ? usersTableHeadHtml(isArchiveTab) : `<tr>
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">ФИО</th>
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">Логин</th>
-                <th class="px-4 py-3 text-left font-semibold text-slate-600">Объект / Отдел</th>
+                <th class="px-4 py-3 text-left font-semibold text-slate-600">${_L('Зона и разделы', 'Аймақ және бөлімдер')}</th>
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">Должность</th>
                 ${!isAdminsTab && !isArchiveTab ? `<th class="px-4 py-3 text-left font-semibold text-slate-600">${_L('Вахта', 'Вахта')}</th><th class="px-4 py-3 text-left font-semibold text-slate-600">${_L('Овертайм', 'Овертайм')}</th>` : ''}
                 ${!isAdminsTab ? `<th class="px-4 py-3 text-left font-semibold text-slate-600">ИИН</th>` : ''}
@@ -5987,7 +5996,7 @@ async function sessionsLoadDashboard() {
       ${card('Не присутствовали', t0.people_absent, 'text-slate-500')}
     </div>
     <h3 class="text-sm font-bold mb-2">По курсам</h3>
-    <div class="overflow-x-auto mb-6"><table class="w-full text-sm text-left"><thead class="text-xs text-slate-500 uppercase"><tr>
+    <div class="overflow-x-auto mb-6"><table class="w-full text-sm text-left rt"><thead class="text-xs text-slate-500 uppercase"><tr>
       <th class="py-2 pr-3">Курс</th><th class="py-2 pr-3">Вид</th><th class="py-2 pr-3 text-right">Заявок ждут</th><th class="py-2 pr-3 text-right">Проведено</th><th class="py-2 pr-3 text-right">Записано</th><th class="py-2 pr-3 text-right">Прошли</th><th class="py-2 text-right">Не были</th></tr></thead>
       <tbody>${courseRows || '<tr><td colspan="7" class="py-4 text-center text-slate-400">Данных пока нет</td></tr>'}</tbody></table></div>
     <div class="grid md:grid-cols-2 gap-6 mb-6">
@@ -5995,7 +6004,7 @@ async function sessionsLoadDashboard() {
       <div><h3 class="text-sm font-bold mb-2">Недавно проведённые</h3>${(s.recent || []).map((x) => li(x, `${sessFmtDate(x.test_date)} · прошли ${x.passed_count}`)).join('') || '<div class="text-slate-400 text-sm">Пока нет</div>'}</div>
     </div>
     <h3 class="text-sm font-bold mb-2">По объектам</h3>
-    <div class="overflow-x-auto"><table class="w-full text-sm text-left max-w-xl"><thead class="text-xs text-slate-500 uppercase"><tr><th class="py-2 pr-3">Объект</th><th class="py-2 pr-3 text-right">Записано</th><th class="py-2 text-right">Прошли</th></tr></thead>
+    <div class="overflow-x-auto"><table class="w-full text-sm text-left max-w-xl rt"><thead class="text-xs text-slate-500 uppercase"><tr><th class="py-2 pr-3">Объект</th><th class="py-2 pr-3 text-right">Записано</th><th class="py-2 text-right">Прошли</th></tr></thead>
       <tbody>${objRows || '<tr><td colspan="3" class="py-4 text-center text-slate-400">Данных пока нет</td></tr>'}</tbody></table></div>`;
 }
 
@@ -8237,7 +8246,7 @@ async function toggleProtocolJournal(id) {
     }
     body.innerHTML = `
       <div class="overflow-x-auto">
-        <table class="min-w-full text-xs">
+        <table class="min-w-full text-xs rt">
           <thead><tr class="text-slate-500">
             <th class="text-left px-2 py-1">ФИО</th>
             <th class="text-left px-2 py-1">Роль</th>
@@ -9479,7 +9488,7 @@ function renderMedbookPanel(panelDiv) {
       <button type="button" onclick="mbOpenAdd()" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700">➕ ${_L('Добавить сотрудника вне должности', 'Лауазымнан тыс қызметкерді қосу')}</button>
     </div>
     <div id="mbTableWrap" class="mt-3 overflow-x-auto border border-slate-200 rounded-lg">
-      ${rows.length ? `<table class="w-full text-left text-sm">
+      ${rows.length ? `<table class="w-full text-left text-sm rt">
         <thead class="bg-slate-50 text-[11px] uppercase text-slate-500"><tr>
           <th class="px-3 py-2">${_L('Сотрудник', 'Қызметкер')}</th><th class="px-3 py-2">${_L('Должность', 'Лауазым')}</th><th class="px-3 py-2">${_L('Период', 'Мерзімі')}</th>
           <th class="px-3 py-2">${_L('Медосмотр', 'Медтексеру')}</th><th class="px-3 py-2">${_L('Действует до', 'Дейін жарамды')}</th><th class="px-3 py-2">${_L('Осталось', 'Қалды')}</th><th class="px-3 py-2">${_L('Статус', 'Күйі')}</th><th></th>
@@ -9906,7 +9915,7 @@ function renderMedexamPanel(panelDiv) {
       <button type="button" onclick="meOpenImport()" class="px-3 py-1.5 rounded-lg text-xs font-semibold border border-emerald-300 text-emerald-700 hover:bg-emerald-50">📥 ${_L('Загрузить из Excel', 'Excel-ден жүктеу')}</button>
     </div>
     <div class="mt-3 overflow-x-auto border border-slate-200 rounded-lg">
-      ${shown.length ? `<table class="w-full text-left text-sm">
+      ${shown.length ? `<table class="w-full text-left text-sm rt">
         <thead class="bg-slate-50 text-[11px] uppercase text-slate-500"><tr>
           <th class="px-3 py-2">${_L('Сотрудник', 'Қызметкер')}</th><th class="px-3 py-2">${_L('Должность', 'Лауазым')}</th>
           <th class="px-3 py-2">${_L('Медосмотр', 'Медтексеру')}</th><th class="px-3 py-2">${_L('Действует до', 'Дейін жарамды')}</th><th class="px-3 py-2">${_L('Осталось', 'Қалды')}</th><th class="px-3 py-2">${_L('Статус', 'Күйі')}</th><th></th>
