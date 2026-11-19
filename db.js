@@ -691,6 +691,39 @@ async function initDb() {
   `);
   // Примечание к санкнижке (ФГ, СМ, где проходил и т.п.) — вносится вручную или из Excel-загрузки.
   await pool.query(`ALTER TABLE medbook_records ADD COLUMN IF NOT EXISTS note TEXT;`);
+  // «Допуск до» из журнала (Excel-загрузка). Если заполнено — это и есть срок книжки, он не зависит от периода:
+  // дата прохождения = «допуск до» минус период должности (6 или 12 мес.). При ручном вводе даты начала — NULL.
+  await pool.query(`ALTER TABLE medbook_records ADD COLUMN IF NOT EXISTS expires_date DATE;`);
+  // Один раз: у уже внесённых книжек фиксируем срок, каким он был при внесении (начало + период записи),
+  // чтобы смена периода должности (12 ↔ 6 мес.) больше не сдвигала «допуск до» из журнала.
+  await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS medbook_expiry_migrated BOOLEAN NOT NULL DEFAULT FALSE;`);
+  const mbMig = await pool.query(`SELECT medbook_expiry_migrated FROM settings WHERE id = 1`);
+  if (mbMig.rows[0] && !mbMig.rows[0].medbook_expiry_migrated) {
+    await pool.query(`UPDATE medbook_records SET expires_date = (start_date + make_interval(months => period_months))::date
+                       WHERE expires_date IS NULL AND start_date IS NOT NULL AND period_months IS NOT NULL`);
+    await pool.query(`UPDATE settings SET medbook_expiry_migrated = TRUE WHERE id = 1`);
+  }
+
+  // ЕЖЕГОДНЫЙ МЕДОСМОТР — обязателен всем сотрудникам, раз в 12 месяцев. Одна запись на сотрудника:
+  // срок «действует до» (главное) и дата прохождения. Сервер: routes/medexams.js.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS medexam_records (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      exam_date DATE,
+      expires_date DATE NOT NULL,
+      note TEXT,
+      updated_by INTEGER,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  // Один раз: у кого есть функция «Мед. книжки» — получает и «Ежегодный медосмотр»
+  await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS medexam_fn_migrated BOOLEAN NOT NULL DEFAULT FALSE;`);
+  const meMig = await pool.query(`SELECT medexam_fn_migrated FROM settings WHERE id = 1`);
+  if (meMig.rows[0] && !meMig.rows[0].medexam_fn_migrated) {
+    await pool.query(`UPDATE users SET admin_functions = array_append(admin_functions, 'medexam')
+                       WHERE 'medbook' = ANY(admin_functions) AND NOT ('medexam' = ANY(admin_functions))`);
+    await pool.query(`UPDATE settings SET medexam_fn_migrated = TRUE WHERE id = 1`);
+  }
 
   // Цвет удостоверения по виду обучения: у каждого курса свой (см. lib/cardColors.js).
   await pool.query(`ALTER TABLE courses ADD COLUMN IF NOT EXISTS card_color TEXT;`);

@@ -1345,7 +1345,8 @@ const ADMIN_FUNCTIONS_UI = [
   { key: 'biot', icon: '🦺', ru: 'БиОТ', kz: 'БиОТ', hintRu: 'Курсы БиОТ с тестом, назначения, протоколы (у ассистента — без протоколов), удостоверения', hintKz: 'Тестпен БиОТ курстары, тағайындаулар, хаттамалар, куәліктер' },
   { key: 'internal', icon: '🏢', ru: 'Внутреннее обучение', kz: 'Ішкі оқыту', hintRu: 'Внутренние курсы без протокола и группы обучения', hintKz: 'Хаттамасыз ішкі курстар және оқыту топтары' },
   { key: 'external', icon: '🎓', ru: 'Внешнее обучение', kz: 'Сыртқы оқыту', hintRu: 'Курсы, которые провела другая организация', hintKz: 'Басқа ұйым өткізген курстар' },
-  { key: 'medbook', icon: '🩺', ru: 'Мед. книжки', kz: 'Мед. кітапшалар', hintRu: 'Личные медицинские книжки сотрудников', hintKz: 'Қызметкерлердің жеке медициналық кітапшалары' }
+  { key: 'medbook', icon: '🩺', ru: 'Мед. книжки', kz: 'Мед. кітапшалар', hintRu: 'Личные медицинские книжки сотрудников', hintKz: 'Қызметкерлердің жеке медициналық кітапшалары' },
+  { key: 'medexam', icon: '🏥', ru: 'Ежегодный медосмотр', kz: 'Жыл сайынғы медтексеру', hintRu: 'Обязательный медосмотр всех сотрудников раз в год', hintKz: 'Барлық қызметкерлердің жыл сайынғы міндетті медтексеруі' }
 ];
 // Функции (дашборды) выдаёт суперадмин ролям «Администратор» и «Ассистент». Суперадмин — без ограничений.
 // Разделы, включённые на этом сайте (сервер: ENABLED_FUNCTIONS). Пока не загружено — считаем, что включено всё.
@@ -2328,6 +2329,7 @@ async function loadTabContent() {
         <h2 class="text-lg font-bold text-slate-900 mb-3">${t('nav_my_tests')}</h2>
         <div id="myTenure" class="mb-5"></div>
         <div id="myMedbook" class="mb-5"></div>
+        <div id="myMedexam" class="mb-5"></div>
         <div id="myTestsList" class="space-y-4"><div class="text-slate-400">Загрузка...</div></div>
       </div>
             <div id="testRunModal" class="fixed inset-0 bg-slate-900/60 hidden flex items-stretch sm:items-center justify-center p-0 sm:p-4 z-50 overflow-hidden overscroll-contain">
@@ -2367,6 +2369,7 @@ async function loadTabContent() {
     loadMyTests();
     loadMyTenure();
     loadMyMedbook();
+    loadMyMedexam();
   }
 
   if (state.tab === 'my_id_cards') {
@@ -2631,7 +2634,8 @@ function showSettingsTab(name) {
 const SITE_FN_TOGGLES = [
   { key: 'internal', icon: '🏢', ru: 'Внутреннее обучение', kz: 'Ішкі оқыту', hintRu: 'Курсы без протокола и группы обучения по ним' },
   { key: 'external', icon: '🎓', ru: 'Внешнее обучение', kz: 'Сыртқы оқыту', hintRu: 'Курсы, которые провела другая организация' },
-  { key: 'medbook', icon: '🩺', ru: 'Мед. книжки (санкнижки)', kz: 'Мед. кітапшалар', hintRu: 'Личные медицинские книжки сотрудников' }
+  { key: 'medbook', icon: '🩺', ru: 'Мед. книжки (санкнижки)', kz: 'Мед. кітапшалар', hintRu: 'Личные медицинские книжки сотрудников' },
+  { key: 'medexam', icon: '🏥', ru: 'Ежегодный медосмотр', kz: 'Жыл сайынғы медтексеру', hintRu: 'Обязательный медосмотр всех сотрудников раз в год' }
 ];
 async function loadSiteFunctions() {
   const box = document.getElementById('siteFnBox');
@@ -2653,7 +2657,7 @@ async function loadSiteFunctions() {
     }).join('');
 }
 function siteFnPresetLite() {
-  document.querySelectorAll('#siteFnBox [data-site-fn]').forEach(el => { if (!el.disabled) el.checked = el.dataset.siteFn === 'medbook'; });
+  document.querySelectorAll('#siteFnBox [data-site-fn]').forEach(el => { if (!el.disabled) el.checked = el.dataset.siteFn === 'medbook' || el.dataset.siteFn === 'medexam'; });
   const msg = document.getElementById('siteFnMsg');
   if (msg) { msg.className = 'text-xs mt-2 text-slate-500'; msg.textContent = _L('Отмечено: БиОТ и санкнижки. Нажмите «Сохранить».', 'Белгіленді. «Сақтау» басыңыз.'); }
 }
@@ -3324,7 +3328,7 @@ const DASH_GROUPS = [
 ];
 // Дашборды, доступные текущему пользователю: у админа — только по выданным функциям
 function dashAllowedKeys() {
-  return [...DASH_GROUPS.map(g => g.key), 'medbook'].filter(hasAdminFn);
+  return [...DASH_GROUPS.map(g => g.key), 'medbook', 'medexam'].filter(hasAdminFn);
 }
 function dashGroupLabel(key) {
   const g = DASH_GROUPS.find(x => x.key === key);
@@ -3389,7 +3393,8 @@ async function loadDashboardCourseStats() {
       api.getAssignments({ ...dashParams(), active_only: 1 }).catch(() => null),
       api.getCourses().catch(() => null),
       api.req('/api/training-sessions?status=planned').catch(() => []),
-      hasAdminFn('medbook') ? mbLoad() : Promise.resolve()
+      hasAdminFn('medbook') ? mbLoad() : Promise.resolve(),
+      hasAdminFn('medexam') ? meLoad() : Promise.resolve()
     ]);
     dashPlanned = Array.isArray(planned) ? planned : [];
     dashCourseStats = summary.courses || [];
@@ -3432,7 +3437,7 @@ function ensureDashSelectedCourse() {
 function selectDashGroup(key) {
   if (key && dashAllowedKeys().includes(key)) dashMainGroup = key;
   dashSelectedCourseId = null;
-  dashExpAll = (key === 'medbook');   // у мед. книжек нет курсов — внизу показываем общий список
+  dashExpAll = (key === 'medbook' || key === 'medexam');   // у мед. книжек нет курсов — внизу показываем общий список
   renderDashCourseTabs();
   renderDashCoursePanel();
   expScopeChanged();
@@ -3516,7 +3521,8 @@ function renderDashCourseTabs() {
         <div class="mt-1 text-[11px] text-slate-500 leading-tight">${esc(dashGroupHow(g.key))}</div>
         <div class="mt-2 text-xs text-slate-600"><b>${st.courses.length}</b> ${_L('курс.', 'курс')} · <b class="text-emerald-600">${st.valid}</b> ${_L('действует', 'жарамды')} · <b class="${st.overdue > 0 ? 'text-red-600' : 'text-slate-400'}">${st.overdue}</b> ${_L('просроч.', 'мерзімі өткен')}</div>
       </div>`;
-  }).join('') + (hasAdminFn('medbook') ? mbSwitcherCardHtml(dashMainGroup === 'medbook') : '');
+  }).join('') + (hasAdminFn('medbook') ? mbSwitcherCardHtml(dashMainGroup === 'medbook') : '')
+    + (hasAdminFn('medexam') ? meSwitcherCardHtml(dashMainGroup === 'medexam') : '');
   // Курсы выбранного дашборда
   const list = dashGroupCourses(dashMainGroup);
   const buttons = list.map(c => {
@@ -3525,8 +3531,8 @@ function renderDashCourseTabs() {
     return `<button type="button" onclick="selectDashCourse(${c.id})" class="px-3 py-1.5 rounded-full text-xs font-semibold border ${on ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}">${esc(dashCourseTitle(c))}${flag}</button>`;
   }).join('');
   tabsDiv.innerHTML = `
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">${switcher}</div>
-    ${dashMainGroup === 'medbook' ? '' : `<div class="flex flex-wrap gap-1.5">${buttons || `<div class="text-slate-400 text-sm">${_L('В этой категории пока нет курсов', 'Бұл санатта әзірге курс жоқ')}</div>`}</div>`}`;
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 mb-4">${switcher}</div>
+    ${dashMainGroup === 'medbook' || dashMainGroup === 'medexam' ? '' : `<div class="flex flex-wrap gap-1.5">${buttons || `<div class="text-slate-400 text-sm">${_L('В этой категории пока нет курсов', 'Бұл санатта әзірге курс жоқ')}</div>`}</div>`}`;
 }
 
 // Список групп обучения, запланированных по набору курсов
@@ -3566,6 +3572,7 @@ function renderDashCoursePanel() {
   if (!panelDiv) return;
   const key = dashMainGroup;
   if (key === 'medbook') { renderMedbookPanel(panelDiv); return; }
+  if (key === 'medexam') { renderMedexamPanel(panelDiv); return; }
   const list = dashGroupCourses(key);
   const c = list.find(x => String(x.id) === String(dashSelectedCourseId));
   const card = x => `
@@ -4162,6 +4169,9 @@ const AUDIT_ACTION_LABELS = {
   medbook_removed: ['🩺', 'Убрал мед. книжку'],
   medbook_positions_saved: ['🩺', 'Изменил должности с мед. книжкой'],
   medbook_imported: ['🩺', 'Загрузил мед. книжки из Excel'],
+  medexam_saved: ['🏥', 'Внёс / обновил ежегодный медосмотр'],
+  medexam_removed: ['🏥', 'Сбросил ежегодный медосмотр'],
+  medexam_imported: ['🏥', 'Загрузил ежегодные медосмотры из Excel'],
   positions_remapped: ['🔁', 'Заменил должности сотрудников из Excel'],
   users_imported: ['📥', 'Импорт сотрудников из Excel'],
   rotation_set: ['👷', 'Указал вахту (заезд / отъезд)'],
@@ -4218,7 +4228,7 @@ function auditDetailsHtml(row) {
       parts.push(d.from ? `${esc(fmtDate(d.from))} → ${esc(fmtDate(d.to))}` : 'овертайм снят');
       break;
     case 'site_functions_set': {
-      const names = { internal: 'внутреннее обучение', external: 'внешнее обучение', medbook: 'мед. книжки' };
+      const names = { internal: 'внутреннее обучение', external: 'внешнее обучение', medbook: 'мед. книжки', medexam: 'ежегодный медосмотр' };
       const off = (d.disabled || []).map(k => names[k] || k);
       parts.push(off.length ? 'выключено: ' + esc(off.join(', ')) : 'все разделы включены');
       break;
@@ -8405,10 +8415,11 @@ async function loadUserProfile(userId) {
   const div = document.getElementById('profileContent');
   if (!div) return;
   try {
-    const [user, assignments, medbook] = await Promise.all([
+    const [user, assignments, medbook, medexam] = await Promise.all([
       api.getUser(userId),
       api.getAssignments({ user_id: userId }),
-      api.req('/api/medbooks/user/' + userId).catch(() => null)
+      api.req('/api/medbooks/user/' + userId).catch(() => null),
+      hasAdminFn('medexam') ? api.req('/api/medexams/user/' + userId).catch(() => null) : Promise.resolve(null)
     ]);
     const roleName = t('role_' + user.role) || user.role;
     // «Осталось дней» показываем только у актуального (последнего успешного) прохождения курса
@@ -8456,6 +8467,7 @@ async function loadUserProfile(userId) {
         </div>
       </div>
       ${user.role === 'employee' ? mbCardHtml(medbook, true, user.id) : ''}
+      ${user.role === 'employee' ? meCardHtml(medexam, true, user.id) : ''}
       <div id="assistantEditModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
         <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6">
           <h3 class="text-lg font-bold mb-4">Редактировать карточку</h3>
@@ -9403,7 +9415,7 @@ function renderMedbookPanel(panelDiv) {
       ${rows.length ? `<table class="w-full text-left text-sm">
         <thead class="bg-slate-50 text-[11px] uppercase text-slate-500"><tr>
           <th class="px-3 py-2">${_L('Сотрудник', 'Қызметкер')}</th><th class="px-3 py-2">${_L('Должность', 'Лауазым')}</th><th class="px-3 py-2">${_L('Период', 'Мерзімі')}</th>
-          <th class="px-3 py-2">${_L('Начало', 'Басталуы')}</th><th class="px-3 py-2">${_L('Действует до', 'Дейін жарамды')}</th><th class="px-3 py-2">${_L('Осталось', 'Қалды')}</th><th class="px-3 py-2">${_L('Статус', 'Күйі')}</th><th></th>
+          <th class="px-3 py-2">${_L('Медосмотр', 'Медтексеру')}</th><th class="px-3 py-2">${_L('Действует до', 'Дейін жарамды')}</th><th class="px-3 py-2">${_L('Осталось', 'Қалды')}</th><th class="px-3 py-2">${_L('Статус', 'Күйі')}</th><th></th>
         </tr></thead><tbody>${rows.map(tr).join('')}</tbody></table>`
       : `<div class="p-6 text-center text-sm text-slate-400">${s.total ? _L('Нет сотрудников по выбранному фильтру', 'Таңдалған сүзгі бойынша қызметкер жоқ') : _L('Пока никому не нужна книжка. Нажмите «Должности и периодичность» и отметьте должности, у которых она должна быть.', 'Әзірге ешкімге кітапша қажет емес. «Лауазымдар және мерзімділік» түймесін басып, кітапша қажет лауазымдарды белгілеңіз.')}</div>`}
     </div>
@@ -9455,8 +9467,13 @@ async function mbOpenForm(userId, preset) {
       <p class="text-xs text-slate-500 mb-4">${esc(posLabel(u.position) || '—')} · ${esc(u.object || '—')} / ${esc(u.department || '—')}</p>
       <form onsubmit="mbSubmitForm(event, ${userId})" class="space-y-3">
         <div>
-          <label class="text-xs font-semibold text-slate-600">${_L('Дата начала книжки', 'Кітапша басталған күні')}</label>
-          <input type="date" id="mbStart" required max="${today}" value="${esc((e.applicable && e.start_date) || '')}" class="w-full border p-2 rounded text-sm">
+          <div class="flex gap-4 text-xs font-semibold text-slate-600 mb-1.5">
+            <label class="flex items-center gap-1.5"><input type="radio" name="mbMode" value="exp" checked onchange="mbModeChange()"> ${_L('Допуск до (как в журнале)', 'Рұқсат мерзімі (журналдағыдай)')}</label>
+            <label class="flex items-center gap-1.5"><input type="radio" name="mbMode" value="start" onchange="mbModeChange()"> ${_L('Дата медосмотра', 'Медтексеру күні')}</label>
+          </div>
+          <input type="date" id="mbExpires" value="${esc((e.applicable && e.expires) || '')}" class="w-full border p-2 rounded text-sm">
+          <input type="date" id="mbStart" max="${today}" value="${esc((e.applicable && e.start_date) || '')}" class="w-full border p-2 rounded text-sm hidden">
+          <p class="text-[11px] text-slate-400 mt-1">${_L('Вторую дату сайт посчитает сам: «допуск до» = дата медосмотра + период (6 или 12 мес.).', 'Екінші күнді сайт өзі есептейді.')}</p>
         </div>
         <div>
           <label class="text-xs font-semibold text-slate-600">${_L('Напоминание', 'Еске салу')}</label>
@@ -9478,13 +9495,22 @@ async function mbOpenForm(userId, preset) {
           <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">${_L('Сохранить', 'Сақтау')}</button>
         </div>
       </form>`);
+    mbModeChange();
   } catch (err) { mbModal(`<p class="text-sm text-red-600">${esc(err.message)}</p><div class="text-right mt-3"><button onclick="mbCloseModal()" class="px-4 py-2 border rounded-lg text-sm">OK</button></div>`); }
+}
+function mbModeChange() {
+  const mode = (document.querySelector('input[name="mbMode"]:checked') || {}).value || 'exp';
+  document.getElementById('mbExpires').classList.toggle('hidden', mode !== 'exp');
+  document.getElementById('mbStart').classList.toggle('hidden', mode !== 'start');
 }
 async function mbSubmitForm(ev, userId) {
   ev.preventDefault();
   const radio = document.querySelector('input[name="mbPeriod"]:checked');
+  const mode = (document.querySelector('input[name="mbMode"]:checked') || {}).value || 'exp';
+  const val = document.getElementById(mode === 'exp' ? 'mbExpires' : 'mbStart').value;
+  if (!val) { const el = document.getElementById('mbFormMsg'); if (el) el.textContent = _L('Укажите дату', 'Күнді көрсетіңіз'); return; }
   try {
-    await api.req('/api/medbooks/user/' + userId, { method: 'PUT', body: { start_date: document.getElementById('mbStart').value, period_months: radio ? Number(radio.value) : undefined, note: (document.getElementById('mbNote') || {}).value || '' } });
+    await api.req('/api/medbooks/user/' + userId, { method: 'PUT', body: { ...(mode === 'exp' ? { expires_date: val } : { start_date: val }), period_months: radio ? Number(radio.value) : undefined, note: (document.getElementById('mbNote') || {}).value || '' } });
     mbAfterChange();
   } catch (err) { const el = document.getElementById('mbFormMsg'); if (el) el.textContent = err.message; }
 }
@@ -9710,7 +9736,7 @@ function mbCardHtml(e, canEdit, userId) {
         <div>
           <h3 class="text-sm font-bold text-slate-900">🩺 ${_L('Личная медицинская книжка', 'Жеке медициналық кітапша')} ${mbBadge(e.status)}</h3>
           ${e.start_date
-            ? `<p class="text-xs text-slate-600 mt-1.5">${_L('Начало', 'Басталуы')}: <b>${fmtDate(e.start_date)}</b> · ${_L('Действует до', 'Дейін жарамды')}: <b>${fmtDate(e.expires)}</b> · ${esc(mbLeftText(e))}</p>`
+            ? `<p class="text-xs text-slate-600 mt-1.5">${_L('Медосмотр', 'Медтексеру')}: <b>${fmtDate(e.start_date)}</b> · ${_L('Действует до', 'Дейін жарамды')}: <b>${fmtDate(e.expires)}</b> · ${esc(mbLeftText(e))}</p>`
             : `<p class="text-xs text-slate-600 mt-1.5">${_L('Дата начала книжки ещё не внесена.', 'Кітапшаның басталу күні әлі енгізілмеген.')}</p>`}
           <p class="text-[11px] text-slate-400 mt-1">${_L('Напоминание', 'Еске салу')}: ${esc(mbPeriodText(e.period_months))}${e.manual ? ' · ' + _L('добавлена вручную', 'қолмен қосылған') : ''}</p>
           ${e.note ? `<p class="text-[11px] text-slate-500 mt-1">📝 ${esc(e.note)}</p>` : ''}
@@ -9727,6 +9753,235 @@ async function loadMyMedbook() {
   if (!box) return;
   try { const e = await api.req('/api/medbooks/me'); box.innerHTML = e.applicable ? mbCardHtml(e, false, 0).replace('mb-6', 'mb-0') : ''; }
   catch (e) { /* вспомогательный блок — ошибку не показываем */ }
+}
+
+// =====================================================================================================
+// ЕЖЕГОДНЫЙ МЕДОСМОТР — обязателен всем сотрудникам, раз в 12 месяцев. Сервер: routes/medexams.js.
+// Главное — «действует до» (как в журналах); дата медосмотра = «действует до» минус 12 мес.
+// Окна (модалки) общие с санкнижками: mbModal / mbCloseModal.
+// =====================================================================================================
+const MEDEXAM_GROUP = { key: 'medexam', icon: '🏥', ru: 'Ежегодный медосмотр', kz: 'Жыл сайынғы медтексеру' };
+const meState = { rows: [], stats: null, status: '', q: '' };
+const ME_STATUS = {
+  valid:   { ru: 'Пройден',          kz: 'Өтті',              cls: 'bg-emerald-100 text-emerald-700' },
+  soon:    { ru: 'Скоро истекает',   kz: 'Жақында аяқталады', cls: 'bg-amber-100 text-amber-700' },
+  overdue: { ru: 'Просрочен',        kz: 'Мерзімі өткен',     cls: 'bg-red-100 text-red-700' },
+  no_date: { ru: 'Нет данных',       kz: 'Дерек жоқ',         cls: 'bg-slate-100 text-slate-600' }
+};
+function meBadge(st) {
+  const m = ME_STATUS[st] || ME_STATUS.no_date;
+  return `<span class="text-[11px] font-semibold px-2 py-0.5 rounded whitespace-nowrap ${m.cls}">${esc(_L(m.ru, m.kz))}</span>`;
+}
+async function meLoad() {
+  try {
+    const r = await api.req('/api/medexams/overview' + qs({ ...orgParams(), category: dashCategory }));
+    meState.rows = r.rows || []; meState.stats = r.stats || null;
+  } catch (e) { meState.rows = []; meState.stats = null; }
+}
+async function meReload() {
+  await meLoad();
+  if (document.getElementById('dashCourseTabs')) { renderDashCourseTabs(); renderDashCoursePanel(); }
+}
+function meSwitcherCardHtml(on) {
+  const s = meState.stats || { total: 0, valid: 0, soon: 0, overdue: 0, no_date: 0 };
+  const alert = s.overdue > 0;
+  return `
+    <div onclick="selectDashGroup('medexam')" class="cursor-pointer rounded-xl border-2 p-3 transition ${on ? 'border-blue-600 bg-blue-50 shadow-md' : alert ? 'border-red-200 bg-red-50/40 hover:border-red-300' : 'border-slate-200 bg-white hover:border-blue-300'}">
+      <div class="flex items-center gap-2">
+        <span class="text-xl leading-none">${MEDEXAM_GROUP.icon}</span>
+        <div class="text-sm font-black text-slate-900 leading-tight">${esc(_L(MEDEXAM_GROUP.ru, MEDEXAM_GROUP.kz))}</div>
+        ${alert ? `<span class="ml-auto text-[11px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700">⚠</span>` : ''}
+      </div>
+      <div class="mt-1 text-[11px] text-slate-500 leading-tight">${esc(_L('Обязателен всем, раз в год', 'Барлығына міндетті, жылына бір рет'))}</div>
+      <div class="mt-2 text-xs text-slate-600"><b>${s.total}</b> ${_L('чел.', 'адам')} · <b class="text-emerald-600">${s.valid + s.soon}</b> ${_L('пройден', 'өтті')} · <b class="${s.overdue > 0 ? 'text-red-600' : 'text-slate-400'}">${s.overdue}</b> ${_L('просроч.', 'мерзімі өткен')} · <b class="${s.no_date > 0 ? 'text-orange-600' : 'text-slate-400'}">${s.no_date}</b> ${_L('без данных', 'деректерсіз')}</div>
+    </div>`;
+}
+function renderMedexamPanel(panelDiv) {
+  const s = meState.stats || { total: 0, valid: 0, soon: 0, overdue: 0, no_date: 0 };
+  const kpi = (label, value, cls, status) => `
+    <div onclick="meSetStatus('${status}')" class="border rounded-lg p-3 flex flex-col cursor-pointer hover:bg-slate-50 ${meState.status === status ? 'border-blue-500 ring-1 ring-blue-300' : 'border-slate-200'}">
+      <div class="text-[11px] font-bold text-slate-500 uppercase leading-tight min-h-[2.4em] flex items-start">${esc(label)}</div>
+      <div class="text-xl font-black mt-1 tabular-nums ${cls}">${value}</div>
+    </div>`;
+  const q = meState.q.trim().toLowerCase();
+  const rows = meState.rows.filter(e => (!meState.status || e.status === meState.status)
+    && (!q || `${e.last_name} ${e.first_name} ${e.position} ${e.note || ''}`.toLowerCase().includes(q)));
+  const order = { overdue: 0, soon: 1, no_date: 2, valid: 3 };
+  rows.sort((a, b) => (order[a.status] - order[b.status]) || ((a.days_left ?? 1e9) - (b.days_left ?? 1e9)) || a.last_name.localeCompare(b.last_name, 'ru'));
+  const shown = rows.slice(0, 500);
+  const tr = e => `
+    <tr class="border-t border-slate-100 hover:bg-slate-50">
+      <td class="px-3 py-2"><a href="#" onclick="openUserProfile(${e.user_id});return false;" class="font-semibold text-blue-700 hover:underline">${esc(e.last_name)} ${esc(e.first_name)}</a>
+        ${e.note ? `<div class="text-[11px] text-slate-500 mt-0.5 max-w-xs" title="${esc(e.note)}">📝 ${esc(e.note.length > 70 ? e.note.slice(0, 70) + '…' : e.note)}</div>` : ''}</td>
+      <td class="px-3 py-2 text-xs text-slate-600">${esc(posLabel(e.position) || '—')}<div class="text-[11px] text-slate-400">${esc(e.object || '')}${e.department ? ' / ' + esc(e.department) : ''}</div></td>
+      <td class="px-3 py-2 text-xs whitespace-nowrap">${e.exam_date ? fmtDate(e.exam_date) : '—'}</td>
+      <td class="px-3 py-2 text-xs whitespace-nowrap font-semibold">${e.expires ? fmtDate(e.expires) : '—'}</td>
+      <td class="px-3 py-2 text-xs whitespace-nowrap ${e.status === 'overdue' ? 'text-red-600 font-semibold' : e.status === 'soon' ? 'text-amber-600 font-semibold' : 'text-slate-600'}">${esc(mbLeftText(e))}</td>
+      <td class="px-3 py-2">${meBadge(e.status)}</td>
+      <td class="px-3 py-2 text-right whitespace-nowrap">
+        <button type="button" onclick="meOpenForm(${e.user_id})" class="text-xs font-semibold text-blue-600 hover:underline">${e.expires ? _L('Обновить', 'Жаңарту') : _L('Внести', 'Енгізу')}</button>
+        ${e.expires ? `<button type="button" onclick="meRemove(${e.user_id})" class="ml-2 text-xs text-slate-400 hover:text-red-600" title="${esc(_L('Сбросить', 'Тастау'))}">✕</button>` : ''}
+      </td>
+    </tr>`;
+  const chip = (key, label) => `<button type="button" onclick="meSetStatus('${key}')" class="px-2.5 py-1 rounded-full text-xs font-semibold border ${meState.status === key ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}">${esc(label)}</button>`;
+  panelDiv.innerHTML = `
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+      ${kpi(_L('Всего сотрудников', 'Барлық қызметкер'), s.total, 'text-slate-900', '')}
+      ${kpi(_L('Пройден', 'Өтті'), s.valid, 'text-emerald-600', 'valid')}
+      ${kpi(_L('Истекает ≤ 30 дн.', '≤ 30 күнде аяқталады'), s.soon, s.soon > 0 ? 'text-amber-600' : 'text-slate-400', 'soon')}
+      ${kpi(_L('Просрочен', 'Мерзімі өткен'), s.overdue, s.overdue > 0 ? 'text-red-600' : 'text-slate-400', 'overdue')}
+      ${kpi(_L('Нет данных', 'Дерек жоқ'), s.no_date, s.no_date > 0 ? 'text-orange-600' : 'text-slate-400', 'no_date')}
+    </div>
+    <div class="mt-4 flex flex-wrap items-center gap-2">
+      <input id="meSearch" oninput="meSetQuery(this.value)" value="${esc(meState.q)}" placeholder="${esc(_L('Поиск по ФИО или должности', 'Аты-жөні немесе лауазымы бойынша іздеу'))}" class="border rounded-lg px-3 py-1.5 text-sm w-64 max-w-full">
+      ${chip('', _L('Все', 'Барлығы'))}${chip('overdue', _L('Просрочены', 'Мерзімі өткен'))}${chip('soon', _L('Скоро истекают', 'Жақында аяқталады'))}${chip('no_date', _L('Нет данных', 'Дерек жоқ'))}
+      <span class="flex-1"></span>
+      <button type="button" onclick="meOpenImport()" class="px-3 py-1.5 rounded-lg text-xs font-semibold border border-emerald-300 text-emerald-700 hover:bg-emerald-50">📥 ${_L('Загрузить из Excel', 'Excel-ден жүктеу')}</button>
+    </div>
+    <div class="mt-3 overflow-x-auto border border-slate-200 rounded-lg">
+      ${shown.length ? `<table class="w-full text-left text-sm">
+        <thead class="bg-slate-50 text-[11px] uppercase text-slate-500"><tr>
+          <th class="px-3 py-2">${_L('Сотрудник', 'Қызметкер')}</th><th class="px-3 py-2">${_L('Должность', 'Лауазым')}</th>
+          <th class="px-3 py-2">${_L('Медосмотр', 'Медтексеру')}</th><th class="px-3 py-2">${_L('Действует до', 'Дейін жарамды')}</th><th class="px-3 py-2">${_L('Осталось', 'Қалды')}</th><th class="px-3 py-2">${_L('Статус', 'Күйі')}</th><th></th>
+        </tr></thead><tbody>${shown.map(tr).join('')}</tbody></table>
+        ${rows.length > shown.length ? `<div class="p-2 text-center text-[11px] text-slate-400">${_L('Показаны первые 500 — уточните поиск или фильтр', 'Алғашқы 500 көрсетілген')}</div>` : ''}`
+      : `<div class="p-6 text-center text-sm text-slate-400">${_L('Нет сотрудников по выбранному фильтру', 'Таңдалған сүзгі бойынша қызметкер жоқ')}</div>`}
+    </div>
+    <div class="mt-2 text-[11px] text-slate-400">${_L('Медосмотр обязателен всем сотрудникам выбранных выше объекта/отдела и категории; срок — 12 месяцев.', 'Медтексеру барлық қызметкерлерге міндетті; мерзімі — 12 ай.')}</div>`;
+}
+function meSetStatus(v) { meState.status = meState.status === v ? '' : v; renderDashCoursePanel(); }
+function meSetQuery(v) {
+  meState.q = v;
+  const pos = document.getElementById('meSearch') ? document.getElementById('meSearch').selectionStart : null;
+  renderDashCoursePanel();
+  const el = document.getElementById('meSearch');
+  if (el) { el.focus(); if (pos != null) try { el.setSelectionRange(pos, pos); } catch (e) {} }
+}
+function meAfterChange() {
+  mbCloseModal();
+  if (state.tab === 'user_profile' && state.profileUserId) loadUserProfile(state.profileUserId);
+  if (document.getElementById('dashCourseTabs')) meReload();
+}
+async function meOpenForm(userId) {
+  mbModal(`<div class="text-sm text-slate-400">${t('loading')}</div>`);
+  try {
+    const [e, u] = await Promise.all([api.req('/api/medexams/user/' + userId), api.getUser(userId)]);
+    const name = `${u.last_name || ''} ${u.first_name || ''}`.trim();
+    const today = new Date().toISOString().slice(0, 10);
+    mbModal(`
+      <div class="flex justify-between items-start mb-1">
+        <h3 class="text-base font-bold text-slate-900">🏥 ${_L('Ежегодный медосмотр', 'Жыл сайынғы медтексеру')}</h3>
+        <button onclick="mbCloseModal()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none">&times;</button>
+      </div>
+      <p class="text-sm text-slate-700 font-semibold">${esc(name)}</p>
+      <p class="text-xs text-slate-500 mb-4">${esc(posLabel(u.position) || '—')} · ${esc(u.object || '—')} / ${esc(u.department || '—')}</p>
+      <form onsubmit="meSubmitForm(event, ${userId})" class="space-y-3">
+        <div>
+          <div class="flex gap-4 text-xs font-semibold text-slate-600 mb-1.5">
+            <label class="flex items-center gap-1.5"><input type="radio" name="meMode" value="exp" checked onchange="meModeChange()"> ${_L('Действует до', 'Дейін жарамды')}</label>
+            <label class="flex items-center gap-1.5"><input type="radio" name="meMode" value="exam" onchange="meModeChange()"> ${_L('Дата медосмотра', 'Медтексеру күні')}</label>
+          </div>
+          <input type="date" id="meExpires" value="${esc(e.expires || '')}" class="w-full border p-2 rounded text-sm">
+          <input type="date" id="meExam" max="${today}" value="${esc(e.exam_date || '')}" class="w-full border p-2 rounded text-sm hidden">
+          <p class="text-[11px] text-slate-400 mt-1">${_L('Вторую дату сайт посчитает сам: медосмотр + 12 месяцев.', 'Екінші күнді сайт өзі есептейді: медтексеру + 12 ай.')}</p>
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-slate-600">${_L('Примечание', 'Ескертпе')}</label>
+          <input type="text" id="meNote" maxlength="500" value="${esc(e.note || '')}" placeholder="${esc(_L('например: годен, клиника …', 'мысалы: жарамды'))}" class="w-full border p-2 rounded text-sm">
+        </div>
+        <p id="meFormMsg" class="text-xs text-red-600"></p>
+        <div class="flex justify-end gap-2 pt-3 border-t">
+          <button type="button" onclick="mbCloseModal()" class="px-4 py-2 border rounded-lg text-sm">${_L('Отмена', 'Бас тарту')}</button>
+          <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">${_L('Сохранить', 'Сақтау')}</button>
+        </div>
+      </form>`);
+  } catch (err) { mbModal(`<p class="text-sm text-red-600">${esc(err.message)}</p><div class="text-right mt-3"><button onclick="mbCloseModal()" class="px-4 py-2 border rounded-lg text-sm">OK</button></div>`); }
+}
+function meModeChange() {
+  const mode = (document.querySelector('input[name="meMode"]:checked') || {}).value || 'exp';
+  document.getElementById('meExpires').classList.toggle('hidden', mode !== 'exp');
+  document.getElementById('meExam').classList.toggle('hidden', mode !== 'exam');
+}
+async function meSubmitForm(ev, userId) {
+  ev.preventDefault();
+  const mode = (document.querySelector('input[name="meMode"]:checked') || {}).value || 'exp';
+  const val = document.getElementById(mode === 'exp' ? 'meExpires' : 'meExam').value;
+  const msg = document.getElementById('meFormMsg');
+  if (!val) { if (msg) msg.textContent = _L('Укажите дату', 'Күнді көрсетіңіз'); return; }
+  try {
+    await api.req('/api/medexams/user/' + userId, { method: 'PUT', body: { ...(mode === 'exp' ? { expires_date: val } : { exam_date: val }), note: (document.getElementById('meNote') || {}).value || '' } });
+    meAfterChange();
+  } catch (err) { if (msg) msg.textContent = err.message; }
+}
+async function meRemove(userId) {
+  if (!confirm(_L('Сбросить данные медосмотра?', 'Медтексеру деректерін тастау керек пе?'))) return;
+  try { await api.req('/api/medexams/user/' + userId, { method: 'DELETE' }); meAfterChange(); }
+  catch (err) { alert(err.message); }
+}
+function meOpenImport() {
+  mbModal(`
+    <div class="flex justify-between items-start mb-2">
+      <h3 class="text-base font-bold text-slate-900">📥 ${_L('Загрузить медосмотры из Excel', 'Медтексеруді Excel-ден жүктеу')}</h3>
+      <button onclick="mbCloseModal()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none">&times;</button>
+    </div>
+    <p class="text-xs text-slate-500 mb-3">${_L('Колонки: Фамилия, Имя (или ФИО), ИИН, «Действует до» или «Дата медосмотра», Примечание. Вторую дату сайт посчитает сам (± 12 мес.).', 'Бағандар: Тегі, Аты, ЖСН, «Дейін жарамды» немесе «Медтексеру күні», Ескертпе.')}</p>
+    <form onsubmit="meSubmitImport(event)" class="space-y-3">
+      <input type="file" id="meImportFile" accept=".xlsx" required class="w-full text-sm border rounded p-2">
+      <div id="meImportResult" class="text-xs"></div>
+      <div class="flex flex-wrap justify-between gap-2 pt-3 border-t">
+        <button type="button" onclick="downloadAuthed('/api/medexams/import-template.xlsx', 'medexam_template.xlsx')" class="px-3 py-2 border rounded-lg text-xs font-semibold">⬇ ${_L('Бланк', 'Бланк')}</button>
+        <div class="flex gap-2">
+          <button type="button" onclick="mbCloseModal()" class="px-4 py-2 border rounded-lg text-sm">${_L('Закрыть', 'Жабу')}</button>
+          <button type="submit" id="meImportBtn" class="px-4 py-2 bg-emerald-600 text-white font-semibold rounded-lg text-sm">${_L('Загрузить', 'Жүктеу')}</button>
+        </div>
+      </div>
+    </form>`);
+}
+async function meSubmitImport(ev) {
+  ev.preventDefault();
+  const file = document.getElementById('meImportFile').files[0];
+  if (!file) return;
+  const out = document.getElementById('meImportResult');
+  const btn = document.getElementById('meImportBtn');
+  const fd = new FormData(); fd.append('file', file);
+  btn.disabled = true; out.innerHTML = `<span class="text-slate-400">${t('loading')}</span>`;
+  try {
+    const r = await api.req('/api/medexams/import', { method: 'POST', body: fd });
+    const list = (title, items, cls) => items.length ? `<details class="mt-2" ${items.length <= 15 ? 'open' : ''}><summary class="cursor-pointer font-semibold ${cls}">${title} (${items.length})</summary>
+      <div class="mt-1 max-h-48 overflow-y-auto border rounded p-2 bg-slate-50 space-y-0.5">${items.map(x => `<div>${esc(x)}</div>`).join('')}</div></details>` : '';
+    out.innerHTML = `<div class="p-2 rounded bg-emerald-50 text-emerald-800 font-semibold">✅ ${_L('Внесено / обновлено', 'Енгізілді / жаңартылды')}: ${r.updated}</div>
+      ${list(_L('Не найдены на сайте', 'Сайтта табылмады'), (r.not_found || []).map(x => `${_L('стр.', 'жол')} ${x.row}: ${x.name}${x.iin ? ' · ИИН ' + x.iin : ''}`), 'text-red-700')}
+      ${list(_L('Замечания', 'Ескертулер'), r.errors || [], 'text-amber-700')}`;
+    if (document.getElementById('dashCourseTabs')) meReload();
+  } catch (err) { out.innerHTML = `<div class="p-2 rounded bg-red-50 text-red-700">${esc(err.message || '')}</div>`; }
+  btn.disabled = false;
+}
+// Блок в карточке сотрудника / в кабинете сотрудника
+function meCardHtml(e, canEdit, userId) {
+  if (!e || !e.applicable) return '';
+  const tone = e.status === 'overdue' || e.status === 'no_date' ? 'border-red-200 bg-red-50/40' : e.status === 'soon' ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200 bg-white';
+  return `
+    <div class="p-4 rounded-xl border shadow-sm mb-6 ${tone}">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 class="text-sm font-bold text-slate-900">🏥 ${_L('Ежегодный медосмотр', 'Жыл сайынғы медтексеру')} ${meBadge(e.status)}</h3>
+          ${e.expires
+            ? `<p class="text-xs text-slate-600 mt-1.5">${_L('Медосмотр', 'Медтексеру')}: <b>${fmtDate(e.exam_date)}</b> · ${_L('Действует до', 'Дейін жарамды')}: <b>${fmtDate(e.expires)}</b> · ${esc(mbLeftText(e))}</p>`
+            : `<p class="text-xs text-slate-600 mt-1.5">${_L('Данные о медосмотре ещё не внесены.', 'Медтексеру деректері әлі енгізілмеген.')}</p>`}
+          ${e.note ? `<p class="text-[11px] text-slate-500 mt-1">📝 ${esc(e.note)}</p>` : ''}
+        </div>
+        ${canEdit ? `<div class="flex gap-2">
+          <button type="button" onclick="meOpenForm(${userId})" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700">${e.expires ? _L('Обновить', 'Жаңарту') : _L('Внести', 'Енгізу')}</button>
+          ${e.expires ? `<button type="button" onclick="meRemove(${userId})" class="px-3 py-1.5 rounded-lg text-xs font-semibold border hover:bg-slate-50">${_L('Сбросить', 'Тастау')}</button>` : ''}
+        </div>` : ''}
+      </div>
+    </div>`;
+}
+async function loadMyMedexam() {
+  const box = document.getElementById('myMedexam');
+  if (!box || !siteFnEnabled('medexam')) return;
+  try { const e = await api.req('/api/medexams/me'); box.innerHTML = e.applicable ? meCardHtml(e, false, 0).replace('mb-6', 'mb-0') : ''; }
+  catch (e) { /* вспомогательный блок */ }
 }
 
 // --- Уведомления (веб-пуши) (service worker: /sw.js, сервер: /api/push) ---

@@ -136,26 +136,32 @@ router.put('/user/:id', authRequired, STAFF, async (req, res) => {
     )).rows[0];
     if (!u || u.role !== 'employee') return res.status(404).json({ error: 'not_found', message: 'Сотрудник не найден' });
     if (!inScope(req.user, u)) return res.status(403).json({ error: 'forbidden_scope', message: 'Сотрудник вне вашей зоны' });
-    const start = String((req.body && req.body.start_date) || '');
-    if (!mb.isYmd(start)) return res.status(400).json({ error: 'bad_date', message: 'Укажите дату начала книжки' });
-    const today = mb.todayYmd();
-    if (start > today) {
-      return res.status(400).json({ error: 'future_date', message: 'Дата начала не может быть в будущем' });
-    }
     const posPeriod = (await query('SELECT period_months FROM medbook_positions WHERE key = $1', [keyOf(u.object, u.department, u.position)])).rows[0];
     const required = !!posPeriod;
     const period = required ? Number(posPeriod.period_months) : validPeriod(req.body && req.body.period_months);
     if (!period) return res.status(400).json({ error: 'bad_period', message: 'Выберите период: 6 или 12 месяцев' });
+    // Можно внести либо дату медосмотра (start_date), либо срок «допуск до» (expires_date) — как в журнале
+    const today = mb.todayYmd();
+    const expiresIn = String((req.body && req.body.expires_date) || '');
+    let start = String((req.body && req.body.start_date) || '');
+    let fixedExpiry = null;
+    if (mb.isYmd(expiresIn)) { fixedExpiry = expiresIn; start = mb.addMonths(expiresIn, -period); }
+    if (!mb.isYmd(start)) return res.status(400).json({ error: 'bad_date', message: 'Укажите дату медосмотра или срок «допуск до»' });
+    if (start > today) {
+      return res.status(400).json({ error: 'future_date', message: fixedExpiry
+        ? `Допуск до ${fixedExpiry} при периоде ${period} мес. значит, что медосмотр ещё не пройден — проверьте дату`
+        : 'Дата медосмотра не может быть в будущем' });
+    }
     // Примечание: если поле не передано — оставляем то, что уже сохранено
     const noteGiven = Object.prototype.hasOwnProperty.call(req.body || {}, 'note');
     const note = noteGiven ? cleanNote(req.body.note) : null;
     await query(
-      `INSERT INTO medbook_records (user_id, start_date, period_months, manual, updated_by, updated_at, note)
-       VALUES ($1, $2, $3, $4, $5, NOW(), $6)
+      `INSERT INTO medbook_records (user_id, start_date, period_months, manual, updated_by, updated_at, note, expires_date)
+       VALUES ($1, $2, $3, $4, $5, NOW(), $6, $8)
        ON CONFLICT (user_id) DO UPDATE SET start_date = EXCLUDED.start_date, period_months = EXCLUDED.period_months,
-         manual = EXCLUDED.manual, updated_by = EXCLUDED.updated_by, updated_at = NOW(),
+         manual = EXCLUDED.manual, updated_by = EXCLUDED.updated_by, updated_at = NOW(), expires_date = EXCLUDED.expires_date,
          note = CASE WHEN $7 THEN EXCLUDED.note ELSE medbook_records.note END`,
-      [u.id, start, period, !required, req.user.id, note, noteGiven]
+      [u.id, start, period, !required, req.user.id, note, noteGiven, fixedExpiry]
     );
     await logAction(req, 'medbook_saved', {
       entityType: 'user', entityId: u.id, entityName: `${u.last_name} ${u.first_name}`.trim(),
@@ -384,19 +390,22 @@ router.post('/import', authRequired, STAFF, upload.single('file'), async (req, r
         }
         const required = periods.has(key);
         const period = required ? periods.get(key) : rowPeriod;
+        // «Допуск до» из журнала сохраняем как есть — это и есть срок. Дата прохождения = срок минус период
+        // (полугодовой: допуск до 17.01.2027 → прошёл 17.07.2026; годовой → 17.01.2026).
+        const fixedExpiry = start ? null : expires;
         if (!start) start = mb.addMonths(expires, -period);
         if (start > today) {
-          errors.push(`Строка ${rowNum}: «${label}» — допуск до ${expires} больше чем на ${period} мес. вперёд, проверьте дату`);
+          errors.push(`Строка ${rowNum}: «${label}» — допуск до ${expires}, а период ${period} мес.: получается, медосмотр ещё не пройден. Проверьте дату или период должности`);
           continue;
         }
         const noteGiven = 'note' in col;
         await query(
-          `INSERT INTO medbook_records (user_id, start_date, period_months, manual, updated_by, updated_at, note)
-           VALUES ($1, $2, $3, $4, $5, NOW(), $6)
+          `INSERT INTO medbook_records (user_id, start_date, period_months, manual, updated_by, updated_at, note, expires_date)
+           VALUES ($1, $2, $3, $4, $5, NOW(), $6, $8)
            ON CONFLICT (user_id) DO UPDATE SET start_date = EXCLUDED.start_date, period_months = EXCLUDED.period_months,
-             manual = EXCLUDED.manual, updated_by = EXCLUDED.updated_by, updated_at = NOW(),
+             manual = EXCLUDED.manual, updated_by = EXCLUDED.updated_by, updated_at = NOW(), expires_date = EXCLUDED.expires_date,
              note = CASE WHEN $7 THEN EXCLUDED.note ELSE medbook_records.note END`,
-          [u.id, start, period, !required, req.user.id, noteGiven ? cleanNote(txt(row, 'note')) : null, noteGiven]
+          [u.id, start, period, !required, req.user.id, noteGiven ? cleanNote(txt(row, 'note')) : null, noteGiven, fixedExpiry]
         );
         updated++;
       } catch (rowErr) {
@@ -435,5 +444,8 @@ router.post('/import', authRequired, STAFF, upload.single('file'), async (req, r
     res.status(500).json({ error: 'import_failed', message: 'Не удалось выполнить загрузку: ' + e.message });
   }
 });
+
+// Общие помощники для routes/medexams.js (ежегодный медосмотр): поиск сотрудника по ФИО, даты, зона ассистента
+router.helpers = { skeletonFio, looseFio, parseImportDate, cleanNote, inScope };
 
 module.exports = router;
