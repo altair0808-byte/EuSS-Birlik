@@ -392,7 +392,8 @@ router.post('/import', authRequired, STAFF, upload.single('file'), async (req, r
         const period = required ? periods.get(key) : rowPeriod;
         // «Допуск до» из журнала сохраняем как есть — это и есть срок. Дата прохождения = срок минус период
         // (полугодовой: допуск до 17.01.2027 → прошёл 17.07.2026; годовой → 17.01.2026).
-        const fixedExpiry = start ? null : expires;
+        // Если в файле есть «Допуск до» — он и есть срок (как в журнале), даже если дата начала тоже дана
+        const fixedExpiry = expires || null;
         if (!start) start = mb.addMonths(expires, -period);
         if (start > today) {
           errors.push(`Строка ${rowNum}: «${label}» — допуск до ${expires}, а период ${period} мес.: получается, медосмотр ещё не пройден. Проверьте дату или период должности`);
