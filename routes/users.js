@@ -1320,9 +1320,9 @@ router.post('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), 
   // Зона видимости — только суперадмин может её выдавать, и только для роли assistant
   const zoneObjects = targetRole === 'assistant' ? (normalizeZoneArray(assistant_objects) || []) : [];
   const zoneDepartments = targetRole === 'assistant' ? (normalizeZoneArray(assistant_departments) || []) : [];
-  // Функции администратора — только суперадмин и только для роли admin
+  // Функции (дашборды) — выдаёт только суперадмин, для ролей admin и assistant
   let adminFunctionsVal = [];
-  if (targetRole === 'admin' && req.user.role === 'superadmin') {
+  if ((targetRole === 'admin' || targetRole === 'assistant') && req.user.role === 'superadmin') {
     try {
       adminFunctionsVal = normalizeAdminFunctions(req.body.admin_functions) || [];
     } catch (e) {
@@ -1466,10 +1466,11 @@ router.put('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
         return res.status(400).json({ error: 'invalid_admin_function', message: 'Недопустимая функция администратора' });
       }
       const finalRole = (role !== undefined && ['admin', 'assistant', 'employee'].includes(role)) ? role : target.role;
-      if (finalRole !== 'admin' && (target.admin_functions || []).length) {
+      const fnRole = finalRole === 'admin' || finalRole === 'assistant';
+      if (!fnRole && (target.admin_functions || []).length) {
         params.push([]);
         fields.push(`admin_functions = $${params.length}`);
-      } else if (af !== undefined && finalRole === 'admin') {
+      } else if (af !== undefined && fnRole) {
         params.push(af);
         fields.push(`admin_functions = $${params.length}`);
       }

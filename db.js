@@ -377,6 +377,15 @@ async function initDb() {
   if (!hadAdminFunctions) {
     await pool.query(`UPDATE users SET admin_functions = ARRAY['biot','internal','external','medbook'] WHERE role = 'admin'`);
   }
+  // Функции (дашборды) теперь выдаются и ассистентам. Один раз при обновлении всем уже существующим ассистентам
+  // выдаются все функции, чтобы у них ничего не пропало; дальше суперадмин ограничивает каждого.
+  // Новые ассистенты создаются без функций, пока суперадмин их не отметит.
+  await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS assistant_functions_migrated BOOLEAN NOT NULL DEFAULT FALSE;`);
+  const asstMig = await pool.query(`SELECT assistant_functions_migrated FROM settings WHERE id = 1`);
+  if (asstMig.rows[0] && !asstMig.rows[0].assistant_functions_migrated) {
+    await pool.query(`UPDATE users SET admin_functions = ARRAY['biot','internal','external','medbook'] WHERE role = 'assistant'`);
+    await pool.query(`UPDATE settings SET assistant_functions_migrated = TRUE WHERE id = 1`);
+  }
 
   // ===================== Журнал действий (для суперадмина) =====================
   // Кто (админ / ассистент) и когда добавил или изменил сотрудника, назначил курс и т.д.

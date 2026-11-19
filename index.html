@@ -1298,12 +1298,12 @@ async function handleLogin(e) {
 
 // --- ФУНКЦИИ АДМИНИСТРАТОРА (выдаёт суперадмин; на сервере проверяются на каждый запрос) ---
 const ADMIN_FUNCTIONS_UI = [
-  { key: 'biot', icon: '🦺', ru: 'БиОТ', kz: 'БиОТ', hintRu: 'Курсы БиОТ с тестом, назначения, протоколы, удостоверения', hintKz: 'Тестпен БиОТ курстары, тағайындаулар, хаттамалар, куәліктер' },
+  { key: 'biot', icon: '🦺', ru: 'БиОТ', kz: 'БиОТ', hintRu: 'Курсы БиОТ с тестом, назначения, протоколы (у ассистента — без протоколов), удостоверения', hintKz: 'Тестпен БиОТ курстары, тағайындаулар, хаттамалар, куәліктер' },
   { key: 'internal', icon: '🏢', ru: 'Внутреннее обучение', kz: 'Ішкі оқыту', hintRu: 'Внутренние курсы без протокола и группы обучения', hintKz: 'Хаттамасыз ішкі курстар және оқыту топтары' },
   { key: 'external', icon: '🎓', ru: 'Внешнее обучение', kz: 'Сыртқы оқыту', hintRu: 'Курсы, которые провела другая организация', hintKz: 'Басқа ұйым өткізген курстар' },
   { key: 'medbook', icon: '🩺', ru: 'Мед. книжки', kz: 'Мед. кітапшалар', hintRu: 'Личные медицинские книжки сотрудников', hintKz: 'Қызметкерлердің жеке медициналық кітапшалары' }
 ];
-// Ограничения касаются только роли «Администратор». Суперадмин, ассистент и остальные — без изменений.
+// Функции (дашборды) выдаёт суперадмин ролям «Администратор» и «Ассистент». Суперадмин — без ограничений.
 // Разделы, включённые на этом сайте (сервер: ENABLED_FUNCTIONS). Пока не загружено — считаем, что включено всё.
 function siteFnEnabled(fn) {
   const list = PUBLIC_SETTINGS && Array.isArray(PUBLIC_SETTINGS.enabled_functions) ? PUBLIC_SETTINGS.enabled_functions : null;
@@ -1313,19 +1313,22 @@ function hasAdminFn(fn) {
   const u = state.user;
   if (!u) return false;
   if (!siteFnEnabled(fn)) return false;
-  if (u.role !== 'admin') return true;
+  if (u.role !== 'admin' && u.role !== 'assistant') return true;
   return Array.isArray(u.admin_functions) && u.admin_functions.includes(fn);
 }
 function hasAnyCourseFn() { return ['biot', 'internal', 'external'].some(hasAdminFn); }
 // Вкладка доступна текущему пользователю с учётом выданных функций
 function tabAllowed(tab) {
   if (tab === 'courses' || tab === 'assignments' || tab === 'sessions' || tab === 'certificates') return hasAnyCourseFn();
-  if (tab === 'protocols') return hasAdminFn('biot');
+  if (tab === 'protocols') return hasAdminFn('biot') && !(state.user.role === 'assistant' && !state.user.committee_role);
+  if (tab === 'dashboard' && state.user.role === 'assistant') return dashAllowedKeys().length > 0;
   return true;
 }
+// Протоколы ассистенту закрыты (кроме члена комиссии — ему нужно подписывать)
+function canSeeProtocols() { return tabAllowed('protocols'); }
 function adminFunctionsCellHtml(u) {
   const fns = Array.isArray(u.admin_functions) ? u.admin_functions : [];
-  if (!fns.length) return `<span class="text-xs text-red-600 font-semibold">${_L('Функции не выданы — работать с обучением нельзя', 'Функциялар берілмеген — оқытумен жұмыс істеу мүмкін емес')}</span>`;
+  if (!fns.length) return `<span class="text-xs text-red-600 font-semibold">${u.role === 'assistant' ? _L('Разделы не выданы — видит только сотрудников и вахту', 'Бөлімдер берілмеген') : _L('Функции не выданы — работать с обучением нельзя', 'Функциялар берілмеген — оқытумен жұмыс істеу мүмкін емес')}</span>`;
   return `<div class="flex flex-wrap gap-1">${ADMIN_FUNCTIONS_UI.filter(f => fns.includes(f.key) && siteFnEnabled(f.key)).map(f => `<span class="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-100 whitespace-nowrap">${f.icon} ${esc(_L(f.ru, f.kz))}</span>`).join('')}</div>`;
 }
 // Чекбоксы функций в карточке администратора (видны только суперадмину при роли «Администратор»)
@@ -1356,13 +1359,14 @@ function restrictCourseKindOptions() {
 }
 // Подтягиваем свежие функции админа с сервера (суперадмин мог изменить набор, пока сессия открыта)
 async function refreshAdminFunctions() {
-  if (!state.token || !state.user || state.user.role !== 'admin') return;
+  if (!state.token || !state.user || (state.user.role !== 'admin' && state.user.role !== 'assistant')) return;
   try {
     const me = await api.req('/api/auth/me');
     const fresh = Array.isArray(me.admin_functions) ? me.admin_functions : [];
     const old = Array.isArray(state.user.admin_functions) ? state.user.admin_functions : [];
     if (JSON.stringify(fresh) !== JSON.stringify(old)) {
       state.user.admin_functions = fresh;
+      if (state.user.role === 'assistant' && !tabAllowed(state.tab)) state.tab = 'users';
       localStorage.setItem('user', JSON.stringify(state.user));
       render();
     }
@@ -1372,7 +1376,7 @@ async function refreshAdminFunctions() {
 // Упрощённый дашборд ("наблюдатель"): роль assistant, либо любой пользователь
 // с назначенной ролью в комиссии (committee_role), кроме superadmin — ему всегда
 // показываем полный интерфейс. См. ТЗ §5.
-const OBSERVER_TABS = ['users', 'archive', 'training', 'protocols', 'user_profile'];
+const OBSERVER_TABS = ['dashboard', 'users', 'archive', 'training', 'protocols', 'user_profile'];
 // Удаление сотрудников, курсов и протоколов, а также изменение номера/дат протокола и
 // системных настроек — только у суперадмина (то же ограничено и на сервере).
 function isSuperadminUser() { return !!(state.user && state.user.role === 'superadmin'); }
@@ -1402,6 +1406,13 @@ function renderMain(app) {
   // 'courses', 'settings' и т.д. — если вкладка осталась не той, сбрасываем
   // на "Сотрудники".
   if (!isEmployee && isObserver && !OBSERVER_TABS.includes(state.tab)) {
+    state.tab = 'users';
+  }
+  // Наблюдатель: главная — только ассистенту с выданными функциями; протоколы и обучение — по функциям
+  if (!isEmployee && isObserver && (
+      (state.tab === 'dashboard' && (state.user.role !== 'assistant' || !tabAllowed('dashboard'))) ||
+      (state.tab === 'protocols' && !canSeeProtocols()) ||
+      (state.tab === 'training' && !hasAnyCourseFn()))) {
     state.tab = 'users';
   }
   // «Администраторы и ассистенты» и «Журнал действий» — только суперадмин
@@ -1436,11 +1447,12 @@ function renderMain(app) {
       <nav class="bg-slate-50 border-t border-slate-200">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-1 sm:space-x-4 overflow-x-auto py-2">
           ${isEmployee ? navHtml('employee') : isObserver ? `
+            ${state.user.role === 'assistant' && tabAllowed('dashboard') ? `<button onclick="setTab('dashboard')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'dashboard' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_dashboard')}</button>` : ''}
             <button onclick="setTab('users')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_users')}</button>
             <button onclick="setTab('archive')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'archive' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Архив', 'Мұрағат')}</button>
-            <button onclick="setTab('training')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'training' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Обучение', 'Оқыту')}</button>
-            <button onclick="setTab('protocols')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'protocols' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_protocols')}</button>
-            <a href="#" onclick="openExportModal();return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-emerald-700 hover:bg-emerald-50">📥 ${t('nav_export')}</a>
+            ${hasAnyCourseFn() ? `<button onclick="setTab('training')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'training' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Обучение', 'Оқыту')}</button>` : ''}
+            ${canSeeProtocols() ? `<button onclick="setTab('protocols')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'protocols' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_protocols')}</button>` : ''}
+            ${hasAnyCourseFn() ? `<a href="#" onclick="openExportModal();return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-emerald-700 hover:bg-emerald-50">📥 ${t('nav_export')}</a>` : ''}
             ${state.user.committee_role ? `<a href="#" onclick="openSignatureModal();return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-indigo-700 hover:bg-indigo-50">✍️ Электронная подпись</a>` : ''}
           ` : navHtml('admin')}
         </div>
@@ -1470,7 +1482,7 @@ function navSections(kind) {
     { id: 'home', label: t('nav_dashboard'), tabs: [['dashboard', t('nav_dashboard')]] },
     { id: 'staff', label: t('nav_users'), tabs: [['users', _L('Список', 'Тізім')], ['archive', _L('Архив', 'Мұрағат')], ...(su ? [['admins', _L('Администраторы и ассистенты', 'Әкімшілер мен ассистенттер')]] : [])] },
     { id: 'learn', label: _L('Обучение', 'Оқыту'), tabs: hasAnyCourseFn() ? [['courses', t('nav_courses')], ['assignments', t('nav_assignments')], ['sessions', _L('Группы обучения', 'Оқыту топтары')]] : [] },
-    { id: 'docs', label: _L('Документы', 'Құжаттар'), tabs: [...(hasAdminFn('biot') ? [['protocols', t('nav_protocols')]] : []), ...(hasAnyCourseFn() ? [['certificates', t('nav_certificates')]] : [])] },
+    { id: 'docs', label: _L('Документы', 'Құжаттар'), tabs: [...(canSeeProtocols() ? [['protocols', t('nav_protocols')]] : []), ...(hasAnyCourseFn() ? [['certificates', t('nav_certificates')]] : [])] },
     { id: 'sys', label: t('nav_settings'), tabs: [['settings', t('nav_settings')], ...(su ? [['audit', '📜 ' + _L('Журнал действий', 'Әрекеттер журналы')]] : [])] }
   ].filter(sec => sec.tabs.length);   // раздел без доступных вкладок (функция не выдана) не показываем
 }
@@ -1516,9 +1528,11 @@ async function loadTabContent() {
   if (!container) return;
 
   if (state.tab === 'dashboard') {
+    const dashObserver = isObserverUser();
+    const dashCourses = hasAnyCourseFn();
     container.innerHTML = `
       <div id="dashCatBar" class="flex flex-wrap items-center gap-1.5 mb-4"></div>
-      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6 ${dashCourses ? '' : 'hidden'}">
         <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col">
           <div class="text-xs font-bold text-slate-500 uppercase leading-tight min-h-[2em] flex items-start">Сотрудников всего</div>
           <div class="text-2xl font-black text-slate-900 mt-1 tabular-nums" id="dashUsers">...</div>
@@ -1546,7 +1560,7 @@ async function loadTabContent() {
       </div>
       ${orgNoteHtml(_L('Показатели выше — только по:', 'Жоғарыдағы көрсеткіштер тек мыналар бойынша:'))}
       ${dashCategoryNoteHtml()}
-      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6 ${dashObserver ? 'hidden' : ''}">
         <h3 class="text-base font-bold mb-4">Быстрые действия</h3>
         <div class="flex flex-wrap gap-3">
           <button onclick="setTab('assignments')" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700">Назначить проверку знаний</button>
@@ -1555,11 +1569,11 @@ async function loadTabContent() {
         </div>
       </div>
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
-        <h3 class="text-base font-bold mb-4">📊 Статистика по курсам</h3>
+        <h3 class="text-base font-bold mb-4">📊 ${dashCourses ? 'Статистика по курсам' : _L('Мои разделы', 'Менің бөлімдерім')}</h3>
         <div id="dashCourseTabs" class="flex flex-wrap gap-1.5 mb-4"><div class="text-slate-400 text-sm">${t('loading')}</div></div>
         <div id="dashCoursePanel"></div>
       </div>
-      <div id="expiringBlock" class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+      <div id="expiringBlock" class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm ${dashCourses ? '' : 'hidden'}">
         <h3 class="text-base font-bold mb-4">⏰ ${_L('Просрочено и скоро истекает', 'Мерзімі өткен және аяқталатын')}</h3>
         <div id="expiringFilters" class="mb-3"></div>
         <div id="expiringList" class="space-y-2"><div class="text-slate-400 text-sm">${t('loading')}</div></div>
@@ -1740,18 +1754,20 @@ async function loadTabContent() {
               <p class="text-[11px] text-slate-400 mb-2">Если ничего не выбрано — доступа к сотрудникам нет. Иначе видны только выбранные объекты/отделы.</p>
               <div class="grid grid-cols-2 gap-2">
                 <div>
-                  <div class="text-[11px] font-semibold text-slate-500 mb-1">Объекты</div>
+                  <div class="flex items-center justify-between mb-1"><span class="text-[11px] font-semibold text-slate-500">Объекты</span>
+                    <span class="text-[11px] whitespace-nowrap"><button type="button" onclick="zoneSelectAll('uAssistantObjects', true)" class="text-blue-600 hover:underline font-semibold">Выбрать все</button> · <button type="button" onclick="zoneSelectAll('uAssistantObjects', false)" class="text-slate-500 hover:underline">Снять</button></span></div>
                   <div id="uAssistantObjects" class="max-h-32 overflow-y-auto border rounded bg-white p-1.5 space-y-1 text-sm"></div>
                 </div>
                 <div>
-                  <div class="text-[11px] font-semibold text-slate-500 mb-1">Отделы</div>
+                  <div class="flex items-center justify-between mb-1"><span class="text-[11px] font-semibold text-slate-500">Отделы</span>
+                    <span class="text-[11px] whitespace-nowrap"><button type="button" onclick="zoneSelectAll('uAssistantDepartments', true)" class="text-blue-600 hover:underline font-semibold">Выбрать все</button> · <button type="button" onclick="zoneSelectAll('uAssistantDepartments', false)" class="text-slate-500 hover:underline">Снять</button></span></div>
                   <div id="uAssistantDepartments" class="max-h-32 overflow-y-auto border rounded bg-white p-1.5 space-y-1 text-sm"></div>
                 </div>
               </div>
             </div>
             <div id="adminFunctionsWrapper" class="hidden border rounded-lg p-3 bg-blue-50/40">
-              <label class="text-xs font-semibold text-slate-600">Функции администратора</label>
-              <p class="text-[11px] text-slate-500 mb-2">Отметьте, чем занимается этот администратор — можно выбрать несколько. Работать он сможет только с отмеченным, остальное будет скрыто и закрыто на сервере.</p>
+              <label id="adminFunctionsLabel" class="text-xs font-semibold text-slate-600">Функции администратора</label>
+              <p id="adminFunctionsHint" class="text-[11px] text-slate-500 mb-2">Отметьте, чем занимается этот администратор — можно выбрать несколько. Работать он сможет только с отмеченным, остальное будет скрыто и закрыто на сервере.</p>
               <div id="uAdminFunctions" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
             </div>
             <div data-staff-only>
@@ -4349,7 +4365,7 @@ async function loadUsersList() {
         ${(u.role === 'admin' || u.role === 'assistant') ? `${esc(u.last_name)} ${esc(u.first_name)}` : `<button onclick="openUserProfile(${u.id})" class="hover:text-blue-600 hover:underline text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>${u.staff_category === 'manager' ? `<span class="ml-1.5 align-middle text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">${_L('Руководитель', 'Басшы')}</span>` : u.staff_category === 'specialist' ? `<span class="ml-1.5 align-middle text-[10px] font-bold px-1.5 py-0.5 rounded bg-teal-100 text-teal-700">${_L('Специалист', 'Маман')}</span>` : ''}`}
       </td>
       <td class="px-4 py-3 font-mono text-slate-600">${u.login ? esc(u.login) : '<span class="text-slate-400 italic font-sans">не назначен</span>'}</td>
-      <td class="px-4 py-3 text-slate-600">${u.role === 'assistant' ? assistantZoneCellHtml(u) : u.role === 'admin' ? adminFunctionsCellHtml(u) : `${esc(u.object || '—')} / ${esc(u.department || '—')}`}</td>
+      <td class="px-4 py-3 text-slate-600">${u.role === 'assistant' ? assistantZoneCellHtml(u) + '<div class="mt-1">' + adminFunctionsCellHtml(u) + '</div>' : u.role === 'admin' ? adminFunctionsCellHtml(u) : `${esc(u.object || '—')} / ${esc(u.department || '—')}`}</td>
       <td class="px-4 py-3 text-slate-600">${esc(posLabel(u.position) || '—')}</td>
       ${showRot ? `<td class="px-4 py-3 text-xs">${rotationCellHtml(u)}</td><td class="px-4 py-3 text-xs">${overtimeCellHtml(u)}</td>` : ''}
       ${!isAdminsTab ? `<td class="px-4 py-3 text-xs text-slate-600">${iinCellHtml(u.iin)}</td>` : ''}
@@ -5022,13 +5038,24 @@ function renderAssistantZoneCheckboxes(selectedObjects, selectedDepartments) {
   depBox.innerHTML = departments.length ? departments.map(d => row(d, selectedDepartments.includes(d))).join('') : '<div class="text-[11px] text-slate-400">нет данных</div>';
 }
 
+// «Выбрать все» / «Снять» в зоне ассистента
+function zoneSelectAll(boxId, on) {
+  document.querySelectorAll('#' + boxId + ' input[type=checkbox]').forEach(el => { el.checked = on; });
+}
+
 function onUserRoleFieldChange() {
   const roleSel = document.getElementById('uRole');
   const wrapper = document.getElementById('assistantZoneWrapper');
   if (!roleSel || !wrapper) return;
   wrapper.classList.toggle('hidden', roleSel.value !== 'assistant');
   const afw = document.getElementById('adminFunctionsWrapper');
-  if (afw) afw.classList.toggle('hidden', roleSel.value !== 'admin' || !isSuperadminUser());
+  if (afw) afw.classList.toggle('hidden', !['admin', 'assistant'].includes(roleSel.value) || !isSuperadminUser());
+  const afl = document.getElementById('adminFunctionsLabel');
+  if (afl) afl.textContent = roleSel.value === 'assistant' ? 'Разделы (дашборды) ассистента' : 'Функции администратора';
+  const afh = document.getElementById('adminFunctionsHint');
+  if (afh) afh.textContent = roleSel.value === 'assistant'
+    ? 'Отметьте, что ассистент может смотреть и вносить — только по своей зоне. Протоколы ассистенту недоступны (кроме члена комиссии — для подписи).'
+    : 'Отметьте, чем занимается этот администратор — можно выбрать несколько. Работать он сможет только с отмеченным, остальное будет скрыто и закрыто на сервере.';
   // Категория и дата начала работы — только для сотрудников (не для админов/ассистентов) и не для ассистента-редактора
   const sf = document.getElementById('staffFieldsWrapper');
   if (sf) sf.classList.toggle('hidden', roleSel.value !== 'employee' || isObserverUser());
@@ -5135,7 +5162,7 @@ async function saveUserForm(e) {
   }
   if (isObserverUser()) { delete data.assistant_objects; delete data.assistant_departments; }
   // Функции администратора шлёт только суперадмин (сервер всё равно игнорирует их от других ролей)
-  if (isSuperadminUser() && data.role === 'admin') {
+  if (isSuperadminUser() && (data.role === 'admin' || data.role === 'assistant')) {
     data.admin_functions = Array.from(document.querySelectorAll('#uAdminFunctions input:checked')).map(el => el.value);
   }
   const pass = document.getElementById('uPass').value;

@@ -5,7 +5,7 @@ const { query, pool } = require('../db');
 const { authRequired, requireRole } = require('./auth');
 const { makeMemoryUploader } = require('../upload');
 const supabaseStorage = require('../supabaseStorage');
-const { splitMulti } = require('../lib/multiFilter');
+const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 const { normalizeCardColor, pickFreeColor } = require('../lib/cardColors');
 const { requireAdminFunction, requireCourseFunction, canUseCourseKind, kindSqlFilter, DENIED } = require('../lib/adminFunctions');
 
@@ -141,7 +141,20 @@ router.get('/', authRequired, async (req, res) => {
 // Сводная статистика по каждому курсу для главной страницы (п.5 запроса —
 // разбивка статистики по видам курсов) + общее число сотрудников, которые ещё
 // не прошли хотя бы один обязательный курс (п.4 запроса).
-router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+// Ассистент тоже видит дашборд — но только по своей зоне (объекты / отделы) и только по выданным функциям.
+function scopedOrgParams(req) {
+  const p = orgParams(req);
+  if (!req.user || req.user.role !== 'assistant') return p;
+  const sc = scopedFilter(req.user, p[0], p[1]);
+  const none = ['\u0000нет доступа'];
+  if (sc.noAccess) return [none, [], p[2]];
+  // Запрошен объект/отдел вне зоны — пересечение пустое, значит «никого», а не «все»
+  const objs = p[0].length && !sc.objects.length ? none : sc.objects;
+  const deps = p[1].length && !sc.departments.length ? none : sc.departments;
+  return [objs, deps, p[2]];
+}
+
+router.get('/stats/summary', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   try {
     const coursesRes = await query(`
       SELECT c.id, c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.is_mandatory, c.mandatory_for, c.course_kind,
@@ -183,7 +196,7 @@ router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), a
         ) ELSE NULL END AS untrained
       FROM courses c
       ORDER BY c.title_ru
-    `, orgParams(req));
+    `, scopedOrgParams(req));
 
     const overallRes = await query(`
       SELECT
@@ -202,7 +215,7 @@ router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), a
                  )
              )
         ) AS employees_missing_mandatory
-    `, orgParams(req));
+    `, scopedOrgParams(req));
 
     // Админ видит в статистике только курсы тех видов, функции по которым ему выданы
     const statCourses = coursesRes.rows.filter((c) => canUseCourseKind(req.user, c.course_kind));

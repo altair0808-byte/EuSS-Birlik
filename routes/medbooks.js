@@ -95,8 +95,13 @@ router.put('/positions', authRequired, ADMIN, async (req, res) => {
 // ---------- обзор ----------
 router.get('/overview', authRequired, STAFF, async (req, res) => {
   try {
-    const scope = scopedFilter(req.user, splitMulti(req.query.object), splitMulti(req.query.department));
+    const reqObjs = splitMulti(req.query.object), reqDeps = splitMulti(req.query.department);
+    const scope = scopedFilter(req.user, reqObjs, reqDeps);
     if (scope.noAccess) return res.json({ rows: [], stats: mb.summarize([]) });
+    // Ассистент выбрал объект/отдел вне своей зоны — показываем пусто, а не всех
+    if (req.user.role === 'assistant' && ((reqObjs.length && !scope.objects.length) || (reqDeps.length && !scope.departments.length))) {
+      return res.json({ rows: [], stats: mb.summarize([]) });
+    }
     const cat = ['manager', 'specialist', 'employee'].includes(req.query.category) ? req.query.category : '';
     const rows = await mb.loadEntries({ objects: scope.objects, departments: scope.departments, category: cat, q: String(req.query.q || '').trim() });
     res.setHeader('Cache-Control', 'no-store');

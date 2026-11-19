@@ -129,6 +129,15 @@ async function numberTaken(number, openDate, excludeId) {
   return result.rows.length > 0;
 }
 
+// Протоколы ассистентам закрыты. Исключение — ассистент-член комиссии (committee_role): ему протокол нужен,
+// чтобы подписать его, и он видит только протоколы своей зоны (см. assistantCanAccessProtocol ниже).
+function noPlainAssistant(req, res, next) {
+  if (req.user && req.user.role === 'assistant' && !req.user.committee_role) {
+    return res.status(403).json({ error: 'forbidden_protocols', message: 'Протоколы ассистентам недоступны' });
+  }
+  return next();
+}
+
 // Есть ли у ассистента (по его зоне) хотя бы один сотрудник среди участников протокола —
 // используется, чтобы разрешить/запретить одиночные операции по протоколу (§4, §9 ТЗ:
 // "assistant допущен к чтению протоколов, но только по своим объектам/отделам").
@@ -153,7 +162,7 @@ async function assistantCanAccessProtocol(user, protocolId) {
 
 // List all protocols (newest first)
 // ТЗ §9: assistant допущен к списку, но только протоколы, где есть сотрудники его зоны.
-router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
+router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), noPlainAssistant, async (req, res) => {
   try {
     // Единый фильтр по объекту/отделу (мульти-выбор — несколько значений через запятую):
     // считаем только сотрудников выбранных объектов/отделов и показываем только те
@@ -208,7 +217,7 @@ router.get('/next-number', authRequired, requireRole('admin', 'superadmin'), req
 // Список сотрудников, попавших в протокол — что показывает «№ протокола» при клике во
 // вкладке «Протоколы» (п.4 запроса): ФИО, курс, статус (сдал/не сдал), результат %,
 // номер сертификата. Тот же состав участников, что уходит в Word-протокол (MEMBER_JOIN).
-router.get('/:id/members', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
+router.get('/:id/members', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), noPlainAssistant, async (req, res) => {
   try {
     const pRes = await query(`SELECT ${PROTOCOL_COLS} FROM protocols p WHERE p.id = $1`, [req.params.id]);
     const p = pRes.rows[0];
@@ -299,7 +308,7 @@ async function checkDeletable(protocolId, res) {
 
 // Скачать протокол в Word (.docx): дата открытия и номер подставляются в шапку,
 // сотрудники протокола — в таблицу (ФИО кириллицей).
-router.get('/:id/download', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
+router.get('/:id/download', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), noPlainAssistant, async (req, res) => {
   try {
     if (!(await assistantCanAccessProtocol(req.user, req.params.id))) {
       return res.status(403).json({ error: 'forbidden', message: 'Протокол вне вашей зоны доступа' });
@@ -348,7 +357,7 @@ router.get('/:id/download', authRequired, requireRole('admin', 'assistant', 'sup
 // Статус подписания по всем трём ролям комиссии (п.2, п.7 запроса) + может ли
 // ТЕКУЩИЙ пользователь подписать прямо сейчас (своя роль, ещё не подписано,
 // протокол не заблокирован).
-router.get('/:id/signatures', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
+router.get('/:id/signatures', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), noPlainAssistant, async (req, res) => {
   try {
     const pRes = await query(`SELECT ${PROTOCOL_COLS} FROM protocols p WHERE p.id = $1`, [req.params.id]);
     const p = pRes.rows[0];
@@ -393,7 +402,7 @@ router.get('/:id/signatures', authRequired, requireRole('admin', 'assistant', 's
 // заранее сохранённый образец подписи (см. routes/signatures.js). Когда подписаны
 // все три роли — протокол «запечатывается» (п.6, п.8): формируется и сохраняется
 // итоговый PDF, фиксируется его контрольная сумма, редактирование блокируется.
-router.post('/:id/sign', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
+router.post('/:id/sign', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), noPlainAssistant, async (req, res) => {
   const { password } = req.body || {};
   if (!password) {
     return res.status(400).json({ error: 'password_required', message: 'Для подтверждения подписи введите пароль аккаунта' });
@@ -532,7 +541,7 @@ router.post('/:id/revoke', authRequired, requireRole('superadmin'), requireAdmin
 });
 
 // Журнал подписания (п.5 запроса): ФИО, роль, дата и время, IP, браузер/устройство, № протокола
-router.get('/:id/journal', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
+router.get('/:id/journal', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), noPlainAssistant, async (req, res) => {
   try {
     if (!(await assistantCanAccessProtocol(req.user, req.params.id))) {
       return res.status(403).json({ error: 'forbidden', message: 'Протокол вне вашей зоны доступа' });
@@ -556,7 +565,7 @@ router.get('/:id/journal', authRequired, requireRole('admin', 'assistant', 'supe
 // / Ожидает»). Пока протокол не подписан всеми — формируется «на лету» (предпросмотр,
 // уже проставленные подписи видны). После полного подписания отдаётся ровно тот файл,
 // что был сохранён при запечатывании (см. POST /:id/sign) — чтобы pdf_hash не «расходился».
-router.get('/:id/pdf', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
+router.get('/:id/pdf', authRequired, requireRole('admin', 'assistant', 'superadmin'), requireAdminFunction('biot'), noPlainAssistant, async (req, res) => {
   try {
     if (!(await assistantCanAccessProtocol(req.user, req.params.id))) {
       return res.status(403).json({ error: 'forbidden', message: 'Протокол вне вашей зоны доступа' });

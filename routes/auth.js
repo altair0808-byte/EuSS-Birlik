@@ -23,7 +23,7 @@ function authRequired(req, res, next) {
     if (user && user.role === 'assistant') {
       try {
         const r = await query(
-          `SELECT assistant_objects, assistant_departments, active FROM users WHERE id = $1 AND role = 'assistant'`,
+          `SELECT assistant_objects, assistant_departments, admin_functions, committee_role, active FROM users WHERE id = $1 AND role = 'assistant'`,
           [user.id]
         );
         const row = r.rows[0];
@@ -32,6 +32,8 @@ function authRequired(req, res, next) {
         }
         req.user.assistant_objects = row.assistant_objects || [];
         req.user.assistant_departments = row.assistant_departments || [];
+        req.user.admin_functions = row.admin_functions || [];
+        req.user.committee_role = row.committee_role || null;
       } catch (e) {
         console.error('authRequired: не удалось обновить зону ассистента, беру из токена:', e.message);
       }

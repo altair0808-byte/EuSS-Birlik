@@ -32,13 +32,13 @@ const { ensureIdCardForAssignment } = require('../idCardService');
 const driveSync = require('../driveSync');
 
 const buildHistoricalFields = assignmentsRouter.buildHistoricalFields;
-const { requireCourseFunction, canUseCourseKind, kindSqlFilter, functionOfCourse, hasFunction, DENIED } = require('../lib/adminFunctions');
+const { requireCourseFunction, canUseCourseKind, kindSqlFilter, functionOfCourse, hasFunction, DENIED, isLimitedRole } = require('../lib/adminFunctions');
 const adminOnly = [authRequired, requireRole('admin', 'superadmin')];
 
 // Группа обучения принадлежит курсу, а курс — одной из функций админа (БиОТ / внутреннее / внешнее обучение).
 // Админ работает только с группами по курсам своих функций; суперадмин — со всеми.
 const sessionCourseGuard = async (req, res, next) => {
-  if (!req.user || req.user.role !== 'admin') return next();
+  if (!isLimitedRole(req.user)) return next();
   try {
     const r = await query('SELECT course_id FROM training_sessions WHERE id = $1', [req.params.id]);
     if (!r.rows[0]) return next();

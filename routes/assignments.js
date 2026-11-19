@@ -416,14 +416,19 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), a
 });
 
 // Assignments whose certificate is expiring soon (or already expired) — for admin dashboard widget
-router.get('/expiring', authRequired, requireRole('admin', 'superadmin'), async (req, res) => {
+router.get('/expiring', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   try {
     const days = Number(req.query.days) || 30;
     const { object, department, category } = req.query;
     const params = [String(days)];
     let orgSql = '';
-    const objects = splitMulti(object);
-    const departments = splitMulti(department);
+    // Ассистент — только своя зона (объекты / отделы)
+    const reqObjs = splitMulti(object), reqDeps = splitMulti(department);
+    const scope = scopedFilter(req.user, reqObjs, reqDeps);
+    if (scope.noAccess) return res.json([]);
+    if (req.user.role === 'assistant' && ((reqObjs.length && !scope.objects.length) || (reqDeps.length && !scope.departments.length))) return res.json([]);
+    const objects = scope.objects;
+    const departments = scope.departments;
     if (objects.length) { params.push(objects); orgSql += ` AND u.object = ANY($${params.length}::text[])`; }
     if (departments.length) { params.push(departments); orgSql += ` AND u.department = ANY($${params.length}::text[])`; }
     const cats = splitMulti(category).filter(c => ['manager', 'specialist', 'employee'].includes(c));
