@@ -167,6 +167,30 @@ router.post('/remap', SU, upload.single('file'), async (req, res) => {
       }
     }
     if (!dry && changes.length) {
+      // Санкнижки: если у сотрудников новой должности уже внесены книжки, а должность ещё не отмечена
+      // «санкнижка обязательна» — отмечаем сами (период — какой чаще у их книжек). Повторно грузить файл не нужно.
+      const seenKeys = new Set();
+      for (const c of changes) {
+        const k = keyOf(c.to.object, c.to.department, c.to.position);
+        if (seenKeys.has(k)) continue;
+        seenKeys.add(k);
+        const m = (await client.query(
+          `SELECT mode() WITHIN GROUP (ORDER BY r.period_months) AS period
+             FROM medbook_records r JOIN users u ON u.id = r.user_id
+            WHERE u.role = 'employee' AND trim(COALESCE(u.object,'')) = $1 AND trim(COALESCE(u.department,'')) = $2 AND trim(COALESCE(u.position,'')) = $3`,
+          [c.to.object, c.to.department, c.to.position])).rows[0];
+        if (m && m.period) {
+          await client.query(
+            `INSERT INTO medbook_positions (object, department, position, key, period_months) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (key) DO NOTHING`,
+            [c.to.object, c.to.department, c.to.position, k, Number(m.period)]);
+        }
+      }
+      await client.query(
+        `UPDATE medbook_records r SET manual = FALSE FROM users u, medbook_positions mp
+          WHERE u.id = r.user_id AND r.manual = TRUE
+            AND mp.key = lower(regexp_replace(trim(COALESCE(u.object,'')), '\\s+', ' ', 'g')) || '|' ||
+                         lower(regexp_replace(trim(COALESCE(u.department,'')), '\\s+', ' ', 'g')) || '|' ||
+                         lower(regexp_replace(trim(COALESCE(u.position,'')), '\\s+', ' ', 'g'))`);
       // старые должности без сотрудников убираем из структуры их отдела
       for (const c of changes) {
         const left = (await client.query(

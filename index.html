@@ -1657,29 +1657,38 @@ async function loadTabContent() {
     container.innerHTML = `
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
         <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
-          <h2 class="text-lg font-bold text-slate-900">${isArchiveTab ? _L('Архив', 'Мұрағат') : isAdminsTab ? _L('Администраторы и ассистенты', 'Әкімшілер мен ассистенттер') : t('users_title')}</h2>
+          <h2 class="text-lg font-bold text-slate-900">${isArchiveTab ? _L('Архив', 'Мұрағат') : isAdminsTab ? _L('Администраторы и ассистенты', 'Әкімшілер мен ассистенттер') : _L('Сотрудники', 'Қызметкерлер')}</h2>
           <div class="flex flex-wrap gap-2 toolbar-scroll">
-            ${isAdminsTab || isArchiveTab || isObserverUser() ? '' : `<input type="file" id="importFile" accept=".xlsx" class="hidden" onchange="handleImportFile(this)">
-            <button onclick="downloadUsersTemplate()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">⬇ Скачать бланк</button>
-            <button onclick="document.getElementById('importFile').click()" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">📥 ${t('import_excel')}</button>
-            <button onclick="exportUsersForTraining()" title="${_L('Выгрузить всех сотрудников, внести новое обучение в Excel и загрузить обратно', 'Қызметкерлерді Excel-ге шығару')}" class="px-4 py-2 border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-sm font-semibold rounded-lg">📤 ${_L('Выгрузить в Excel для обучения', 'Оқыту үшін Excel-ге шығару')}</button>
-            <button onclick="openBulkTrainingModal()" class="px-4 py-2 border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-sm font-semibold rounded-lg">📥 ${_L('Загрузить обновлённый Excel', 'Жаңартылған Excel жүктеу')}</button>`}
-            ${isAdminsTab || isArchiveTab ? '' : `<input type="file" id="rotImportFile" accept=".xlsx" class="hidden" onchange="handleRotationImport(this)">
-            <button onclick="downloadRotationTemplate()" title="${_L('Пустой Excel-бланк для загрузки заездов и отъездов', 'Келу мен кету күндерін жүктеуге арналған бос Excel бланкі')}" class="px-4 py-2 border border-sky-300 text-sky-700 hover:bg-sky-50 text-sm font-semibold rounded-lg">⬇ 👷 ${_L('Бланк вахты', 'Вахта бланкі')}</button>
-            <button onclick="exportRotations()" title="${_L('Список: кто когда заезжает / уезжает и кто сейчас на вахте. Учитывает выбранные фильтры', 'Тізім: кім қашан келеді / кетеді. Таңдалған сүзгілерді ескереді')}" class="px-4 py-2 border border-sky-300 text-sky-700 hover:bg-sky-50 text-sm font-semibold rounded-lg">📤 👷 ${_L('Выгрузить вахту', 'Вахтаны шығару')}</button>
-            <button onclick="document.getElementById('rotImportFile').click()" class="px-4 py-2 border border-sky-300 text-sky-700 hover:bg-sky-50 text-sm font-semibold rounded-lg">📥 👷 ${_L('Загрузить вахту', 'Вахтаны жүктеу')}</button>`}
-            ${!isAdminsTab && !isArchiveTab && isSuperadminUser() ? `<button onclick="openPositionRemap()" title="${_L('Заменить неправильные / английские должности у сотрудников через Excel', 'Лауазымдарды Excel арқылы ауыстыру')}" class="px-4 py-2 border border-violet-300 text-violet-700 hover:bg-violet-50 text-sm font-semibold rounded-lg">🔁 ${_L('Порядок в должностях', 'Лауазымдарды реттеу')}</button>` : ''}
+            ${isAdminsTab || isArchiveTab ? '' : `<input type="file" id="importFile" accept=".xlsx" class="hidden" onchange="handleImportFile(this)">
+            <input type="file" id="rotImportFile" accept=".xlsx" class="hidden" onchange="handleRotationImport(this)">
+            <div class="relative">
+              <button type="button" onclick="toggleUsersExcelMenu(event)" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg flex items-center gap-1.5">📊 Excel <span class="text-slate-400 text-xs">▾</span></button>
+              <div id="uExcelMenu" class="hidden absolute right-0 mt-2 w-80 bg-white border border-slate-200 rounded-xl shadow-xl z-40 p-1.5 text-sm">
+                <div class="px-3 pt-2 pb-1 text-[11px] uppercase tracking-wide text-slate-400 font-bold">👷 ${_L('Вахта', 'Вахта')}</div>
+                <button onclick="exportRotations()" class="w-full text-left px-3 py-2 rounded-lg hover:bg-sky-50">📤 ${_L('Выгрузить вахту', 'Вахтаны шығару')}<span class="block text-[11px] text-slate-400">${_L('кто когда заезжает, кто сейчас на вахте', 'кім қашан келеді')}</span></button>
+                <button onclick="document.getElementById('rotImportFile').click()" class="w-full text-left px-3 py-2 rounded-lg hover:bg-sky-50">📥 ${_L('Загрузить вахту', 'Вахтаны жүктеу')}</button>
+                <button onclick="downloadRotationTemplate()" class="w-full text-left px-3 py-2 rounded-lg hover:bg-sky-50">⬇ ${_L('Пустой бланк вахты', 'Вахта бланкі')}</button>
+                ${isObserverUser() ? '' : `<div class="border-t my-1.5"></div>
+                <div class="px-3 pt-1 pb-1 text-[11px] uppercase tracking-wide text-slate-400 font-bold">👥 ${_L('Сотрудники и обучение', 'Қызметкерлер және оқыту')}</div>
+                <button onclick="document.getElementById('importFile').click()" class="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-50">📥 ${t('import_excel')}</button>
+                <button onclick="downloadUsersTemplate()" class="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-50">⬇ ${_L('Бланк для добавления сотрудников', 'Қызметкерлер бланкі')}</button>
+                <button onclick="exportUsersForTraining()" class="w-full text-left px-3 py-2 rounded-lg hover:bg-emerald-50">📤 ${_L('Выгрузить для обучения', 'Оқыту үшін шығару')}</button>
+                <button onclick="openBulkTrainingModal()" class="w-full text-left px-3 py-2 rounded-lg hover:bg-emerald-50">📥 ${_L('Загрузить обучение', 'Оқытуды жүктеу')}</button>`}
+                ${isSuperadminUser() ? `<div class="border-t my-1.5"></div>
+                <button onclick="openPositionRemap()" class="w-full text-left px-3 py-2 rounded-lg hover:bg-violet-50">🔁 ${_L('Порядок в должностях', 'Лауазымдарды реттеу')}<span class="block text-[11px] text-slate-400">${_L('массовая замена неверных должностей', 'лауазымдарды ауыстыру')}</span></button>` : ''}
+              </div>
+            </div>`}
             ${isArchiveTab ? '' : isAdminsTab ? `<button onclick="openUserModal(null, 'assistant')" class="px-4 py-2 border border-blue-300 text-blue-700 hover:bg-blue-50 text-sm font-semibold rounded-lg">+ ${_L('Добавить ассистента', 'Ассистент қосу')}</button>
             <button onclick="openUserModal(null, 'admin')" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${_L('Добавить администратора', 'Әкімші қосу')}</button>` : `<button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${t('add_user')}</button>`}
           </div>
         </div>
         ${isAdminsTab ? `<p class="text-xs text-slate-500 mb-4">${_L('Здесь администраторы и ассистенты. Администраторы управляют системой, ассистенты работают с сотрудниками только в своей зоне (объекты/отделы). Они не входят в список сотрудников, статистику, назначения, протоколы и экспорт. Что делал каждый из них — во вкладке «Журнал действий».', 'Мұнда әкімшілер мен ассистенттер. Әкімшілер жүйені басқарады, ассистенттер тек өз аймағында (нысандар/бөлімдер) қызметкерлермен жұмыс істейді. Олар қызметкерлер тізіміне, статистикаға, тағайындауларға, хаттамаларға және экспортқа кірмейді.')}</p>` : ''}
         ${isArchiveTab ? `<p class="text-xs text-slate-500 mb-4">${_L('Уволенные и сотрудники в отпуске. Они не входят в общий список сотрудников и статистику (в т.ч. на главной странице), но их история обучения, протоколы и сертификаты сохраняются. Кнопка «Восстановить» возвращает сотрудника в штат.', 'Жұмыстан босатылған және декреттегі қызметкерлер. Олар жалпы тізімге және статистикаға кірмейді, бірақ оқу тарихы, хаттамалары мен сертификаттары сақталады.')}</p>` : ''}
+        ${!isAdminsTab && !isArchiveTab ? `<div id="uSummary" class="flex flex-wrap gap-2 mb-4"></div>` : ''}
         <div class="flex flex-wrap items-center gap-2 mb-4">
           <input id="uFilterQ" type="text" placeholder="${t('search_placeholder')}" value="${esc(state.usersFilter.q)}" oninput="onUsersFilterChange()" class="flex-1 min-w-[200px] border border-slate-300 rounded-lg px-3 py-2 text-sm">
           ${!isAdminsTab ? usersFilterDropdownHtml('positions', _L('Все должности', 'Барлық лауазымдар'), (state.dictionaries.positions || []).map(p => p.ru), posLabel) : ''}
-          ${!isAdminsTab && !isArchiveTab ? rotationFilterSelectHtml() : ''}
-          ${!isAdminsTab ? `<button type="button" onclick="togglePosIssuesFilter()" title="${_L('Показать сотрудников, у которых должность не указана, нет в справочнике или не закреплена за их отделом', 'Лауазымы қате қызметкерлер')}" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap ${state.usersFilter.posIssues ? 'bg-amber-500 text-white border-amber-500' : 'border-amber-300 text-amber-800 hover:bg-amber-50'}">⚠ ${_L('Ошибки в должности', 'Лауазым қателері')} <span id="posIssuesCount"></span></button>` : ''}
+          ${isArchiveTab ? `<button type="button" onclick="togglePosIssuesFilter()" title="${_L('Показать сотрудников, у которых должность не указана, нет в справочнике или не закреплена за их отделом', 'Лауазымы қате қызметкерлер')}" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap ${state.usersFilter.posIssues ? 'bg-amber-500 text-white border-amber-500' : 'border-amber-300 text-amber-800 hover:bg-amber-50'}">⚠ ${_L('Ошибки в должности', 'Лауазым қателері')} <span id="posIssuesCount"></span></button>` : ''}
           ${isArchiveTab ? usersFilterDropdownHtml('statuses', _L('Все статусы', 'Барлық мәртебелер'), ['fired', 'maternity'], v => v === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В отпуске', 'Демалыста')) : ''}
           ${!isAdminsTab && !isArchiveTab && !isObserverUser() ? `<button type="button" id="bulkShowSelectedBtn" onclick="toggleBulkShowSelected()" title="${_L('Показать в таблице только отмеченных сотрудников (поиск и фильтры временно не действуют)', 'Кестеде тек белгіленген қызметкерлерді көрсету')}" class="hidden px-3 py-2 border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-xs font-semibold rounded-lg whitespace-nowrap">${_L('Показать выбранных', 'Таңдалғандарды көрсету')}</button>` : ''}
           ${!isAdminsTab && !isArchiveTab && !isObserverUser() ? `<button type="button" id="bulkAssignBtn" onclick="openAssignModal(null, [...bulkSelectedUserIds])" class="hidden px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg whitespace-nowrap">${_L('Назначить выбранным', 'Таңдалғандарға тағайындау')} (<span id="bulkAssignCount">0</span>)</button>` : ''}
@@ -1687,8 +1696,7 @@ async function loadTabContent() {
         <div class="overflow-x-auto">
           <table class="min-w-full divide-y divide-slate-200 text-sm">
             <thead class="bg-slate-50">
-              <tr>
-                ${!isAdminsTab && !isArchiveTab && !isObserverUser() ? `<th class="px-4 py-3 text-left w-8"><input type="checkbox" id="uSelectAll" onchange="toggleBulkSelectAll(this.checked)" class="rounded text-blue-600"></th>` : ''}
+              ${!isAdminsTab ? usersTableHeadHtml(isArchiveTab) : `<tr>
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">ФИО</th>
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">Логин</th>
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">Объект / Отдел</th>
@@ -1697,9 +1705,9 @@ async function loadTabContent() {
                 ${!isAdminsTab ? `<th class="px-4 py-3 text-left font-semibold text-slate-600">ИИН</th>` : ''}
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">${isArchiveTab ? _L('Статус', 'Мәртебе') : 'Роль'}</th>
                 <th class="px-4 py-3 text-right font-semibold text-slate-600">${t('actions')}</th>
-              </tr>
+              </tr>`}
             </thead>
-            <tbody id="usersTable" class="divide-y divide-slate-100"><tr><td colspan="${(!isAdminsTab && !isArchiveTab && !isObserverUser() ? 7 : 6) + (!isAdminsTab ? 1 : 0) + (!isAdminsTab && !isArchiveTab ? 2 : 0)}" class="p-4 text-center text-slate-400">Загрузка...</td></tr></tbody>
+            <tbody id="usersTable" class="divide-y divide-slate-100"><tr><td colspan="9" class="p-6 text-center text-slate-400">Загрузка...</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -4374,6 +4382,7 @@ async function loadUsersList() {
     const withIssue = state.users.filter(u => positionIssue(u));
     const cnt = document.getElementById('posIssuesCount');
     if (cnt) cnt.textContent = `(${withIssue.length})`;
+    if (!state.usersFilter.rotation) state.usersAllForSummary = state.users.slice();
     if (state.usersFilter.posIssues) state.users = withIssue;
   }
   if (bulkShowOnlySelected && bulkSelectedUserIds.size && state.tab === 'users') {
@@ -4385,7 +4394,8 @@ async function loadUsersList() {
   const isAdminsTab = state.tab === 'admins';
   const showCheckbox = !isAdminsTab && !isArchiveTab && !isObserverUser();
   const showRot = !isAdminsTab && !isArchiveTab;
-  const colspan = (showCheckbox ? 7 : 6) + (!isAdminsTab ? 1 : 0) + (showRot ? 2 : 0);
+  const colspan = isAdminsTab ? 6 : (showCheckbox ? 5 : 4);
+  if (!isAdminsTab && !isArchiveTab) renderUsersSummary();
   if (!state.users.length) {
     tbody.innerHTML = `<tr><td colspan="${colspan}" class="p-4 text-center text-slate-400">${t('no_data')}</td></tr>`;
     updateBulkAssignButton();
@@ -4396,6 +4406,12 @@ async function loadUsersList() {
   // (openUserProfile), там же и ограниченное редактирование — см. ТЗ §3, §10. В списке
   // кнопки полного редактирования/статуса/удаления и чекбоксы массового назначения скрыты.
   const isObserver = isObserverUser();
+  if (!isAdminsTab) {
+    tbody.innerHTML = state.users.map(u => userRowHtml(u, { isArchiveTab, showCheckbox: showCheckbox && !isObserver, isObserver })).join('');
+    populateUsersMetaFilters();
+    if (showCheckbox) updateBulkAssignButton();
+    return;
+  }
   tbody.innerHTML = state.users.map(u => `
     <tr class="hover:bg-slate-50">
       ${showCheckbox && !isObserver ? `<td class="px-4 py-3"><input type="checkbox" data-uid="${u.id}" ${bulkSelectedUserIds.has(u.id) ? 'checked' : ''} onchange="toggleBulkSelect(${u.id}, this.checked)" class="rounded text-blue-600"></td>` : ''}
@@ -4440,6 +4456,149 @@ async function loadUsersList() {
     // это нормально (их выбор просто не виден, пока фильтр не сброшен), поэтому Set не чистим
     updateBulkAssignButton();
   }
+}
+
+// ===================== СПИСОК СОТРУДНИКОВ: компактная таблица =====================
+// Колонки: [✓] · Сотрудник (ФИО, должность, отдел) · Вахта (+ овертайм) · ИИН · действия (кнопка + меню «⋯»).
+function usersTableHeadHtml(isArchiveTab) {
+  const sel = !isArchiveTab && !isObserverUser();
+  const th = 'px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wide text-slate-500';
+  return `<tr>
+    ${sel ? `<th class="pl-4 pr-1 py-3 w-8"><input type="checkbox" id="uSelectAll" onchange="toggleBulkSelectAll(this.checked)" class="rounded text-blue-600"></th>` : ''}
+    <th class="${th}">${_L('Сотрудник', 'Қызметкер')}</th>
+    <th class="${th}">${isArchiveTab ? _L('Статус', 'Мәртебе') : _L('Вахта', 'Вахта')}</th>
+    <th class="${th} hidden lg:table-cell">ИИН</th>
+    <th class="${th} text-right"></th>
+  </tr>`;
+}
+const AVATAR_COLORS = ['bg-blue-100 text-blue-700', 'bg-emerald-100 text-emerald-700', 'bg-amber-100 text-amber-800', 'bg-rose-100 text-rose-700', 'bg-violet-100 text-violet-700', 'bg-cyan-100 text-cyan-700', 'bg-lime-100 text-lime-800', 'bg-fuchsia-100 text-fuchsia-700'];
+function avatarHtml(u) {
+  const ini = (String(u.last_name || '').charAt(0) + String(u.first_name || '').charAt(0)).toUpperCase() || '?';
+  let h = 0; for (const ch of String(u.last_name || '') + String(u.first_name || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return `<div class="w-9 h-9 shrink-0 rounded-full flex items-center justify-center text-xs font-bold ${AVATAR_COLORS[h % AVATAR_COLORS.length]}">${esc(ini)}</div>`;
+}
+function categoryBadgeHtml(u) {
+  if (u.staff_category === 'manager') return `<span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">${_L('Руководитель', 'Басшы')}</span>`;
+  if (u.staff_category === 'specialist') return `<span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-teal-100 text-teal-700">${_L('Специалист', 'Маман')}</span>`;
+  return '';
+}
+function userRowHtml(u, ctx) {
+  const statusLabel = st => st === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В отпуске', 'Демалыста');
+  const where = [u.object, u.department].filter(Boolean).map(esc).join(' · ');
+  const login = u.login ? `<span title="${esc(_L('Есть логин для входа: ', 'Логин бар: ') + u.login)}" class="text-[11px] text-slate-400">🔑</span>` : '';
+  const second = ctx.isArchiveTab
+    ? `<span class="inline-block text-xs font-semibold px-2 py-0.5 rounded ${u.employment_status === 'fired' ? 'bg-red-100 text-red-700' : 'bg-purple-100 text-purple-700'}">${statusLabel(u.employment_status)}</span>${u.status_date ? `<div class="text-[11px] text-slate-400 mt-0.5">${fmtDate(u.status_date)}${u.status_date_end ? ' — ' + fmtDate(u.status_date_end) : ''}</div>` : ''}${u.employment_status === 'maternity' && u.leave_reason ? `<div class="text-[11px] text-purple-600 mt-0.5">${esc(leaveReasonText(u))}</div>` : ''}`
+    : `${rotationCellHtml(u)}<div class="mt-1">${overtimeMiniHtml(u)}</div>`;
+  const primary = ctx.isArchiveTab
+    ? `<button onclick="openStatusModal(${u.id}, 'active')" class="px-3 py-1.5 rounded-lg text-xs font-semibold border border-emerald-300 text-emerald-700 hover:bg-emerald-50">${_L('Восстановить', 'Қалпына келтіру')}</button>`
+    : `<button onclick="openUserProfile(${u.id})" class="px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 text-slate-700 hover:bg-slate-50">${_L('Открыть', 'Ашу')}</button>`;
+  const hasMenu = !ctx.isArchiveTab || isSuperadminUser();
+  return `
+    <tr class="hover:bg-slate-50/80 ${bulkSelectedUserIds.has(u.id) && ctx.showCheckbox ? 'bg-blue-50/50' : ''}">
+      ${ctx.showCheckbox ? `<td class="pl-4 pr-1 py-3 align-middle"><input type="checkbox" data-uid="${u.id}" ${bulkSelectedUserIds.has(u.id) ? 'checked' : ''} onchange="toggleBulkSelect(${u.id}, this.checked)" class="rounded text-blue-600"></td>` : ''}
+      <td class="px-4 py-3 align-middle">
+        <div class="flex items-center gap-3 min-w-[240px]">
+          ${avatarHtml(u)}
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-1.5">
+              <button onclick="openUserProfile(${u.id})" class="font-semibold text-slate-900 hover:text-blue-600 text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>
+              ${categoryBadgeHtml(u)} ${login}
+            </div>
+            <div class="text-xs text-slate-600 mt-0.5">${esc(posLabel(u.position) || '—')}${positionIssueBadge(u)}</div>
+            ${where ? `<div class="text-[11px] text-slate-400">${where}</div>` : ''}
+          </div>
+        </div>
+      </td>
+      <td class="px-4 py-3 align-middle text-xs min-w-[180px]">${second}</td>
+      <td class="px-4 py-3 align-middle text-xs text-slate-600 hidden lg:table-cell">${iinCellHtml(u.iin)}</td>
+      <td class="px-4 py-3 align-middle text-right whitespace-nowrap">
+        ${primary}
+        ${hasMenu ? `<button onclick="openUserRowMenu(event, ${u.id}, ${ctx.isArchiveTab ? 1 : 0})" title="${_L('Ещё', 'Тағы')}" class="ml-1 w-8 h-8 inline-flex items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 text-lg leading-none">⋯</button>` : ''}
+      </td>
+    </tr>`;
+}
+// Овертайм в ячейке «Вахта»: если указан — жёлтая плашка, иначе неприметная ссылка
+function overtimeMiniHtml(u) {
+  if (u.role !== 'employee') return '';
+  if (!u.overtime_from || !u.overtime_to) {
+    return `<button onclick="openOvertimeModal(${u.id})" class="text-[11px] text-slate-300 hover:text-blue-600">＋ ${_L('овертайм', 'овертайм')}</button>`;
+  }
+  return `<button onclick="openOvertimeModal(${u.id})" title="${_L('Изменить овертайм', 'Овертаймды өзгерту')}" class="text-[11px] font-semibold px-1.5 py-0.5 rounded ${u.overtime_active ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-500'}">⏱ ${_L('овертайм', 'овертайм')} ${overtimeRangeText(u)}</button>`;
+}
+// Меню «⋯» строки: рисуется поверх страницы (fixed), чтобы его не обрезала прокрутка таблицы
+function openUserRowMenu(ev, id, archive) {
+  ev.stopPropagation();
+  closeUserRowMenu();
+  const u = (state.users || []).find(x => String(x.id) === String(id));
+  if (!u) return;
+  const item = (label, onclick, cls = '') => `<button onclick="closeUserRowMenu();${onclick}" class="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-50 ${cls}">${label}</button>`;
+  let html = '';
+  if (archive) {
+    if (isSuperadminUser()) html += item('🗑 ' + _L('Удалить', 'Жою'), `delUser(${id})`, 'text-red-600');
+  } else {
+    html += item('✏️ ' + _L('Изменить карточку', 'Карточканы өзгерту'), `editUser(${id})`);
+    html += item('👷 ' + _L('Вахта', 'Вахта'), `openRotationModal(${id})`);
+    html += item('⏱ ' + _L('Овертайм', 'Овертайм'), `openOvertimeModal(${id})`);
+    html += `<div class="border-t my-1"></div>`;
+    html += item('🌴 ' + _L('В отпуск / декрет', 'Демалысқа'), `openStatusModal(${id}, 'maternity')`, 'text-purple-700');
+    html += item('🚪 ' + _L('Уволить', 'Жұмыстан босату'), `openStatusModal(${id}, 'fired')`, 'text-amber-700');
+    if (isSuperadminUser()) html += item('🗑 ' + _L('Удалить', 'Жою'), `delUser(${id})`, 'text-red-600');
+  }
+  if (!html) return;
+  const r = ev.currentTarget.getBoundingClientRect();
+  const m = document.createElement('div');
+  m.id = 'userRowMenu';
+  m.className = 'fixed z-[120] w-56 bg-white border border-slate-200 rounded-xl shadow-xl p-1.5 text-sm';
+  m.innerHTML = html;
+  document.body.appendChild(m);
+  const top = r.bottom + 4 + m.offsetHeight > window.innerHeight ? r.top - m.offsetHeight - 4 : r.bottom + 4;
+  m.style.top = Math.max(8, top) + 'px';
+  m.style.left = Math.max(8, r.right - m.offsetWidth) + 'px';
+}
+function closeUserRowMenu() { const m = document.getElementById('userRowMenu'); if (m) m.remove(); }
+function toggleUsersExcelMenu(ev) {
+  ev.stopPropagation();
+  const m = document.getElementById('uExcelMenu');
+  if (m) m.classList.toggle('hidden');
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('#userRowMenu')) closeUserRowMenu();
+  const xm = document.getElementById('uExcelMenu');
+  if (xm && !xm.classList.contains('hidden') && !e.target.closest('#uExcelMenu')) xm.classList.add('hidden');
+});
+window.addEventListener('scroll', closeUserRowMenu, true);
+// Сводка над таблицей: всего / на вахте / дома / вахта не указана / ошибки в должности — кликабельные фильтры.
+// Числа считаются по списку без фильтра вахты (при включённом фильтре показываются последние посчитанные).
+function renderUsersSummary() {
+  const box = document.getElementById('uSummary');
+  if (!box) return;
+  const f = state.usersFilter;
+  if (!f.rotation && !f.posIssues) {
+    const all = state.usersAllForSummary || state.users;
+    state.usersSummary = {
+      total: all.length,
+      on_shift: all.filter(u => u.rotation_status === 'on_shift').length,
+      home: all.filter(u => u.rotation_status === 'home').length,
+      unset: all.filter(u => !u.rotation_status || u.rotation_status === 'unset').length,
+      issues: all.filter(u => positionIssue(u)).length
+    };
+  }
+  const s = state.usersSummary || { total: 0, on_shift: 0, home: 0, unset: 0, issues: 0 };
+  const chip = (active, onclick, icon, label, n, tone) => `<button type="button" onclick="${onclick}" class="flex items-center gap-2 px-3 py-2 rounded-xl border text-sm transition ${active ? 'border-blue-600 bg-blue-50 ring-1 ring-blue-300' : 'border-slate-200 bg-white hover:border-slate-300'}">
+      <span class="text-base leading-none">${icon}</span><span class="text-slate-600">${label}</span><b class="tabular-nums ${tone}">${n}</b></button>`;
+  const noFilter = !f.rotation && !f.posIssues;
+  box.innerHTML =
+    chip(noFilter, "setUsersQuickFilter('')", '👥', _L('Все', 'Барлығы'), s.total, 'text-slate-900') +
+    chip(f.rotation === 'on_shift', "setUsersQuickFilter('on_shift')", ROT_ICON.on_shift, _L('На вахте', 'Вахтада'), s.on_shift, 'text-emerald-600') +
+    chip(f.rotation === 'home', "setUsersQuickFilter('home')", ROT_ICON.home, _L('Дома', 'Үйде'), s.home, 'text-sky-600') +
+    chip(f.rotation === 'unset', "setUsersQuickFilter('unset')", '❔', _L('Вахта не указана', 'Вахта көрсетілмеген'), s.unset, s.unset ? 'text-orange-600' : 'text-slate-400') +
+    chip(!!f.posIssues, "setUsersQuickFilter('issues')", '⚠', _L('Ошибки в должности', 'Лауазым қателері'), s.issues, s.issues ? 'text-amber-600' : 'text-slate-400');
+}
+function setUsersQuickFilter(v) {
+  const f = state.usersFilter;
+  if (v === 'issues') { f.posIssues = !f.posIssues; f.rotation = ''; }
+  else { f.posIssues = false; f.rotation = (v && f.rotation !== v) ? v : ''; }
+  loadUsersList();
 }
 
 // ===================== ВАХТА: заезд / отъезд, «на вахте» / «дома» =====================
