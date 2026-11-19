@@ -191,6 +191,19 @@ function looseFio(s) {
   return normalizeFio(s).replace(/[әғқңөұүһійъь]/g, (c) => KZ_FOLD[c]).replace(/[^a-zа-я ]/g, '').replace(/\s+/g, ' ').trim();
 }
 
+// «Скелет» ФИО для сравнения кириллицы с латиницей: на сайте часть сотрудников записана латиницей
+// (Daniyal Namazaliyev), часть — с казахскими буквами или без мягкого знака. Всё переводим в латиницу,
+// упрощаем близкие звуки и убираем удвоения: «Садуакассова Гулнара» = «Садуакасова Гульнара» = «Saduakassova Gulnara».
+const SK_MAP = { 'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'e', 'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'i', 'к': 'k', 'л': 'l',
+  'м': 'm', 'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u', 'ф': 'f', 'х': 'h', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sh',
+  'ъ': '', 'ы': 'i', 'ь': '', 'э': 'e', 'ю': 'iu', 'я': 'ia', 'ә': 'a', 'ғ': 'g', 'қ': 'k', 'ң': 'n', 'ө': 'o', 'ұ': 'u', 'ү': 'u', 'һ': 'h', 'і': 'i' };
+function skeletonFio(s) {
+  let out = '';
+  for (const ch of String(s || '').toLowerCase()) out += Object.prototype.hasOwnProperty.call(SK_MAP, ch) ? SK_MAP[ch] : ch;
+  return out.replace(/kh/g, 'h').replace(/y/g, 'i').replace(/j/g, 'zh').replace(/q/g, 'k').replace(/w/g, 'u').replace(/x/g, 'ks')
+    .replace(/[^a-z ]/g, '').replace(/(.)\1+/g, '$1').replace(/\s+/g, ' ').trim();
+}
+
 function parseImportDate(v) {
   if (v === undefined || v === null || v === '') return null;
   let d = null;
@@ -302,12 +315,16 @@ router.post('/import', authRequired, STAFF, upload.single('file'), async (req, r
       `SELECT id, last_name, first_name, iin, object, department, position, role, employment_status, active
          FROM users WHERE role = 'employee'`
     )).rows;
-    const byIin = new Map(), byName = new Map(), byLoose = new Map();
+    const byIin = new Map(), byName = new Map(), byLoose = new Map(), bySkel = new Map();
     const push = (m, k, u) => { if (!k) return; if (!m.has(k)) m.set(k, []); m.get(k).push(u); };
     users.forEach((u) => {
       push(byIin, String(u.iin || '').replace(/\D/g, ''), u);
       push(byName, normalizeFio(`${u.last_name} ${u.first_name}`), u);
       push(byLoose, looseFio(`${u.last_name} ${u.first_name}`), u);
+      // и «Фамилия Имя», и «Имя Фамилия» — на сайте у части сотрудников поля перепутаны
+      const k1 = skeletonFio(`${u.last_name} ${u.first_name}`), k2 = skeletonFio(`${u.first_name} ${u.last_name}`);
+      push(bySkel, k1, u);
+      if (k2 !== k1) push(bySkel, k2, u);
     });
     const pick = (list) => {
       if (!list || !list.length) return [];
@@ -344,6 +361,7 @@ router.post('/import', authRequired, STAFF, upload.single('file'), async (req, r
         let found = iin ? pick(byIin.get(iin)) : [];
         if (!found.length && last && first) found = pick(byName.get(normalizeFio(`${last} ${first}`)));
         if (!found.length && last && first) found = pick(byLoose.get(looseFio(`${last} ${first}`)));
+        if (!found.length && last && first) found = pick(bySkel.get(skeletonFio(`${last} ${first}`)));
         if (!found.length) { notFound.push({ row: rowNum, name: label, iin, position: txt(row, 'pos') }); continue; }
         if (found.length > 1) { errors.push(`Строка ${rowNum}: найдено несколько сотрудников «${label}» — укажите ИИН`); continue; }
         const u = found[0];

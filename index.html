@@ -1641,6 +1641,7 @@ async function loadTabContent() {
             <button onclick="downloadRotationTemplate()" title="${_L('Пустой Excel-бланк для загрузки заездов и отъездов', 'Келу мен кету күндерін жүктеуге арналған бос Excel бланкі')}" class="px-4 py-2 border border-sky-300 text-sky-700 hover:bg-sky-50 text-sm font-semibold rounded-lg">⬇ 👷 ${_L('Бланк вахты', 'Вахта бланкі')}</button>
             <button onclick="exportRotations()" title="${_L('Список: кто когда заезжает / уезжает и кто сейчас на вахте. Учитывает выбранные фильтры', 'Тізім: кім қашан келеді / кетеді. Таңдалған сүзгілерді ескереді')}" class="px-4 py-2 border border-sky-300 text-sky-700 hover:bg-sky-50 text-sm font-semibold rounded-lg">📤 👷 ${_L('Выгрузить вахту', 'Вахтаны шығару')}</button>
             <button onclick="document.getElementById('rotImportFile').click()" class="px-4 py-2 border border-sky-300 text-sky-700 hover:bg-sky-50 text-sm font-semibold rounded-lg">📥 👷 ${_L('Загрузить вахту', 'Вахтаны жүктеу')}</button>`}
+            ${!isAdminsTab && !isArchiveTab && isSuperadminUser() ? `<button onclick="openPositionRemap()" title="${_L('Заменить неправильные / английские должности у сотрудников через Excel', 'Лауазымдарды Excel арқылы ауыстыру')}" class="px-4 py-2 border border-violet-300 text-violet-700 hover:bg-violet-50 text-sm font-semibold rounded-lg">🔁 ${_L('Порядок в должностях', 'Лауазымдарды реттеу')}</button>` : ''}
             ${isArchiveTab ? '' : isAdminsTab ? `<button onclick="openUserModal(null, 'assistant')" class="px-4 py-2 border border-blue-300 text-blue-700 hover:bg-blue-50 text-sm font-semibold rounded-lg">+ ${_L('Добавить ассистента', 'Ассистент қосу')}</button>
             <button onclick="openUserModal(null, 'admin')" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${_L('Добавить администратора', 'Әкімші қосу')}</button>` : `<button onclick="openUserModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">+ ${t('add_user')}</button>`}
           </div>
@@ -4108,6 +4109,7 @@ const AUDIT_ACTION_LABELS = {
   medbook_removed: ['🩺', 'Убрал мед. книжку'],
   medbook_positions_saved: ['🩺', 'Изменил должности с мед. книжкой'],
   medbook_imported: ['🩺', 'Загрузил мед. книжки из Excel'],
+  positions_remapped: ['🔁', 'Заменил должности сотрудников из Excel'],
   users_imported: ['📥', 'Импорт сотрудников из Excel'],
   rotation_set: ['👷', 'Указал вахту (заезд / отъезд)'],
   overtime_set: ['⏱', 'Указал овертайм'],
@@ -9278,6 +9280,46 @@ async function mbRemove(userId, manual) {
   if (!confirm(msg)) return;
   try { await api.req('/api/medbooks/user/' + userId, { method: 'DELETE' }); mbAfterChange(); }
   catch (err) { alert(err.message); }
+}
+
+// Порядок в должностях: массовая замена должностей из Excel (сервер: routes/positionRemap.js, только суперадмин)
+function openPositionRemap() {
+  mbModal(`
+    <div class="flex justify-between items-start mb-2">
+      <h3 class="text-base font-bold text-slate-900">🔁 ${_L('Порядок в должностях', 'Лауазымдарды реттеу')}</h3>
+      <button onclick="mbCloseModal()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none">&times;</button>
+    </div>
+    <ol class="text-xs text-slate-600 mb-3 list-decimal pl-4 space-y-1">
+      <li>${_L('Скачайте список: все должности, как они сейчас записаны у сотрудников, и сколько человек.', 'Тізімді жүктеп алыңыз.')}</li>
+      <li>${_L('В колонке «Новая должность» впишите правильное название (и «Новый отдел», если нужно). Пусто — без изменений.', '«Жаңа лауазым» бағанын толтырыңыз.')}</li>
+      <li>${_L('Загрузите файл и нажмите «Проверить» — увидите, что изменится. Затем «Применить».', 'Файлды жүктеп, «Тексеру», содан кейін «Қолдану» басыңыз.')}</li>
+    </ol>
+    <p class="text-[11px] text-slate-400 mb-3">${_L('Курсы по должностям и отметки «санкнижка обязательна» переносятся на новую должность. Новая должность добавляется в справочник, старая без сотрудников — убирается из структуры отдела.', 'Курстар мен санкітапша белгілері жаңа лауазымға ауысады.')}</p>
+    <button type="button" onclick="downloadAuthed('/api/positions/remap-template.xlsx', 'positions_remap.xlsx')" class="px-3 py-2 border rounded-lg text-xs font-semibold mb-3">⬇ ${_L('Скачать текущие должности', 'Қазіргі лауазымдарды жүктеу')}</button>
+    <input type="file" id="prFile" accept=".xlsx" class="w-full text-sm border rounded p-2">
+    <div id="prResult" class="text-xs mt-3"></div>
+    <div class="flex justify-end gap-2 pt-3 mt-3 border-t">
+      <button type="button" onclick="mbCloseModal()" class="px-4 py-2 border rounded-lg text-sm">${_L('Закрыть', 'Жабу')}</button>
+      <button type="button" onclick="runPositionRemap(true)" class="px-4 py-2 border border-violet-300 text-violet-700 rounded-lg text-sm font-semibold">${_L('Проверить', 'Тексеру')}</button>
+      <button type="button" id="prApply" onclick="runPositionRemap(false)" class="px-4 py-2 bg-violet-600 text-white rounded-lg text-sm font-semibold">${_L('Применить', 'Қолдану')}</button>
+    </div>`);
+}
+async function runPositionRemap(dry) {
+  const f = document.getElementById('prFile').files[0];
+  const out = document.getElementById('prResult');
+  if (!f) { out.innerHTML = `<span class="text-red-600">${_L('Выберите файл', 'Файлды таңдаңыз')}</span>`; return; }
+  if (!dry && !confirm(_L('Заменить должности у сотрудников по этому файлу?', 'Осы файл бойынша лауазымдарды ауыстыру керек пе?'))) return;
+  const fd = new FormData(); fd.append('file', f); fd.append('dry_run', dry ? '1' : '0');
+  out.innerHTML = `<span class="text-slate-400">${t('loading')}</span>`;
+  try {
+    const r = await api.req('/api/positions/remap', { method: 'POST', body: fd });
+    const line = c => `<div><b>${c.count}</b> ${_L('чел.', 'адам')}: ${esc(c.from.position || '—')} <span class="text-slate-400">(${esc(c.from.department || '—')})</span> → <b>${esc(c.to.position)}</b>${c.to.department !== c.from.department ? ` <span class="text-slate-400">(${esc(c.to.department)})</span>` : ''}</div>`;
+    out.innerHTML = `
+      <div class="p-2 rounded ${r.dry_run ? 'bg-violet-50 text-violet-800' : 'bg-emerald-50 text-emerald-800'} font-semibold">${r.dry_run ? _L('Проверка (ничего не изменено)', 'Тексеру (ештеңе өзгерген жоқ)') : '✅ ' + _L('Готово', 'Дайын')}: ${r.employees} ${_L('сотрудников', 'қызметкер')}, ${r.changes.length} ${_L('замен', 'ауыстыру')}</div>
+      <div class="mt-2 max-h-56 overflow-y-auto border rounded p-2 bg-slate-50 space-y-0.5">${r.changes.map(line).join('') || '—'}</div>
+      ${r.errors && r.errors.length ? `<div class="mt-2 text-amber-700">${r.errors.map(e => `<div>${esc(e)}</div>`).join('')}</div>` : ''}`;
+    if (!r.dry_run) { await loadDictionaries(true); if (state.tab === 'users') loadUsersList(); }
+  } catch (err) { out.innerHTML = `<div class="p-2 rounded bg-red-50 text-red-700">${esc(err.message || '')}</div>`; }
 }
 
 // Массовая загрузка санкнижек из Excel (сервер: POST /api/medbooks/import)
