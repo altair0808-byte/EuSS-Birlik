@@ -131,9 +131,8 @@ router.get('/', authRequired, async (req, res) => {
         ) ELSE NULL END AS untrained_count
       FROM courses c ORDER BY c.created_at DESC
     `, orgParams(req));
-    // Админ видит только курсы тех видов, функции по которым ему выданы
-    if (req.user.role === 'admin') return res.json(result.rows.filter((c) => canUseCourseKind(req.user, c.course_kind)));
-    res.json(result.rows);
+    // Только курсы тех видов, что включены на сайте и (для админа) выданы ему
+    res.json(result.rows.filter((c) => canUseCourseKind(req.user, c.course_kind)));
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }
@@ -206,7 +205,7 @@ router.get('/stats/summary', authRequired, requireRole('admin', 'superadmin'), a
     `, orgParams(req));
 
     // Админ видит в статистике только курсы тех видов, функции по которым ему выданы
-    const statCourses = req.user.role === 'admin' ? coursesRes.rows.filter((c) => canUseCourseKind(req.user, c.course_kind)) : coursesRes.rows;
+    const statCourses = coursesRes.rows.filter((c) => canUseCourseKind(req.user, c.course_kind));
     res.json({ courses: statCourses, overall: overallRes.rows[0] });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });

@@ -328,7 +328,7 @@ router.put('/:id', ...adminOnly, sessionCourseGuard, async (req, res) => {
       if (b.course_id !== undefined && Number(b.course_id) !== Number(cur.course_id)) {
         const chk = await requireSessionCourse(b.course_id);
         if (chk.error) return bad(res, chk.error);
-        if (req.user.role === 'admin' && !canUseCourseKind(req.user, chk.course.course_kind)) return res.status(403).json(DENIED);
+        if (!canUseCourseKind(req.user, chk.course.course_kind)) return res.status(403).json(DENIED);
         set('course_id', b.course_id);
       }
       for (const [key, col] of [['planned_date', 'planned_date'], ['protocol_date', 'protocol_date'], ['test_date', 'test_date'], ['next_test_date', 'next_test_date']]) {

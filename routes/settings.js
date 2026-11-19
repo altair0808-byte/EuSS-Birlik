@@ -41,7 +41,8 @@ router.get('/', authRequired, async (req, res) => {
 router.get('/public', async (req, res) => {
   try {
     const result = await query('SELECT company_name, logo_path, logo_data FROM settings WHERE id = 1');
-    res.json(result.rows[0] || {});
+    // enabled_functions — какие разделы включены на этом сайте (ENABLED_FUNCTIONS, lib/adminFunctions.js)
+    res.json({ ...(result.rows[0] || {}), enabled_functions: require('../lib/adminFunctions').enabledFunctions() });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }

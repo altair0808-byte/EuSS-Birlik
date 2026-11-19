@@ -1304,9 +1304,15 @@ const ADMIN_FUNCTIONS_UI = [
   { key: 'medbook', icon: '🩺', ru: 'Мед. книжки', kz: 'Мед. кітапшалар', hintRu: 'Личные медицинские книжки сотрудников', hintKz: 'Қызметкерлердің жеке медициналық кітапшалары' }
 ];
 // Ограничения касаются только роли «Администратор». Суперадмин, ассистент и остальные — без изменений.
+// Разделы, включённые на этом сайте (сервер: ENABLED_FUNCTIONS). Пока не загружено — считаем, что включено всё.
+function siteFnEnabled(fn) {
+  const list = PUBLIC_SETTINGS && Array.isArray(PUBLIC_SETTINGS.enabled_functions) ? PUBLIC_SETTINGS.enabled_functions : null;
+  return !list || list.includes(fn);
+}
 function hasAdminFn(fn) {
   const u = state.user;
   if (!u) return false;
+  if (!siteFnEnabled(fn)) return false;
   if (u.role !== 'admin') return true;
   return Array.isArray(u.admin_functions) && u.admin_functions.includes(fn);
 }
@@ -1320,14 +1326,17 @@ function tabAllowed(tab) {
 function adminFunctionsCellHtml(u) {
   const fns = Array.isArray(u.admin_functions) ? u.admin_functions : [];
   if (!fns.length) return `<span class="text-xs text-red-600 font-semibold">${_L('Функции не выданы — работать с обучением нельзя', 'Функциялар берілмеген — оқытумен жұмыс істеу мүмкін емес')}</span>`;
-  return `<div class="flex flex-wrap gap-1">${ADMIN_FUNCTIONS_UI.filter(f => fns.includes(f.key)).map(f => `<span class="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-100 whitespace-nowrap">${f.icon} ${esc(_L(f.ru, f.kz))}</span>`).join('')}</div>`;
+  return `<div class="flex flex-wrap gap-1">${ADMIN_FUNCTIONS_UI.filter(f => fns.includes(f.key) && siteFnEnabled(f.key)).map(f => `<span class="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-100 whitespace-nowrap">${f.icon} ${esc(_L(f.ru, f.kz))}</span>`).join('')}</div>`;
 }
 // Чекбоксы функций в карточке администратора (видны только суперадмину при роли «Администратор»)
 function renderAdminFunctionCheckboxes(selected) {
   const box = document.getElementById('uAdminFunctions');
   if (!box) return;
   const sel = Array.isArray(selected) ? selected : [];
-  box.innerHTML = ADMIN_FUNCTIONS_UI.map(f => `
+  // Отключённые на сайте разделы не показываем, но выданные галочки сохраняем скрытыми — чтобы не стереть их при сохранении
+  const hiddenKept = ADMIN_FUNCTIONS_UI.filter(f => !siteFnEnabled(f.key) && sel.includes(f.key))
+    .map(f => `<input type="checkbox" class="hidden" value="${f.key}" checked>`).join('');
+  box.innerHTML = hiddenKept + ADMIN_FUNCTIONS_UI.filter(f => siteFnEnabled(f.key)).map(f => `
     <label class="flex items-start gap-2 p-2 border rounded bg-white cursor-pointer hover:bg-blue-50/40">
       <input type="checkbox" class="rounded text-blue-600 mt-0.5" value="${f.key}" ${sel.includes(f.key) ? 'checked' : ''}>
       <span><span class="text-sm font-semibold text-slate-800">${f.icon} ${esc(_L(f.ru, f.kz))}</span><span class="block text-[11px] text-slate-500">${esc(_L(f.hintRu, f.hintKz))}</span></span>

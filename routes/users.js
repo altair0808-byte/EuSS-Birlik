@@ -14,7 +14,7 @@ const { buildHistoricalFields } = require('./assignments');
 const { computeFioFields, transliterate, compareFio } = require('../lib/fio.js');
 const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 const { COMMITTEE_ROLES } = require('../lib/committeeRoles');
-const { normalizeAdminFunctions } = require('../lib/adminFunctions');
+const { normalizeAdminFunctions, canUseCourseKind } = require('../lib/adminFunctions');
 const { logAction, fullName } = require('../lib/audit');
 const driveSync = require('../driveSync');
 const { buildRotationCalendarPdf } = require('../rotationCalendarPdf');
@@ -483,10 +483,14 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
           }
 
           const cRes = await query(
-            `SELECT id FROM courses WHERE lower(title_ru) = lower($1) OR lower(title_kz) = lower($1) LIMIT 1`,
+            `SELECT id, course_kind FROM courses WHERE lower(title_ru) = lower($1) OR lower(title_kz) = lower($1) LIMIT 1`,
             [courseTitle]
           );
           const course = cRes.rows[0];
+          if (course && !canUseCourseKind(req.user, course.course_kind)) {
+            errors.push(`Строка ${rowNum}: сотрудник создан, но обучение не внесено — курс "${courseTitle}" относится к разделу, который отключён или вам не назначен`);
+            continue;
+          }
           if (!course) {
             errors.push(`Строка ${rowNum}: курс "${courseTitle}" не найден — обучение не внесено`);
             continue;

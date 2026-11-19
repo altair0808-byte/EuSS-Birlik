@@ -7,6 +7,7 @@
 // Если у сотрудника по одному курсу несколько удостоверений (пересдача/продление),
 // в списке показывается только самое свежее — по нему считается статус.
 const { query } = require('./db');
+const { siteKindSql } = require('./lib/adminFunctions');
 const { computeLiveStatus, ensureIdCardForAssignment } = require('./idCardService');
 
 // Досоздаёт удостоверения по сданным назначениям, у которых их ещё нет (идемпотентно).
@@ -61,7 +62,7 @@ async function loadExternalTrainings(userId) {
             c.title_ru, c.title_kz, c.card_color, c.is_external, c.course_kind, c.no_expiry
      FROM assignments a
      JOIN courses c ON c.id = a.course_id
-     WHERE a.user_id = $1 AND a.status = 'passed' AND c.is_external
+     WHERE a.user_id = $1 AND a.status = 'passed' AND c.is_external AND ${siteKindSql('c')}
      ORDER BY a.course_id, COALESCE(a.test_date, '') DESC, a.id DESC`,
     [userId]
   );

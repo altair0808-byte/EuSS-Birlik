@@ -3,7 +3,7 @@ const router = express.Router();
 const ExcelJS = require('exceljs');
 const { query, pool } = require('../db');
 const { authRequired, requireRole } = require('./auth');
-const { requireAdminFunction, requireCourseFunction, requireAssignmentFunction, kindSqlFilter } = require('../lib/adminFunctions');
+const { requireAdminFunction, requireCourseFunction, requireAssignmentFunction, kindSqlFilter, siteKindSql } = require('../lib/adminFunctions');
 const { logAction } = require('../lib/audit');
 const { makeUploader } = require('../upload');
 const { findActiveProtocol, nextProtocolNumber } = require('./protocols');
@@ -360,7 +360,7 @@ router.get('/mine', authRequired, async (req, res) => {
              c.video_path_ru, c.video_path_kz, c.video_url_ru, c.video_url_kz, c.is_external
       FROM assignments a
       JOIN courses c ON c.id = a.course_id
-      WHERE a.user_id = $1
+      WHERE a.user_id = $1 AND ${siteKindSql('c')}
       ORDER BY a.created_at DESC
     `, [req.user.id]);
     res.json(result.rows);
