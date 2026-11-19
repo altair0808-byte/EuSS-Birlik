@@ -50,6 +50,23 @@
     table.rt td[colspan]::before { display: none; }
     table.rt td:last-child { border-top: 1px dashed #e2e8f0 !important; margin-top: 4px; padding-top: 10px !important; flex-wrap: wrap; justify-content: flex-end; }
     table.rt td:last-child::before { flex-basis: 100%; max-width: 100%; }
+    /* Список сотрудников: своя компактная карточка (без подписей колонок) */
+    table.rt.ulist tr { display: grid; grid-template-columns: auto 1fr auto; column-gap: 10px; row-gap: 6px; align-items: start; padding: 10px 12px; }
+    table.rt.ulist td { display: block; width: auto; padding: 0 !important; text-align: left !important; }
+    table.rt.ulist td::before { display: none !important; }
+    table.rt.ulist td.c-chk { grid-column: 1; grid-row: 1; padding-top: 8px !important; }
+    table.rt.ulist td.c-emp { grid-column: 2; grid-row: 1; min-width: 0; }
+    table.rt.ulist td.c-act { grid-column: 3; grid-row: 1; border: 0 !important; margin: 0; padding: 0 !important; }
+    table.rt.ulist td.c-act .u-open { display: none; }
+    table.rt.ulist td.c-rot { grid-column: 2 / span 2; grid-row: 2; }
+    table.rt.ulist tr.no-chk td.c-emp { grid-column: 1 / span 2; }
+    table.rt.ulist tr.no-chk td.c-rot { grid-column: 1 / span 3; }
+    table.rt.ulist td.c-iin { display: none; }
+    table.rt.ulist tr.arch td.c-act { grid-column: 1 / -1; grid-row: 3; text-align: right !important; }
+    table.rt.ulist td[colspan] { grid-column: 1 / -1; }
+    .chips-scroll { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; margin-left: -4px; padding: 2px 4px 4px; }
+    .chips-scroll::-webkit-scrollbar { display: none; }
+    .chips-scroll > button { flex-shrink: 0; white-space: nowrap; }
     /* Карточки и окна — меньше отступы */
     #tabContent .p-6 { padding: 1rem; }
     .fixed .max-h-\[90vh\] { max-height: 92vh; }
@@ -1663,7 +1680,7 @@ async function loadTabContent() {
             <input type="file" id="rotImportFile" accept=".xlsx" class="hidden" onchange="handleRotationImport(this)">
             <div class="relative">
               <button type="button" onclick="toggleUsersExcelMenu(event)" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg flex items-center gap-1.5">📊 Excel <span class="text-slate-400 text-xs">▾</span></button>
-              <div id="uExcelMenu" class="hidden absolute right-0 mt-2 w-80 bg-white border border-slate-200 rounded-xl shadow-xl z-40 p-1.5 text-sm">
+              <div id="uExcelMenu" class="hidden absolute left-0 sm:left-auto sm:right-0 mt-2 w-[calc(100vw-3rem)] max-w-xs sm:w-80 bg-white border border-slate-200 rounded-xl shadow-xl z-40 p-1.5 text-sm">
                 <div class="px-3 pt-2 pb-1 text-[11px] uppercase tracking-wide text-slate-400 font-bold">👷 ${_L('Вахта', 'Вахта')}</div>
                 <button onclick="exportRotations()" class="w-full text-left px-3 py-2 rounded-lg hover:bg-sky-50">📤 ${_L('Выгрузить вахту', 'Вахтаны шығару')}<span class="block text-[11px] text-slate-400">${_L('кто когда заезжает, кто сейчас на вахте', 'кім қашан келеді')}</span></button>
                 <button onclick="document.getElementById('rotImportFile').click()" class="w-full text-left px-3 py-2 rounded-lg hover:bg-sky-50">📥 ${_L('Загрузить вахту', 'Вахтаны жүктеу')}</button>
@@ -1684,7 +1701,7 @@ async function loadTabContent() {
         </div>
         ${isAdminsTab ? `<p class="text-xs text-slate-500 mb-4">${_L('Здесь администраторы и ассистенты. Администраторы управляют системой, ассистенты работают с сотрудниками только в своей зоне (объекты/отделы). Они не входят в список сотрудников, статистику, назначения, протоколы и экспорт. Что делал каждый из них — во вкладке «Журнал действий».', 'Мұнда әкімшілер мен ассистенттер. Әкімшілер жүйені басқарады, ассистенттер тек өз аймағында (нысандар/бөлімдер) қызметкерлермен жұмыс істейді. Олар қызметкерлер тізіміне, статистикаға, тағайындауларға, хаттамаларға және экспортқа кірмейді.')}</p>` : ''}
         ${isArchiveTab ? `<p class="text-xs text-slate-500 mb-4">${_L('Уволенные и сотрудники в отпуске. Они не входят в общий список сотрудников и статистику (в т.ч. на главной странице), но их история обучения, протоколы и сертификаты сохраняются. Кнопка «Восстановить» возвращает сотрудника в штат.', 'Жұмыстан босатылған және декреттегі қызметкерлер. Олар жалпы тізімге және статистикаға кірмейді, бірақ оқу тарихы, хаттамалары мен сертификаттары сақталады.')}</p>` : ''}
-        ${!isAdminsTab && !isArchiveTab ? `<div id="uSummary" class="flex flex-wrap gap-2 mb-4"></div>` : ''}
+        ${!isAdminsTab && !isArchiveTab ? `<div id="uSummary" class="chips-scroll flex flex-wrap gap-2 mb-4"></div>` : ''}
         <div class="flex flex-wrap items-center gap-2 mb-4">
           <input id="uFilterQ" type="text" placeholder="${t('search_placeholder')}" value="${esc(state.usersFilter.q)}" oninput="onUsersFilterChange()" class="flex-1 min-w-[200px] border border-slate-300 rounded-lg px-3 py-2 text-sm">
           ${!isAdminsTab ? usersFilterDropdownHtml('positions', _L('Все должности', 'Барлық лауазымдар'), (state.dictionaries.positions || []).map(p => p.ru), posLabel) : ''}
@@ -1694,7 +1711,7 @@ async function loadTabContent() {
           ${!isAdminsTab && !isArchiveTab && !isObserverUser() ? `<button type="button" id="bulkAssignBtn" onclick="openAssignModal(null, [...bulkSelectedUserIds])" class="hidden px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg whitespace-nowrap">${_L('Назначить выбранным', 'Таңдалғандарға тағайындау')} (<span id="bulkAssignCount">0</span>)</button>` : ''}
         </div>
         <div class="overflow-x-auto">
-          <table class="min-w-full divide-y divide-slate-200 text-sm">
+          <table class="min-w-full divide-y divide-slate-200 text-sm ${!isAdminsTab ? 'ulist' : ''}">
             <thead class="bg-slate-50">
               ${!isAdminsTab ? usersTableHeadHtml(isArchiveTab) : `<tr>
                 <th class="px-4 py-3 text-left font-semibold text-slate-600">ФИО</th>
@@ -4494,25 +4511,25 @@ function userRowHtml(u, ctx) {
     : `<button onclick="openUserProfile(${u.id})" class="px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 text-slate-700 hover:bg-slate-50">${_L('Открыть', 'Ашу')}</button>`;
   const hasMenu = !ctx.isArchiveTab || isSuperadminUser();
   return `
-    <tr class="hover:bg-slate-50/80 ${bulkSelectedUserIds.has(u.id) && ctx.showCheckbox ? 'bg-blue-50/50' : ''}">
-      ${ctx.showCheckbox ? `<td class="pl-4 pr-1 py-3 align-middle"><input type="checkbox" data-uid="${u.id}" ${bulkSelectedUserIds.has(u.id) ? 'checked' : ''} onchange="toggleBulkSelect(${u.id}, this.checked)" class="rounded text-blue-600"></td>` : ''}
-      <td class="px-4 py-3 align-middle">
-        <div class="flex items-center gap-3 min-w-[240px]">
+    <tr class="hover:bg-slate-50/80 ${ctx.showCheckbox ? '' : 'no-chk'} ${ctx.isArchiveTab ? 'arch' : ''} ${bulkSelectedUserIds.has(u.id) && ctx.showCheckbox ? 'bg-blue-50/50' : ''}">
+      ${ctx.showCheckbox ? `<td data-label="" class="c-chk pl-4 pr-1 py-3 align-middle"><input type="checkbox" data-uid="${u.id}" ${bulkSelectedUserIds.has(u.id) ? 'checked' : ''} onchange="toggleBulkSelect(${u.id}, this.checked)" class="rounded text-blue-600"></td>` : ''}
+      <td data-label="" class="c-emp px-4 py-3 align-middle">
+        <div class="flex items-center gap-3 min-w-0 sm:min-w-[240px]">
           ${avatarHtml(u)}
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-1.5">
               <button onclick="openUserProfile(${u.id})" class="font-semibold text-slate-900 hover:text-blue-600 text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>
               ${categoryBadgeHtml(u)} ${login}
             </div>
-            <div class="text-xs text-slate-600 mt-0.5">${esc(posLabel(u.position) || '—')}${positionIssueBadge(u)}</div>
-            ${where ? `<div class="text-[11px] text-slate-400">${where}</div>` : ''}
+            <div class="text-xs text-slate-600 mt-0.5 break-words">${esc(posLabel(u.position) || '—')}${positionIssueBadge(u)}</div>
+            ${where ? `<div class="text-[11px] text-slate-400 break-words">${where}</div>` : ''}
           </div>
         </div>
       </td>
-      <td class="px-4 py-3 align-middle text-xs min-w-[180px]">${second}</td>
-      <td class="px-4 py-3 align-middle text-xs text-slate-600 hidden lg:table-cell">${iinCellHtml(u.iin)}</td>
-      <td class="px-4 py-3 align-middle text-right whitespace-nowrap">
-        ${primary}
+      <td data-label="" class="c-rot px-4 py-3 align-middle text-xs sm:min-w-[180px]">${second}</td>
+      <td data-label="" class="c-iin px-4 py-3 align-middle text-xs text-slate-600 hidden lg:table-cell">${iinCellHtml(u.iin)}</td>
+      <td data-label="" class="c-act px-4 py-3 align-middle text-right whitespace-nowrap">
+        <span class="${ctx.isArchiveTab ? '' : 'u-open'}">${primary}</span>
         ${hasMenu ? `<button onclick="openUserRowMenu(event, ${u.id}, ${ctx.isArchiveTab ? 1 : 0})" title="${_L('Ещё', 'Тағы')}" class="ml-1 w-8 h-8 inline-flex items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 text-lg leading-none">⋯</button>` : ''}
       </td>
     </tr>`;
