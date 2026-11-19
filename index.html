@@ -4360,6 +4360,7 @@ function rotationProfileHtml(user) {
       <span>${_L('Заезд', 'Келу')}: <b class="text-slate-700">${fmtDate(user.rotation_arrival)}</b></span>
       <span>${_L('Срок', 'Мерзімі')}: <b class="text-slate-700">${user.rotation_days || '—'} ${_L('дн.', 'күн')}</b></span>
       <span>${_L('Отъезд', 'Кету')}: <b class="text-slate-700">${fmtDate(user.rotation_departure)}</b></span>
+      <span>${_L('Дома', 'Үйде')}: <b class="text-slate-700">${user.rotation_rest_effective > 0 ? user.rotation_rest_effective + ' ' + _L('дн.', 'күн') : _L('без повтора', 'қайталанбайды')}</b></span>
       ${note ? `<span class="text-slate-400">· ${esc(note)}</span>` : ''}
       <span>· ${btn}</span>
       <span>· <button data-name="${esc(user.last_name + ' ' + user.first_name)}" onclick="downloadRotationCalendar(${user.id}, this.dataset.name)" class="text-emerald-700 hover:underline font-semibold">📅 ${_L('Календарь на год (PDF)', 'Жылдық күнтізбе (PDF)')}</button></span>
@@ -4510,6 +4511,9 @@ async function openRotationModal(userId) {
   const arrival = hasRot ? u.rotation_arrival : toLocalDateStr(new Date());
   const days = hasRot ? (u.rotation_days || 14) : 14;
   const departure = hasRot && u.rotation_departure ? u.rotation_departure : rotAddDays(arrival, days);
+  // Дома между вахтами: сохранённое значение; пусто в базе — «как срок вахты» (поле само следует за сроком)
+  const restStored = hasRot && u.rotation_rest_days != null;
+  const rest = restStored ? u.rotation_rest_days : days;
   m.innerHTML = `
     <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 max-h-[92vh] overflow-y-auto">
       <h3 class="text-lg font-bold">👷 ${_L('Вахта: заезд / отъезд', 'Вахта: келу / кету')}</h3>
@@ -4531,17 +4535,16 @@ async function openRotationModal(userId) {
           <input type="date" id="rotDeparture" value="${esc(departure)}" oninput="rotRecalc('departure')" class="w-full border p-2 rounded text-sm">
           <p class="text-[11px] text-slate-400 mt-1">${_L('Считается сама: заезд + срок. Можно поправить вручную. По день отъезда включительно сотрудник отображается «на вахте» 👷, потом — «дома» 🏠.', 'Өзі есептеледі: келу + мерзім. Қолмен түзетуге болады.')}</p>
         </div>
+        <div>
+          <label class="text-xs font-semibold text-slate-600">${_L('Дома между вахтами (дней)', 'Вахта аралығында үйде (күн)')}</label>
+          <input type="number" id="rotRest" min="0" max="365" value="${rest}" ${restStored ? 'data-touched="1"' : ''} oninput="this.dataset.touched='1'" class="w-full border p-2 rounded text-sm">
+          <p class="text-[11px] text-slate-400 mt-1">${_L('По этому числу статус обновляется сам: после отъезда — «дома» 🏠, в день следующего заезда — снова «на вахте» 👷, и так по кругу. 0 — разовая вахта без повтора.', 'Осы сан бойынша мәртебе өзі жаңарады: кеткеннен кейін — «үйде» 🏠, келесі келу күні — қайтадан «вахтада» 👷. 0 — қайталанбайды.')}</p>
+        </div>
         <div class="rounded-lg bg-slate-50 border border-slate-200 p-3 space-y-2">
           <p class="text-xs font-semibold text-slate-700">📅 ${_L('Календарь вахты на год (PDF)', 'Жылдық вахта күнтізбесі (PDF)')}</p>
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="text-[11px] text-slate-500">${_L('Начало периода', 'Кезең басы')}</label>
-              <input type="month" id="rotCalStart" value="${esc(toLocalDateStr(new Date()).slice(0, 7))}" class="w-full border p-2 rounded text-sm">
-            </div>
-            <div>
-              <label class="text-[11px] text-slate-500">${_L('Дома между вахтами, дн.', 'Вахта аралығында үйде, күн')}</label>
-              <input type="number" id="rotCalRest" min="1" max="365" value="${days}" oninput="this.dataset.touched='1'" class="w-full border p-2 rounded text-sm">
-            </div>
+          <div>
+            <label class="text-[11px] text-slate-500">${_L('Начало периода', 'Кезең басы')}</label>
+            <input type="month" id="rotCalStart" value="${esc(toLocalDateStr(new Date()).slice(0, 7))}" class="w-full border p-2 rounded text-sm">
           </div>
           <button type="button" data-name="${esc(u.last_name + ' ' + u.first_name)}" onclick="downloadRotationCalendar(${u.id}, this.dataset.name, true)" class="w-full px-3 py-2 border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-sm font-semibold rounded-lg">⬇ ${_L('Скачать календарь', 'Күнтізбені жүктеу')}</button>
           <p class="text-[11px] text-slate-400">${_L('График повторяется по циклу: вахта → дома → вахта. Берутся даты из этого окна, даже если они ещё не сохранены.', 'Кесте циклмен қайталанады: вахта → үйде → вахта.')}</p>
@@ -4584,25 +4587,25 @@ function rotRecalc(changed) {
   } else if (a && Number(dEl.value) >= 1) {
     depEl.value = rotAddDays(a, Number(dEl.value));
   }
-  const restEl = document.getElementById('rotCalRest');
+  const restEl = document.getElementById('rotRest');
   if (restEl && restEl.dataset.touched !== '1' && Number(dEl.value) >= 1) restEl.value = dEl.value;
   rotHighlightPreset();
 }
 // Скачать PDF-календарь вахты на год. fromModal = true — берём даты из окна «Вахта» (можно ещё не сохранённые),
-// иначе — сохранённую вахту сотрудника (дома между вахтами = срок вахты).
+// иначе — сохранённую вахту сотрудника (дома между вахтами — как сохранено, по умолчанию = срок вахты).
 function downloadRotationCalendar(userId, name, fromModal) {
   const p = new URLSearchParams({ lang: CURRENT_LANG === 'kz' ? 'kz' : 'ru' });
   if (fromModal) {
     const arrival = (document.getElementById('rotArrival') || {}).value;
     const days = (document.getElementById('rotDays') || {}).value;
     const departure = (document.getElementById('rotDeparture') || {}).value;
-    const rest = (document.getElementById('rotCalRest') || {}).value;
+    const rest = (document.getElementById('rotRest') || {}).value;
     const start = (document.getElementById('rotCalStart') || {}).value;
     if (!arrival) { alert(_L('Укажите дату заезда.', 'Келу күнін көрсетіңіз.')); return; }
     p.set('arrival', arrival);
     if (days) p.set('days', days);
     if (departure) p.set('departure', departure);
-    if (rest) p.set('rest', rest);
+    if (Number(rest) >= 1) p.set('rest', rest);
     if (start) p.set('start', start);
   }
   const safe = String(name || userId).trim().replace(/[^\p{L}\p{N}]+/gu, '_');
@@ -4613,6 +4616,9 @@ async function submitRotationForm(e, id) {
   const arrival = document.getElementById('rotArrival').value;
   const days = document.getElementById('rotDays').value;
   const departure = document.getElementById('rotDeparture').value;
+  const restEl = document.getElementById('rotRest');
+  // Не трогали поле — сохраняем «пусто» (= как срок вахты), чтобы при смене срока «дома» менялось вместе с ним
+  const rest = restEl && restEl.dataset.touched === '1' ? restEl.value : '';
   if (!arrival) return;
   if (departure && departure < arrival) {
     alert(_L('Дата отъезда раньше даты заезда.', 'Кету күні келу күнінен ерте.'));
@@ -4621,7 +4627,7 @@ async function submitRotationForm(e, id) {
   const btn = e.target.querySelector('button[type=submit]');
   if (btn) btn.disabled = true;
   try {
-    await api.setRotation(id, { rotation_arrival: arrival, rotation_days: days || null, rotation_departure: departure || null });
+    await api.setRotation(id, { rotation_arrival: arrival, rotation_days: days || null, rotation_departure: departure || null, rotation_rest_days: rest === '' ? null : rest });
   } catch (err) {
     alert(_L('Не удалось сохранить вахту: ', 'Вахтаны сақтау мүмкін болмады: ') + (err.message || ''));
     if (btn) btn.disabled = false;

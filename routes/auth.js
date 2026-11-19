@@ -59,7 +59,14 @@ function requireRole(...roles) {
 }
 
 // POST /api/auth/login
-router.post('/login', async (req, res) => {
+// Защита входа от перебора паролей. Лимит щедрый: на объекте вся группа может входить с одного IP (общий Wi-Fi).
+const { createRateLimiter } = require('../lib/rateLimit');
+const loginLimiter = createRateLimiter({
+  windowMs: 5 * 60 * 1000, max: 100,
+  message: 'Слишком много попыток входа. Подождите несколько минут и попробуйте снова.'
+});
+
+router.post('/login', loginLimiter, async (req, res) => {
   const { login, password } = req.body;
   if (!login || !password) {
     return res.status(400).json({ error: 'missing_fields', message: 'Укажите логин и пароль' });

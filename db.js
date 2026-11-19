@@ -152,6 +152,10 @@ async function initDb() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS rotation_arrival DATE;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS rotation_days INTEGER;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS rotation_departure DATE;
+    -- rotation_rest_days — сколько дней сотрудник дома между вахтами. Заезд/отъезд — это «якорь»,
+    -- от него статус считается по циклу (вахта → дома → вахта …), поэтому не нужно каждый раз
+    -- вручную вносить новый заезд. NULL — как срок вахты (14/14, 28/28); 0 — без повтора (разовая вахта).
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS rotation_rest_days INTEGER;
 
     -- Овертайм на вахте: сотрудника оставили на несколько дней сверх вахты.
     -- overtime_from / overtime_to — период «с … по» (включительно), без часов.

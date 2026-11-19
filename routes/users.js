@@ -100,20 +100,41 @@ function normalizeDateOnly(v) {
 // в БД не хранится — считается на лету по сегодняшней дате (Атырау, UTC+5): с дня заезда по день
 // отъезда включительно сотрудник «на вахте», до заезда и после отъезда — «дома».
 const ROT_TODAY_SQL = `(NOW() AT TIME ZONE 'Asia/Atyrau')::date`;
+// Вахта повторяется по циклу: (заезд … отъезд включительно) → дома N дней → снова заезд … (как в PDF-календаре,
+// rotationCalendarPdf.js: buildShifts). N = rotation_rest_days, а если не задано — срок вахты (14/14, 28/28).
+// N = 0 — разовая вахта без повтора (после отъезда сотрудник «дома», пока не внесут новый заезд).
+// Раньше статус считался только по одной сохранённой вахте — после отъезда сотрудник навсегда оставался
+// «дома», даже когда по графику уже снова заехал.
+const ROT_REST_SQL = `COALESCE(rotation_rest_days, rotation_days, 0)`;
+const ROT_CYCLE_SQL = `(rotation_departure - rotation_arrival + 1 + ${ROT_REST_SQL})`;
+// Сдвиг (в днях) от сохранённой вахты к текущей / ближайшей будущей: 0, пока сохранённая вахта не закончилась,
+// иначе — целое число циклов, чтобы отъезд этой смены был не раньше сегодняшнего дня.
+const ROT_OFFSET_SQL = `(CASE WHEN rotation_arrival IS NOT NULL AND rotation_departure IS NOT NULL AND ${ROT_REST_SQL} > 0
+                              AND ${ROT_TODAY_SQL} > rotation_departure
+                         THEN ((${ROT_TODAY_SQL} - rotation_departure + ${ROT_CYCLE_SQL} - 1) / ${ROT_CYCLE_SQL}) * ${ROT_CYCLE_SQL}
+                         ELSE 0 END)`;
+const ROT_CUR_ARR_SQL = `(rotation_arrival + ${ROT_OFFSET_SQL})`;
+const ROT_CUR_DEP_SQL = `(rotation_departure + ${ROT_OFFSET_SQL})`;
 // Вахта по графику (заезд … отъезд) и овертайм (с … по) — два независимых признака «на работе».
-const ROT_BASE_SQL = `(rotation_arrival IS NOT NULL AND rotation_arrival <= ${ROT_TODAY_SQL} AND (rotation_departure IS NULL OR rotation_departure >= ${ROT_TODAY_SQL}))`;
+const ROT_BASE_SQL = `(rotation_arrival IS NOT NULL AND ${ROT_CUR_ARR_SQL} <= ${ROT_TODAY_SQL} AND (rotation_departure IS NULL OR ${ROT_CUR_DEP_SQL} >= ${ROT_TODAY_SQL}))`;
 const OT_ON_SQL = `(overtime_from IS NOT NULL AND overtime_to IS NOT NULL AND overtime_from <= ${ROT_TODAY_SQL} AND overtime_to >= ${ROT_TODAY_SQL})`;
 // «На вахте» = на вахте по графику ИЛИ в овертайме
 const ROT_ON_SQL = `(${ROT_BASE_SQL} OR ${OT_ON_SQL})`;
-const ROTATION_SELECT = `to_char(rotation_arrival, 'YYYY-MM-DD') AS rotation_arrival,
+// rotation_arrival / rotation_departure в ответе — ТЕКУЩАЯ (или ближайшая будущая) смена по циклу,
+// rotation_anchor_* — то, что реально сохранено в базе.
+const ROTATION_SELECT = `to_char(${ROT_CUR_ARR_SQL}, 'YYYY-MM-DD') AS rotation_arrival,
                       rotation_days,
-                      to_char(rotation_departure, 'YYYY-MM-DD') AS rotation_departure,
+                      to_char(${ROT_CUR_DEP_SQL}, 'YYYY-MM-DD') AS rotation_departure,
+                      rotation_rest_days,
+                      CASE WHEN rotation_arrival IS NULL THEN NULL ELSE ${ROT_REST_SQL} END AS rotation_rest_effective,
+                      to_char(rotation_arrival, 'YYYY-MM-DD') AS rotation_anchor_arrival,
+                      to_char(rotation_departure, 'YYYY-MM-DD') AS rotation_anchor_departure,
                       CASE WHEN ${ROT_ON_SQL} THEN 'on_shift' WHEN rotation_arrival IS NULL THEN NULL ELSE 'home' END AS rotation_status,
-                      CASE WHEN ${ROT_BASE_SQL} AND rotation_departure IS NOT NULL THEN rotation_departure - ${ROT_TODAY_SQL} END AS rotation_days_left,
+                      CASE WHEN ${ROT_BASE_SQL} AND rotation_departure IS NOT NULL THEN ${ROT_CUR_DEP_SQL} - ${ROT_TODAY_SQL} END AS rotation_days_left,
                       to_char(overtime_from, 'YYYY-MM-DD') AS overtime_from,
                       to_char(overtime_to, 'YYYY-MM-DD') AS overtime_to,
                       ${OT_ON_SQL} AS overtime_active,
-                      CASE WHEN rotation_arrival > ${ROT_TODAY_SQL} THEN rotation_arrival - ${ROT_TODAY_SQL} END AS rotation_days_to_arrival`;
+                      CASE WHEN ${ROT_CUR_ARR_SQL} > ${ROT_TODAY_SQL} THEN ${ROT_CUR_ARR_SQL} - ${ROT_TODAY_SQL} END AS rotation_days_to_arrival`;
 
 function addDaysIso(iso, n) {
   const d = new Date(iso + 'T00:00:00Z');
@@ -165,6 +186,14 @@ function computeRotation(arrival, days, departure) {
   return { arrival, days: d, departure: dep };
 }
 
+// Дней дома между вахтами: пусто → null (= как срок вахты), 0 → без повтора, 1…365 → цикл.
+function parseRestDays(v) {
+  if (v === undefined || v === null || String(v).trim() === '') return null;
+  const n = Number(String(v).trim().replace(',', '.'));
+  if (!Number.isInteger(n) || n < 0 || n > 365) throw new Error('invalid_rest_days');
+  return n;
+}
+
 // Овертайм: обе даты пустые → снят; обе заполнены → период «с … по» (по ≥ с); одна дата — ошибка.
 function computeOvertime(from, to) {
   if (!from && !to) return { from: null, to: null };
@@ -181,6 +210,7 @@ function rotationErrorMessage(code) {
     case 'invalid_rotation_days': return 'Срок вахты — целое число дней от 1 до 365 (обычно 14, 21 или 28)';
     case 'invalid_rotation_range': return 'Дата отъезда раньше даты заезда';
     case 'rotation_days_required': return 'Укажите срок вахты (дней) или дату отъезда';
+    case 'invalid_rest_days': return 'Дней дома между вахтами — целое число от 0 до 365 (0 — без повтора)';
     default: return code;
   }
 }
@@ -638,6 +668,7 @@ router.get('/rotations/export.xlsx', authRequired, requireRole('admin', 'assista
       { header: 'Заезд', key: 'arrival', width: 13 },
       { header: 'Срок вахты (дней)', key: 'days', width: 13 },
       { header: 'Отъезд', key: 'departure', width: 13 },
+      { header: 'Дома (дней)', key: 'rest', width: 12 },
       { header: 'Овертайм с', key: 'ot_from', width: 13 },
       { header: 'Овертайм по', key: 'ot_to', width: 13 },
       { header: 'Осталось на вахте (дн.)', key: 'left', width: 16 },
@@ -660,6 +691,7 @@ router.get('/rotations/export.xlsx', authRequired, requireRole('admin', 'assista
         status: ROT_STATUS_TEXT[u.rotation_status] || 'Не указано',
         arrival: isoToExcelDate(u.rotation_arrival), days: u.rotation_days || null,
         departure: isoToExcelDate(u.rotation_departure),
+        rest: u.rotation_rest_days != null ? u.rotation_rest_days : null,
         ot_from: isoToExcelDate(u.overtime_from), ot_to: isoToExcelDate(u.overtime_to),
         left: u.rotation_days_left, to_arrival: u.rotation_days_to_arrival
       });
@@ -712,6 +744,7 @@ router.get('/rotations/template.xlsx', authRequired, requireRole('admin', 'assis
       { header: 'Заезд', key: 'arrival', width: 14 },
       { header: 'Срок вахты (дней)', key: 'days', width: 18 },
       { header: 'Отъезд', key: 'departure', width: 14 },
+      { header: 'Дома (дней)', key: 'rest', width: 14 },
       { header: 'Овертайм с', key: 'ot_from', width: 14 },
       { header: 'Овертайм по', key: 'ot_to', width: 14 }
     ];
@@ -737,6 +770,8 @@ router.get('/rotations/template.xlsx', authRequired, requireRole('admin', 'assis
       '5. Отъезд — необязательно: если пусто, считается Заезд + Срок вахты. Если указать и срок, и отъезд — берутся оба как есть.',
       '   Если указан только Отъезд (без срока) — срок посчитается сам.',
       '6. С даты заезда по дату отъезда включительно сотрудник отображается «на вахте» (👷), в остальное время — «дома» (🏠).',
+      '   Дома (дней) — сколько дней сотрудник дома между вахтами. По нему система сама переводит сотрудника «на вахту» в день следующего заезда.',
+      '   Пусто — как срок вахты (14/14, 28/28) или как уже сохранено. 0 — разовая вахта без повтора.',
       '7. Строки с пустой датой заезда и пустым овертаймом пропускаются — в системе у этих сотрудников ничего не меняется.',
       '8. Загрузите готовый файл во вкладке «Сотрудники» кнопкой «Загрузить вахту».',
       '9. Удобнее всего: нажмите «Выгрузить вахту», впишите даты в нужные строки и загрузите этот же файл обратно.',
@@ -768,6 +803,7 @@ router.post('/rotations/import', authRequired, requireRole('admin', 'assistant',
     'заезд': 'arrival', 'дата заезда': 'arrival', 'приезд': 'arrival', 'дата приезда': 'arrival',
     'срок вахты': 'days', 'срок вахты (дней)': 'days', 'срок': 'days', 'дней': 'days', 'вахта (дней)': 'days',
     'отъезд': 'departure', 'дата отъезда': 'departure', 'выезд': 'departure',
+    'дома (дней)': 'rest', 'дома между вахтами (дней)': 'rest', 'дома между вахтами': 'rest', 'дома': 'rest', 'отдых (дней)': 'rest',
     'овертайм с': 'ot_from', 'овертайм от': 'ot_from', 'овертайм начало': 'ot_from',
     'овертайм по': 'ot_to', 'овертайм до': 'ot_to', 'овертайм конец': 'ot_to'
   };
@@ -809,6 +845,8 @@ router.post('/rotations/import', authRequired, requireRole('admin', 'assistant',
         const hasOt = !isBlank('ot_from') || !isBlank('ot_to');
         if (!hasRot && !hasOt) { emptyRows++; continue; }
         const rot = hasRot ? computeRotation(parseRotationDate(raw(row, 'arrival')), raw(row, 'days'), parseRotationDate(raw(row, 'departure'))) : null;
+        // «Дома (дней)»: если колонки нет или ячейка пустая — не трогаем то, что уже сохранено
+        const rest = hasRot && !isBlank('rest') ? parseRestDays(raw(row, 'rest')) : undefined;
         const ot = hasOt ? computeOvertime(parseRotationDate(raw(row, 'ot_from')), parseRotationDate(raw(row, 'ot_to'))) : null;
 
         let found = [];
@@ -831,6 +869,7 @@ router.post('/rotations/import', authRequired, requireRole('admin', 'assistant',
             `UPDATE users SET rotation_arrival = $1, rotation_days = $2, rotation_departure = $3 WHERE id = $4`,
             [rot.arrival, rot.days, rot.departure, target.id]
           );
+          if (rest !== undefined) await query(`UPDATE users SET rotation_rest_days = $1 WHERE id = $2`, [rest, target.id]);
         }
         if (ot) {
           await query(`UPDATE users SET overtime_from = $1, overtime_to = $2 WHERE id = $3`, [ot.from, ot.to, target.id]);
@@ -855,13 +894,15 @@ router.post('/rotations/import', authRequired, requireRole('admin', 'assistant',
 // Пустой заезд снимает вахту. Ассистент — только сотрудников своей зоны.
 router.patch('/:id/rotation', authRequired, requireRole('admin', 'assistant', 'superadmin'), async (req, res) => {
   const id = Number(req.params.id);
-  let rot;
+  let rot, rest;
+  const restGiven = Object.prototype.hasOwnProperty.call(req.body || {}, 'rotation_rest_days');
   try {
     rot = computeRotation(
       parseRotationDate(req.body.rotation_arrival),
       req.body.rotation_days,
       parseRotationDate(req.body.rotation_departure)
     );
+    rest = rot.arrival ? parseRestDays(req.body.rotation_rest_days) : null;
   } catch (e) {
     return res.status(400).json({ error: e.message, message: rotationErrorMessage(e.message) });
   }
@@ -874,13 +915,20 @@ router.patch('/:id/rotation', authRequired, requireRole('admin', 'assistant', 's
     if (!isInAssistantScope(req.user, target)) {
       return res.status(403).json({ error: 'forbidden', message: 'Сотрудник вне вашей зоны доступа' });
     }
-    await query(
-      `UPDATE users SET rotation_arrival = $1, rotation_days = $2, rotation_departure = $3 WHERE id = $4`,
-      [rot.arrival, rot.days, rot.departure, id]
-    );
+    if (restGiven || !rot.arrival) {
+      await query(
+        `UPDATE users SET rotation_arrival = $1, rotation_days = $2, rotation_departure = $3, rotation_rest_days = $4 WHERE id = $5`,
+        [rot.arrival, rot.days, rot.departure, rest, id]
+      );
+    } else {
+      await query(
+        `UPDATE users SET rotation_arrival = $1, rotation_days = $2, rotation_departure = $3 WHERE id = $4`,
+        [rot.arrival, rot.days, rot.departure, id]
+      );
+    }
     await logAction(req, 'rotation_set', {
       entityType: 'user', entityId: id, entityName: fullName(target),
-      details: { arrival: rot.arrival, days: rot.days, departure: rot.departure }
+      details: { arrival: rot.arrival, days: rot.days, departure: rot.departure, ...(restGiven ? { rest } : {}) }
     });
     const out = (await query(`SELECT ${ROTATION_SELECT} FROM users WHERE id = $1`, [id])).rows[0];
     res.json({ ok: true, ...out });
@@ -934,7 +982,7 @@ router.get('/:id/rotation-calendar.pdf', authRequired, requireRole('admin', 'ass
     const target = (await query(
       `SELECT id, role, last_name, first_name, object, department,
               to_char(rotation_arrival, 'YYYY-MM-DD') AS rotation_arrival, rotation_days,
-              to_char(rotation_departure, 'YYYY-MM-DD') AS rotation_departure
+              to_char(rotation_departure, 'YYYY-MM-DD') AS rotation_departure, rotation_rest_days
        FROM users WHERE id = $1`, [id])).rows[0];
     if (!target || target.role !== 'employee') return res.status(404).json({ error: 'not_found', message: 'Сотрудник не найден' });
     if (!isInAssistantScope(req.user, target)) return res.status(403).json({ error: 'forbidden', message: 'Сотрудник вне вашей зоны доступа' });
@@ -954,7 +1002,7 @@ router.get('/:id/rotation-calendar.pdf', authRequired, requireRole('admin', 'ass
       return res.status(400).json({ error: 'rotation_not_set', message: 'У сотрудника не указана вахта — сначала внесите дату заезда и срок' });
     }
 
-    let restDays = rot.days;
+    let restDays = target.rotation_rest_days > 0 ? target.rotation_rest_days : rot.days;
     if (req.query.rest !== undefined && String(req.query.rest).trim() !== '') {
       restDays = Number(String(req.query.rest).trim());
       if (!Number.isInteger(restDays) || restDays < 1 || restDays > 365) {
