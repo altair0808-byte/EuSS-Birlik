@@ -421,6 +421,33 @@ const _L = (ru, kz) => (CURRENT_LANG === 'kz' ? kz : ru);
 // Казахское отображение берём из справочника state.dictionaries.positions ({ru, kz}) по
 // совпадению с ru; если для значения нет казахского перевода в справочнике (например,
 // должность вписана вручную и её ещё нет в списке) — просто показываем как есть.
+// Проверка должности сотрудника по справочнику «Объект → Отдел → Должность».
+// Возвращает null, если всё в порядке, иначе { code, text } — пометка «⚠» в списке сотрудников.
+function positionIssue(u) {
+  if (!u || u.role !== 'employee') return null;
+  const low = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const pos = low(u.position), dep = low(u.department), obj = low(u.object);
+  if (!pos) return { code: 'empty', text: _L('Должность не указана', 'Лауазым көрсетілмеген') };
+  const dict = state.dictionaries || {};
+  const catalog = (dict.positions || []).map(p => low(p.ru));
+  if (!catalog.length) return null;   // справочник ещё не загружен — не проверяем
+  if (!catalog.includes(pos)) return { code: 'unknown', text: _L('Должности нет в справочнике (опечатка, английское или старое название)', 'Лауазым анықтамалықта жоқ') };
+  const o = (dict.structure || []).find(x => low(x.object) === obj);
+  const d = o && (o.departments || []).find(x => low(x.name) === dep);
+  if (!d) return { code: 'dept', text: _L('Отдела нет в структуре объекта', 'Бөлім нысан құрылымында жоқ') };
+  const inDep = (d.positions || []).some(p => low(typeof p === 'string' ? p : p && p.ru) === pos);
+  if (!inDep) {
+    const where = (dict.structure || []).flatMap(x => (x.departments || []).filter(y => (y.positions || []).some(p => low(typeof p === 'string' ? p : p && p.ru) === pos)).map(y => y.name));
+    return { code: 'other_dept', text: _L('Должность не закреплена за этим отделом', 'Лауазым бұл бөлімге бекітілмеген') + (where.length ? ` (${_L('есть в', 'бар')}: ${[...new Set(where)].join(', ')})` : '') };
+  }
+  return null;
+}
+function positionIssueBadge(u) {
+  const i = positionIssue(u);
+  return i ? ` <span title="${esc(i.text)}" class="ml-1 cursor-help text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 whitespace-nowrap">⚠ ${i.code === 'empty' ? _L('не указана', 'жоқ') : _L('проверить', 'тексеру')}</span>` : '';
+}
+function togglePosIssuesFilter() { state.usersFilter.posIssues = !state.usersFilter.posIssues; loadUsersList(); }
+
 function posLabel(ruValue) {
   if (!ruValue) return ruValue;
   if (CURRENT_LANG !== 'kz') return ruValue;
@@ -453,7 +480,7 @@ const state = {
   activeTest: null,
   testTimer: null,
   timeLeft: 0,
-  usersFilter: { q: '', object: '', department: '', role: '', positions: [], statuses: [], rotation: '' },
+  usersFilter: { q: '', object: '', department: '', role: '', positions: [], statuses: [], rotation: '', posIssues: false },
   auditFilter: { actor_id: '', action: '', date_from: '', date_to: '', q: '' },
   auditRows: [], auditTotal: 0,
   assignFilter: { status: '', object: '', department: '', q: '', date_from: '', date_to: '' },
@@ -1652,6 +1679,7 @@ async function loadTabContent() {
           <input id="uFilterQ" type="text" placeholder="${t('search_placeholder')}" value="${esc(state.usersFilter.q)}" oninput="onUsersFilterChange()" class="flex-1 min-w-[200px] border border-slate-300 rounded-lg px-3 py-2 text-sm">
           ${!isAdminsTab ? usersFilterDropdownHtml('positions', _L('Все должности', 'Барлық лауазымдар'), (state.dictionaries.positions || []).map(p => p.ru), posLabel) : ''}
           ${!isAdminsTab && !isArchiveTab ? rotationFilterSelectHtml() : ''}
+          ${!isAdminsTab ? `<button type="button" onclick="togglePosIssuesFilter()" title="${_L('Показать сотрудников, у которых должность не указана, нет в справочнике или не закреплена за их отделом', 'Лауазымы қате қызметкерлер')}" class="px-3 py-2 border rounded-lg text-xs font-semibold whitespace-nowrap ${state.usersFilter.posIssues ? 'bg-amber-500 text-white border-amber-500' : 'border-amber-300 text-amber-800 hover:bg-amber-50'}">⚠ ${_L('Ошибки в должности', 'Лауазым қателері')} <span id="posIssuesCount"></span></button>` : ''}
           ${isArchiveTab ? usersFilterDropdownHtml('statuses', _L('Все статусы', 'Барлық мәртебелер'), ['fired', 'maternity'], v => v === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В отпуске', 'Демалыста')) : ''}
           ${!isAdminsTab && !isArchiveTab && !isObserverUser() ? `<button type="button" id="bulkShowSelectedBtn" onclick="toggleBulkShowSelected()" title="${_L('Показать в таблице только отмеченных сотрудников (поиск и фильтры временно не действуют)', 'Кестеде тек белгіленген қызметкерлерді көрсету')}" class="hidden px-3 py-2 border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-xs font-semibold rounded-lg whitespace-nowrap">${_L('Показать выбранных', 'Таңдалғандарды көрсету')}</button>` : ''}
           ${!isAdminsTab && !isArchiveTab && !isObserverUser() ? `<button type="button" id="bulkAssignBtn" onclick="openAssignModal(null, [...bulkSelectedUserIds])" class="hidden px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg whitespace-nowrap">${_L('Назначить выбранным', 'Таңдалғандарға тағайындау')} (<span id="bulkAssignCount">0</span>)</button>` : ''}
@@ -4340,6 +4368,14 @@ async function loadUsersList() {
   }
   state.users = users.filter(u => u.role !== "superadmin");
   state.users.forEach(u => bulkUserCache.set(u.id, u));
+  // Пометка «ошибка в должности»: счётчик на кнопке и, если фильтр включён, — только такие сотрудники
+  if (state.tab !== 'admins') {
+    if (!(state.dictionaries && (state.dictionaries.positions || []).length)) { try { await loadDictionaries(); } catch (e) { /* без справочника не проверяем */ } }
+    const withIssue = state.users.filter(u => positionIssue(u));
+    const cnt = document.getElementById('posIssuesCount');
+    if (cnt) cnt.textContent = `(${withIssue.length})`;
+    if (state.usersFilter.posIssues) state.users = withIssue;
+  }
   if (bulkShowOnlySelected && bulkSelectedUserIds.size && state.tab === 'users') {
     state.users = [...bulkSelectedUserIds].map(id => bulkUserCache.get(id)).filter(Boolean)
       .sort((a, b) => String(a.last_name).localeCompare(String(b.last_name), 'ru'));
@@ -4368,7 +4404,7 @@ async function loadUsersList() {
       </td>
       <td class="px-4 py-3 font-mono text-slate-600">${u.login ? esc(u.login) : '<span class="text-slate-400 italic font-sans">не назначен</span>'}</td>
       <td class="px-4 py-3 text-slate-600">${u.role === 'assistant' ? assistantZoneCellHtml(u) + '<div class="mt-1">' + adminFunctionsCellHtml(u) + '</div>' : u.role === 'admin' ? adminFunctionsCellHtml(u) : `${esc(u.object || '—')} / ${esc(u.department || '—')}`}</td>
-      <td class="px-4 py-3 text-slate-600">${esc(posLabel(u.position) || '—')}</td>
+      <td class="px-4 py-3 text-slate-600">${esc(posLabel(u.position) || '—')}${positionIssueBadge(u)}</td>
       ${showRot ? `<td class="px-4 py-3 text-xs">${rotationCellHtml(u)}</td><td class="px-4 py-3 text-xs">${overtimeCellHtml(u)}</td>` : ''}
       ${!isAdminsTab ? `<td class="px-4 py-3 text-xs text-slate-600">${iinCellHtml(u.iin)}</td>` : ''}
       <td class="px-4 py-3">
@@ -8209,6 +8245,7 @@ async function loadUserProfile(userId) {
               ${user.employment_status && user.employment_status !== 'active' ? `<span class="ml-2 align-middle text-xs font-semibold px-2 py-0.5 rounded ${user.employment_status === 'fired' ? 'bg-red-100 text-red-700' : 'bg-purple-100 text-purple-700'}">${user.employment_status === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В отпуске', 'Демалыста')}</span>` : ''}
             </h2>
             <p class="text-sm text-slate-500 mt-1">${esc(posLabel(user.position) || '—')} · ${esc(user.object || '—')} / ${esc(user.department || '—')}</p>
+            ${positionIssue(user) ? `<p class="text-xs mt-1 px-2 py-1 rounded bg-amber-50 text-amber-800 border border-amber-200 inline-block">⚠ ${esc(positionIssue(user).text)}</p>` : ''}
             <p class="text-xs text-slate-400 mt-1">${t('login_field')}: <span class="font-mono">${user.login ? esc(user.login) : 'не назначен'}</span> · ${esc(roleName)}</p>
             <p class="text-xs text-slate-400 mt-1">№ сертификата: <span class="font-mono font-semibold text-slate-600">${user.permanent_certificate_number ? esc(user.permanent_certificate_number) : 'не присвоен'}</span></p>
             <p class="text-xs text-slate-400 mt-1">ИИН: ${iinCellHtml(user.iin)}</p>
