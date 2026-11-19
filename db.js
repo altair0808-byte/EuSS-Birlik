@@ -680,6 +680,8 @@ async function initDb() {
       UNIQUE (user_id, expires, kind)
     );
   `);
+  // Примечание к санкнижке (ФГ, СМ, где проходил и т.п.) — вносится вручную или из Excel-загрузки.
+  await pool.query(`ALTER TABLE medbook_records ADD COLUMN IF NOT EXISTS note TEXT;`);
 
   // Цвет удостоверения по виду обучения: у каждого курса свой (см. lib/cardColors.js).
   await pool.query(`ALTER TABLE courses ADD COLUMN IF NOT EXISTS card_color TEXT;`);
