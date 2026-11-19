@@ -21,7 +21,7 @@ const { requireAdminFunction } = require('../lib/adminFunctions');
 const { logAction } = require('../lib/audit');
 const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 const { makeUploader } = require('../upload');
-const { normalizeFio } = require('../lib/fio');
+const { normalizeFio, computeFioFields } = require('../lib/fio');
 const mb = require('../lib/medbook');
 const { skeletonFio, looseFio, parseImportDate, cleanNote, inScope } = require('./medbooks').helpers;
 
@@ -167,11 +167,16 @@ const HEAD = {
   'фамилия': 'last_name', 'имя': 'first_name', 'фио': 'fio', 'ф.и.о.': 'fio', 'ф.и.о': 'fio', 'иин': 'iin',
   'действует до': 'expires', 'допуск до': 'expires', 'срок действия': 'expires', 'годен до': 'expires', 'срок допуска': 'expires',
   'дата медосмотра': 'exam', 'медосмотр': 'exam', 'дата прохождения': 'exam', 'пройден': 'exam',
-  'примечание': 'note', 'примечания': 'note'
+  'примечание': 'note', 'примечания': 'note',
+  // точные ФИО, как они сейчас записаны на сайте (для надёжного поиска), и № пропуска
+  'фамилия на сайте': 'site_last', 'имя на сайте': 'site_first',
+  'номер пропуска': 'badge', '№ пропуска': 'badge', 'пропуск': 'badge', '№ пропуска тшо': 'badge'
 };
 
 router.post('/import', authRequired, STAFF, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'no_file', message: 'Файл не выбран' });
+  // «Обновить ФИО и № пропуска на сайте как в файле» — только админ/суперадмин
+  const updateNames = ['admin', 'superadmin'].includes(req.user.role) && ['1', 'true', 'on'].includes(String((req.body && req.body.update_names) || '').toLowerCase());
   let sheet;
   try {
     const wb = XLSX.readFile(req.file.path, { cellDates: true, raw: true });
@@ -204,7 +209,7 @@ router.post('/import', authRequired, STAFF, upload.single('file'), async (req, r
     };
     const today = mb.todayYmd();
     const errors = [], notFound = [], seen = new Set();
-    let updated = 0;
+    let updated = 0, renamed = 0;
     for (let r = h + 1; r < sheet.length; r++) {
       const row = sheet[r] || [];
       let last = txt(row, 'last_name'), first = txt(row, 'first_name');
@@ -218,7 +223,9 @@ router.post('/import', authRequired, STAFF, upload.single('file'), async (req, r
       try { expires = parseImportDate(col.expires >= 0 ? row[col.expires] : ''); exam = parseImportDate(col.exam >= 0 ? row[col.exam] : ''); }
       catch (_) { errors.push(`Строка ${r + 1}: «${label}» — не удалось прочитать дату`); continue; }
       if (!expires && !exam) { errors.push(`Строка ${r + 1}: «${label}» — нет даты, пропущено`); continue; }
+      const siteLast = txt(row, 'site_last'), siteFirst = txt(row, 'site_first');
       let found = iin ? pick(maps.iin.get(iin)) : [];
+      if (!found.length && siteLast && siteFirst) found = pick(maps.name.get(normalizeFio(`${siteLast} ${siteFirst}`)));
       if (!found.length && last && first) found = pick(maps.name.get(normalizeFio(`${last} ${first}`)));
       if (!found.length && last && first) found = pick(maps.loose.get(looseFio(`${last} ${first}`)));
       if (!found.length && last && first) found = pick(maps.skel.get(skeletonFio(`${last} ${first}`)));
@@ -238,9 +245,22 @@ router.post('/import', authRequired, STAFF, upload.single('file'), async (req, r
         [u.id, d.exam, d.expires, noteGiven ? cleanNote(txt(row, 'note')) : null, req.user.id, noteGiven]
       );
       updated++;
+      if (updateNames && last && first) {
+        const badge = txt(row, 'badge').replace(/\s+/g, '');
+        const changed = normalizeFio(`${u.last_name} ${u.first_name}`) !== normalizeFio(`${last} ${first}`) || `${u.last_name} ${u.first_name}` !== `${last} ${first}`;
+        if (changed || badge) {
+          const f = computeFioFields(last, first);
+          await query(
+            `UPDATE users SET last_name = $2, first_name = $3, full_name_normalized = $4, full_name_translit = $5,
+                    tco_badge = COALESCE(NULLIF($6, ''), tco_badge) WHERE id = $1`,
+            [u.id, last, first, f.normalized, f.translit, badge]
+          );
+          if (changed) renamed++;
+        }
+      }
     }
-    await logAction(req, 'medexam_imported', { entityType: 'medexam', entityName: String(req.file.originalname || ''), details: { updated, not_found: notFound.length, errors: errors.length } });
-    res.json({ updated, not_found: notFound, errors });
+    await logAction(req, 'medexam_imported', { entityType: 'medexam', entityName: String(req.file.originalname || ''), details: { updated, renamed, not_found: notFound.length, errors: errors.length } });
+    res.json({ updated, renamed, not_found: notFound, errors });
   } catch (e) {
     res.status(500).json({ error: 'import_failed', message: 'Не удалось выполнить загрузку: ' + e.message });
   }

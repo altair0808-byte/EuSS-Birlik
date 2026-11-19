@@ -9927,6 +9927,9 @@ function meOpenImport() {
     <p class="text-xs text-slate-500 mb-3">${_L('Колонки: Фамилия, Имя (или ФИО), ИИН, «Действует до» или «Дата медосмотра», Примечание. Вторую дату сайт посчитает сам (± 12 мес.).', 'Бағандар: Тегі, Аты, ЖСН, «Дейін жарамды» немесе «Медтексеру күні», Ескертпе.')}</p>
     <form onsubmit="meSubmitImport(event)" class="space-y-3">
       <input type="file" id="meImportFile" accept=".xlsx" required class="w-full text-sm border rounded p-2">
+      ${!isObserverUser() ? `<label class="flex items-start gap-2 text-sm"><input type="checkbox" id="meImportNames" class="mt-1">
+        <span>${_L('Обновить ФИО и № пропуска на сайте как в файле', 'Сайттағы ТАӘ мен рұқсатнама нөмірін файлдағыдай жаңарту')}
+        <span class="block text-[11px] text-slate-400">${_L('Фамилия и Имя сотрудника на сайте заменятся на написанные в файле (например, латиница → кириллица); № пропуска — из колонки «Номер пропуска».', 'Тегі мен аты файлдағыдай ауыстырылады.')}</span></span></label>` : ''}
       <div id="meImportResult" class="text-xs"></div>
       <div class="flex flex-wrap justify-between gap-2 pt-3 border-t">
         <button type="button" onclick="downloadAuthed('/api/medexams/import-template.xlsx', 'medexam_template.xlsx')" class="px-3 py-2 border rounded-lg text-xs font-semibold">⬇ ${_L('Бланк', 'Бланк')}</button>
@@ -9944,12 +9947,14 @@ async function meSubmitImport(ev) {
   const out = document.getElementById('meImportResult');
   const btn = document.getElementById('meImportBtn');
   const fd = new FormData(); fd.append('file', file);
+  const nm = document.getElementById('meImportNames');
+  fd.append('update_names', nm && nm.checked ? '1' : '0');
   btn.disabled = true; out.innerHTML = `<span class="text-slate-400">${t('loading')}</span>`;
   try {
     const r = await api.req('/api/medexams/import', { method: 'POST', body: fd });
     const list = (title, items, cls) => items.length ? `<details class="mt-2" ${items.length <= 15 ? 'open' : ''}><summary class="cursor-pointer font-semibold ${cls}">${title} (${items.length})</summary>
       <div class="mt-1 max-h-48 overflow-y-auto border rounded p-2 bg-slate-50 space-y-0.5">${items.map(x => `<div>${esc(x)}</div>`).join('')}</div></details>` : '';
-    out.innerHTML = `<div class="p-2 rounded bg-emerald-50 text-emerald-800 font-semibold">✅ ${_L('Внесено / обновлено', 'Енгізілді / жаңартылды')}: ${r.updated}</div>
+    out.innerHTML = `<div class="p-2 rounded bg-emerald-50 text-emerald-800 font-semibold">✅ ${_L('Внесено / обновлено', 'Енгізілді / жаңартылды')}: ${r.updated}${r.renamed ? ` · ${_L('ФИО исправлено', 'ТАӘ түзетілді')}: ${r.renamed}` : ''}</div>
       ${list(_L('Не найдены на сайте', 'Сайтта табылмады'), (r.not_found || []).map(x => `${_L('стр.', 'жол')} ${x.row}: ${x.name}${x.iin ? ' · ИИН ' + x.iin : ''}`), 'text-red-700')}
       ${list(_L('Замечания', 'Ескертулер'), r.errors || [], 'text-amber-700')}`;
     if (document.getElementById('dashCourseTabs')) meReload();
