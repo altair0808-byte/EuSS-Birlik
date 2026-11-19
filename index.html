@@ -2506,11 +2506,22 @@ async function loadTabContent() {
           <button type="button" id="driveRetryBtn" onclick="driveRetryFailed()" class="px-4 py-2 border rounded-lg text-sm font-semibold hidden">Повторить неудавшиеся</button>
         </div>
         <div id="driveActionMsg" class="text-xs mt-2"></div>
+      </div>
+      <div data-stab="sections" class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm max-w-xl">
+        <h2 class="text-lg font-bold text-slate-900 mb-1">${_L('Разделы сайта', 'Сайт бөлімдері')}</h2>
+        <p class="text-xs text-slate-500 mb-4">${_L('Выключенный раздел исчезает у всех: в меню, дашбордах, курсах, статистике, выгрузках, у сотрудников и на странице по QR. Данные не удаляются — если включить раздел снова, всё вернётся. БиОТ, вахта, сотрудники и настройки работают всегда.', 'Өшірілген бөлім барлығынан жасырылады. Деректер жойылмайды — қайта қоссаңыз, бәрі қайтады.')}</p>
+        <div id="siteFnBox" class="space-y-2 text-sm text-slate-500">${_L('Загрузка…', 'Жүктелуде…')}</div>
+        <div class="flex items-center gap-3 mt-4">
+          <button type="button" id="siteFnSaveBtn" onclick="saveSiteFunctions()" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">${_L('Сохранить', 'Сақтау')}</button>
+          <button type="button" onclick="siteFnPresetLite()" class="px-4 py-2 border rounded-lg text-sm font-semibold">${_L('Упрощённая версия: только БиОТ и санкнижки', 'Жеңілдетілген нұсқа: тек БиОТ және санкітапшалар')}</button>
+        </div>
+        <div id="siteFnMsg" class="text-xs mt-2"></div>
       </div>` : ''}
     `;
     if (isSuperadmin) loadSettingsData();
     renderDictionariesSettings();
     if (isSuperadmin) loadDriveStatus();
+    if (isSuperadmin) loadSiteFunctions();
     showSettingsTab(stab);
   }
 }
@@ -2522,7 +2533,8 @@ const SETTINGS_TABS = [
   { id: 'numbering', label: 'Нумерация', superOnly: true },
   { id: 'card', label: 'Удостоверение', superOnly: true },
   { id: 'dicts', label: 'Объекты, отделы и должности' },
-  { id: 'storage', label: 'Хранилище', superOnly: true }
+  { id: 'storage', label: 'Хранилище', superOnly: true },
+  { id: 'sections', label: 'Разделы сайта', superOnly: true }
 ];
 function settingsTabBarHtml(isSuperadmin, active) {
   return SETTINGS_TABS.filter(t => !t.superOnly || isSuperadmin).map(t =>
@@ -2543,6 +2555,56 @@ function showSettingsTab(name) {
     b.classList.toggle('border-transparent', !on);
     b.classList.toggle('text-slate-500', !on);
   });
+}
+
+// --- Разделы сайта (вкладка «Настройки», только суперадмин): упрощённая версия без доступа к хостингу ---
+const SITE_FN_TOGGLES = [
+  { key: 'internal', icon: '🏢', ru: 'Внутреннее обучение', kz: 'Ішкі оқыту', hintRu: 'Курсы без протокола и группы обучения по ним' },
+  { key: 'external', icon: '🎓', ru: 'Внешнее обучение', kz: 'Сыртқы оқыту', hintRu: 'Курсы, которые провела другая организация' },
+  { key: 'medbook', icon: '🩺', ru: 'Мед. книжки (санкнижки)', kz: 'Мед. кітапшалар', hintRu: 'Личные медицинские книжки сотрудников' }
+];
+async function loadSiteFunctions() {
+  const box = document.getElementById('siteFnBox');
+  if (!box) return;
+  let d;
+  try { d = await api.req('/api/settings/functions'); }
+  catch (e) { box.textContent = _L('Не удалось загрузить: ', 'Жүктеу мүмкін болмады: ') + (e.message || ''); return; }
+  const off = d.disabled || [], envOff = d.env_disabled || [];
+  box.innerHTML = `
+    <label class="flex items-start gap-2 p-2 border rounded bg-slate-50">
+      <input type="checkbox" checked disabled class="mt-0.5">
+      <span><span class="font-semibold text-slate-800">🦺 ${_L('БиОТ', 'БиОТ')}</span><span class="block text-[11px] text-slate-500">${_L('Курсы с тестом, протоколы, удостоверения — включено всегда', 'Әрқашан қосулы')}</span></span>
+    </label>` + SITE_FN_TOGGLES.map(f => {
+      const lockedOff = envOff.includes(f.key);
+      return `<label class="flex items-start gap-2 p-2 border rounded ${lockedOff ? 'bg-slate-50' : 'bg-white cursor-pointer hover:bg-blue-50/40'}">
+        <input type="checkbox" data-site-fn="${f.key}" class="mt-0.5 rounded text-blue-600" ${!off.includes(f.key) && !lockedOff ? 'checked' : ''} ${lockedOff ? 'disabled' : ''}>
+        <span><span class="font-semibold text-slate-800">${f.icon} ${esc(_L(f.ru, f.kz))}</span><span class="block text-[11px] text-slate-500">${esc(f.hintRu)}${lockedOff ? ' · ' + _L('выключено на сервере (ENABLED_FUNCTIONS)', 'серверде өшірілген') : ''}</span></span>
+      </label>`;
+    }).join('');
+}
+function siteFnPresetLite() {
+  document.querySelectorAll('#siteFnBox [data-site-fn]').forEach(el => { if (!el.disabled) el.checked = el.dataset.siteFn === 'medbook'; });
+  const msg = document.getElementById('siteFnMsg');
+  if (msg) { msg.className = 'text-xs mt-2 text-slate-500'; msg.textContent = _L('Отмечено: БиОТ и санкнижки. Нажмите «Сохранить».', 'Белгіленді. «Сақтау» басыңыз.'); }
+}
+async function saveSiteFunctions() {
+  const disabled = Array.from(document.querySelectorAll('#siteFnBox [data-site-fn]')).filter(el => !el.disabled && !el.checked).map(el => el.dataset.siteFn);
+  const off = disabled.map(k => (SITE_FN_TOGGLES.find(f => f.key === k) || {}).ru).filter(Boolean);
+  if (off.length && !confirm(_L('Выключить для всех: ', 'Барлығы үшін өшіру: ') + off.join(', ') + '?\n' + _L('Данные не удаляются, раздел можно включить обратно.', 'Деректер жойылмайды.'))) return;
+  const btn = document.getElementById('siteFnSaveBtn');
+  const msg = document.getElementById('siteFnMsg');
+  if (btn) btn.disabled = true;
+  try {
+    await api.req('/api/settings/functions', { method: 'PUT', body: { disabled } });
+    try { PUBLIC_SETTINGS = await api.getPublicSettings(); } catch (e) { /* не критично */ }
+    state.settingsTab = 'sections';
+    render();
+    const m2 = document.getElementById('siteFnMsg');
+    if (m2) { m2.className = 'text-xs mt-2 text-emerald-700 font-semibold'; m2.textContent = _L('Сохранено. Меню и разделы обновлены.', 'Сақталды.'); }
+  } catch (e) {
+    if (msg) { msg.className = 'text-xs mt-2 text-red-600'; msg.textContent = _L('Не удалось сохранить: ', 'Сақтау мүмкін болмады: ') + (e.message || ''); }
+    if (btn) btn.disabled = false;
+  }
 }
 
 // --- Запасное хранилище в Google Drive (вкладка «Настройки», только суперадмин) ---
@@ -4032,6 +4094,7 @@ const AUDIT_ACTION_LABELS = {
   users_imported: ['📥', 'Импорт сотрудников из Excel'],
   rotation_set: ['👷', 'Указал вахту (заезд / отъезд)'],
   overtime_set: ['⏱', 'Указал овертайм'],
+  site_functions_set: ['🧩', 'Изменил разделы сайта'],
   rotations_imported: ['📥', 'Загрузка вахты из Excel'],
   training_excel_update: ['📊', 'Обновление обучения через Excel'],
   course_assigned: ['📚', 'Назначил курс'],
@@ -4082,6 +4145,12 @@ function auditDetailsHtml(row) {
     case 'overtime_set':
       parts.push(d.from ? `${esc(fmtDate(d.from))} → ${esc(fmtDate(d.to))}` : 'овертайм снят');
       break;
+    case 'site_functions_set': {
+      const names = { internal: 'внутреннее обучение', external: 'внешнее обучение', medbook: 'мед. книжки' };
+      const off = (d.disabled || []).map(k => names[k] || k);
+      parts.push(off.length ? 'выключено: ' + esc(off.join(', ')) : 'все разделы включены');
+      break;
+    }
     case 'rotations_imported':
       parts.push(`обновлено: ${esc(d.updated)}, без даты заезда: ${esc(d.empty)}${d.errors ? ', ошибок: ' + esc(d.errors) : ''}`);
       break;

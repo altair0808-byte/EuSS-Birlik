@@ -101,6 +101,9 @@ async function initDb() {
   // Автоматические миграции для расширенного функционала
   await pool.query(`
     ALTER TABLE settings ADD COLUMN IF NOT EXISTS logo_data TEXT;
+    -- Разделы сайта, отключённые суперадмином в «Настройки → Разделы сайта» (internal / external / medbook).
+    -- Упрощённая версия без доступа к хостингу: см. lib/adminFunctions.js (loadSiteFunctions).
+    ALTER TABLE settings ADD COLUMN IF NOT EXISTS disabled_functions JSONB NOT NULL DEFAULT '[]'::jsonb;
     ALTER TABLE settings ADD COLUMN IF NOT EXISTS stamp_data TEXT;
     ALTER TABLE settings ADD COLUMN IF NOT EXISTS chairman1_name TEXT;
     ALTER TABLE settings ADD COLUMN IF NOT EXISTS chairman1_position TEXT;

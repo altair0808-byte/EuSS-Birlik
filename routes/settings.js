@@ -29,6 +29,39 @@ async function uploadToStorage(folder, file) {
 
 const TAGLINE_MAX = 120;
 
+// ===== Разделы сайта (упрощённая версия): суперадмин включает/выключает внутреннее и внешнее обучение,
+// мед. книжки. Хранится в settings.disabled_functions — доступ к хостингу не нужен. =====
+const siteFns = require('../lib/adminFunctions');
+const { logAction } = require('../lib/audit');
+router.get('/functions', authRequired, requireRole('superadmin'), async (req, res) => {
+  try {
+    const r = await query('SELECT disabled_functions FROM settings WHERE id = 1');
+    res.json({
+      toggleable: siteFns.TOGGLEABLE_FUNCTIONS,
+      disabled: siteFns.normalizeDisabled(r.rows[0] && r.rows[0].disabled_functions),
+      env_disabled: siteFns.envDisabledFunctions(),
+      enabled: siteFns.enabledFunctions()
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+router.put('/functions', authRequired, requireRole('superadmin'), async (req, res) => {
+  const raw = req.body && req.body.disabled;
+  if (!Array.isArray(raw) || raw.some((f) => !siteFns.TOGGLEABLE_FUNCTIONS.includes(f))) {
+    return res.status(400).json({ error: 'invalid_functions', message: 'Неизвестный раздел сайта' });
+  }
+  const disabled = siteFns.normalizeDisabled(raw);
+  try {
+    await query('UPDATE settings SET disabled_functions = $1::jsonb WHERE id = 1', [JSON.stringify(disabled)]);
+    siteFns.setDisabledFunctions(disabled);
+    await logAction(req, 'site_functions_set', { entityType: 'settings', details: { disabled } });
+    res.json({ ok: true, disabled, enabled: siteFns.enabledFunctions() });
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
 router.get('/', authRequired, async (req, res) => {
   try {
     const result = await query('SELECT * FROM settings WHERE id = 1');

@@ -119,7 +119,10 @@ app.get('*', (req, res) => {
 
 // Запуск после подключения и проверки таблиц в Supabase
 initDb()
+  .then(() => require('./lib/adminFunctions').loadSiteFunctions())
   .then(() => {
+      // Разделы сайта (переключатель суперадмина) перечитываются раз в минуту — на случай нескольких экземпляров сервера
+      setInterval(() => require('./lib/adminFunctions').loadSiteFunctions(), 60 * 1000);
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`✅ TB Training Platform запущен на порту ${PORT} (база данных Supabase)`);
       // Автовозврат сотрудников из отпуска после даты окончания (при старте и далее раз в час)
