@@ -121,6 +121,7 @@ app.get('*', (req, res) => {
 
 // Запуск после подключения и проверки таблиц в Supabase
 initDb()
+  .then(() => require('./routes/auth').initAuthSecret())
   .then(() => require('./lib/adminFunctions').loadSiteFunctions())
   .then(() => {
       // Разделы сайта (переключатель суперадмина) перечитываются раз в минуту — на случай нескольких экземпляров сервера

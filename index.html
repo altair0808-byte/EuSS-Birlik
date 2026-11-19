@@ -1319,6 +1319,67 @@ function renderLogin(app) {
   `;
 }
 
+// ===================== СМЕНА СВОЕГО ПАРОЛЯ (сервер: POST /api/auth/change-password) =====================
+function openChangePassword() {
+  let m = document.getElementById('pwModal');
+  if (m) m.remove();
+  m = document.createElement('div');
+  m.id = 'pwModal';
+  m.className = 'fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-[130]';
+  m.innerHTML = `<div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5">
+    <div class="flex justify-between items-start mb-3">
+      <h3 class="text-base font-bold text-slate-900">🔑 ${_L('Смена пароля', 'Құпиясөзді өзгерту')}</h3>
+      <button onclick="document.getElementById('pwModal').remove()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none">&times;</button>
+    </div>
+    <form onsubmit="submitChangePassword(event)" class="space-y-3" autocomplete="on">
+      <input type="text" name="username" value="${esc(state.user.login || '')}" autocomplete="username" class="hidden">
+      <div><label class="text-xs font-semibold text-slate-600">${_L('Текущий пароль', 'Қазіргі құпиясөз')}</label>
+        <input type="password" id="pwCur" required autocomplete="current-password" class="w-full border p-2 rounded text-sm"></div>
+      <div><label class="text-xs font-semibold text-slate-600">${_L('Новый пароль', 'Жаңа құпиясөз')}</label>
+        <input type="password" id="pwNew" required minlength="10" autocomplete="new-password" oninput="pwHint()" class="w-full border p-2 rounded text-sm"></div>
+      <div><label class="text-xs font-semibold text-slate-600">${_L('Новый пароль ещё раз', 'Жаңа құпиясөз қайтадан')}</label>
+        <input type="password" id="pwNew2" required autocomplete="new-password" oninput="pwHint()" class="w-full border p-2 rounded text-sm"></div>
+      <label class="flex items-center gap-2 text-xs text-slate-500"><input type="checkbox" onchange="['pwCur','pwNew','pwNew2'].forEach(i => document.getElementById(i).type = this.checked ? 'text' : 'password')"> ${_L('Показать пароли', 'Құпиясөздерді көрсету')}</label>
+      <ul id="pwRules" class="text-[11px] space-y-0.5"></ul>
+      <p id="pwMsg" class="text-xs text-red-600"></p>
+      <div class="flex justify-end gap-2 pt-3 border-t">
+        <button type="button" onclick="document.getElementById('pwModal').remove()" class="px-4 py-2 border rounded-lg text-sm">${_L('Отмена', 'Бас тарту')}</button>
+        <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">${_L('Сохранить', 'Сақтау')}</button>
+      </div>
+    </form></div>`;
+  document.body.appendChild(m);
+  pwHint();
+  setTimeout(() => { const el = document.getElementById('pwCur'); if (el) el.focus(); }, 50);
+}
+function pwHint() {
+  const p = (document.getElementById('pwNew') || {}).value || '', p2 = (document.getElementById('pwNew2') || {}).value || '';
+  const rules = [
+    [p.length >= 10, _L('не короче 10 символов', 'кемінде 10 таңба')],
+    [/[a-zа-яё]/i.test(p) && /\d/.test(p), _L('есть и буквы, и цифры', 'әріптер мен сандар бар')],
+    [!!p && !p.toLowerCase().includes(String(state.user.login || '').toLowerCase()), _L('не содержит логин', 'логин жоқ')],
+    [!!p && p === p2, _L('пароли совпадают', 'құпиясөздер сәйкес')]
+  ];
+  const ul = document.getElementById('pwRules');
+  if (ul) ul.innerHTML = rules.map(([ok, txt]) => `<li class="${ok ? 'text-emerald-600' : 'text-slate-400'}">${ok ? '✓' : '○'} ${esc(txt)}</li>`).join('');
+}
+async function submitChangePassword(ev) {
+  ev.preventDefault();
+  const msg = document.getElementById('pwMsg');
+  const cur = document.getElementById('pwCur').value, p = document.getElementById('pwNew').value, p2 = document.getElementById('pwNew2').value;
+  if (p !== p2) { msg.textContent = _L('Новые пароли не совпадают', 'Жаңа құпиясөздер сәйкес емес'); return; }
+  msg.className = 'text-xs text-slate-500'; msg.textContent = _L('Сохраняю…', 'Сақталуда…');
+  try {
+    const r = await api.req('/api/auth/change-password', { method: 'POST', body: { current_password: cur, new_password: p } });
+    state.token = r.token;
+    localStorage.setItem('token', r.token);
+    state.user.must_change_password = false;
+    localStorage.setItem('user', JSON.stringify(state.user));
+    document.getElementById('pwModal').remove();
+    alert(_L('Пароль изменён. На других устройствах нужно будет войти заново.', 'Құпиясөз өзгертілді.'));
+    render();
+  } catch (err) { msg.className = 'text-xs text-red-600'; msg.textContent = err.message; }
+}
+
 async function handleLogin(e) {
   e.preventDefault();
   const errDiv = document.getElementById('loginError');
@@ -1334,6 +1395,7 @@ async function handleLogin(e) {
     if (typeof pwaAfterLogin === 'function') pwaAfterLogin();
     state.tab = res.user.role === 'employee' ? 'my_tests' : 'dashboard';
     render();
+    if (res.user.must_change_password) setTimeout(openChangePassword, 300);
   } catch (err) {
     errDiv.textContent = err.message || t('login_error');
     errDiv.classList.remove('hidden');
@@ -1483,11 +1545,15 @@ function renderMain(app) {
           <button onclick="switchLang(CURRENT_LANG === 'ru' ? 'kz' : 'ru')" class="text-xs font-semibold px-2 sm:px-2.5 py-1.5 border rounded-lg text-slate-700 hover:bg-slate-50">
             ${CURRENT_LANG === 'ru' ? 'ҚАЗ' : 'РУС'}
           </button>
+          ${['superadmin', 'admin', 'assistant'].includes(state.user.role) ? `<button onclick="openChangePassword()" title="${_L('Сменить пароль', 'Құпиясөзді өзгерту')}" class="text-xs font-semibold px-2 sm:px-2.5 py-1.5 border rounded-lg text-slate-700 hover:bg-slate-50">🔑<span class="hidden sm:inline"> ${_L('Пароль', 'Құпиясөз')}</span></button>` : ''}
           <button onclick="logout()" class="text-xs font-semibold px-2.5 sm:px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition">
             ${t('logout')}
           </button>
         </div>
       </div>
+      ${state.user.must_change_password ? `<div class="bg-red-600 text-white text-xs sm:text-sm px-4 py-2 flex flex-wrap items-center justify-center gap-2">
+        <span>⚠ ${_L('Вы входите со стандартным или слишком простым паролем — его легко подобрать.', 'Сіз қарапайым құпиясөзбен кірдіңіз.')}</span>
+        <button onclick="openChangePassword()" class="px-3 py-1 rounded bg-white text-red-700 font-semibold">${_L('Сменить пароль', 'Құпиясөзді өзгерту')}</button></div>` : ''}
       <!-- Навигация -->
       <nav class="bg-slate-50 border-t border-slate-200">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-1 sm:space-x-4 overflow-x-auto py-2">
@@ -4170,6 +4236,7 @@ const AUDIT_ACTION_LABELS = {
   medbook_positions_saved: ['🩺', 'Изменил должности с мед. книжкой'],
   medbook_imported: ['🩺', 'Загрузил мед. книжки из Excel'],
   medexam_saved: ['🏥', 'Внёс / обновил ежегодный медосмотр'],
+  password_changed: ['🔑', 'Сменил свой пароль'],
   medexam_removed: ['🏥', 'Сбросил ежегодный медосмотр'],
   medexam_imported: ['🏥', 'Загрузил ежегодные медосмотры из Excel'],
   positions_remapped: ['🔁', 'Заменил должности сотрудников из Excel'],

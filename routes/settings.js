@@ -65,7 +65,9 @@ router.put('/functions', authRequired, requireRole('superadmin'), async (req, re
 router.get('/', authRequired, async (req, res) => {
   try {
     const result = await query('SELECT * FROM settings WHERE id = 1');
-    res.json(result.rows[0] || {});
+    // Секрет входа (jwt_secret) никогда не отдаём в браузер
+    const { jwt_secret, ...safe } = result.rows[0] || {};
+    res.json(safe);
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }

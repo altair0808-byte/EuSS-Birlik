@@ -814,11 +814,21 @@ async function initDb() {
     console.error('Ошибка заполнения full_name_normalized/full_name_translit:', e.message);
   }
 
+  // Когда пароль меняли в последний раз: после смены прежние входы на других устройствах закрываются (routes/auth.js)
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ');
+
+  // Суперадмин создаётся только один раз (если его ещё нет). Пароля по умолчанию в коде больше нет:
+  // берётся из SUPERADMIN_PASSWORD на хостинге, а если её нет — создаётся случайный и печатается в журнал сервера один раз.
+  // Дальше пароль меняется на сайте: «🔑 Пароль» в шапке. В базе хранится только хэш (прочитать пароль нельзя).
   const superLogin = process.env.SUPERADMIN_LOGIN || '8888';
-  const superPass = process.env.SUPERADMIN_PASSWORD || '88885555';
-  const existing = await pool.query('SELECT id FROM users WHERE login = $1', [superLogin]);
+  const existing = await pool.query("SELECT id FROM users WHERE login = $1 OR role = 'superadmin' LIMIT 1", [superLogin]);
   if (existing.rows.length === 0) {
-    const hash = bcrypt.hashSync(superPass, 10);
+    let superPass = process.env.SUPERADMIN_PASSWORD || '';
+    if (superPass.length < 10) {
+      superPass = require('crypto').randomBytes(9).toString('base64url');
+      console.warn(`[seed] SUPERADMIN_PASSWORD не задан или короткий — создан случайный пароль суперадмина: ${superPass} (смените его после входа)`);
+    }
+    const hash = bcrypt.hashSync(superPass, 12);
     await pool.query(
       `INSERT INTO users (last_name, first_name, object, department, position, login, password_hash, role)
        VALUES ($1, $2, '', '', 'Суперадминистратор', $3, $4, 'superadmin')`,
