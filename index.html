@@ -2882,6 +2882,7 @@ function renderOrgSettings() {
         <div class="flex flex-wrap gap-1">${chips || '<span class="text-[11px] text-slate-400 italic">Должности не закреплены</span>'}</div>
         ${canEdit ? `<select id="orgAddPos_${di}" onchange="addOrgPosition(${di})" class="mt-2 w-full border px-2 py-1 rounded text-xs text-slate-500">
           <option value="">+ добавить должность…</option>
+          <option value="__new__">＋ новая должность (ввести название)…</option>
           ${available.map(p => `<option value="${esc(p.ru)}">${esc(p.ru)}</option>`).join('')}
         </select>` : ''}
       </div>`;
@@ -2937,9 +2938,14 @@ function addDictionaryValueFromSettings(kind) {
     const ru = (ruInput.value || '').trim();
     const kz = (kzInput.value || '').trim();
     if (!ru) return;
-    const idx = next.positions.findIndex(p => p.ru === ru);
-    if (idx === -1) next.positions.push({ ru, kz });
-    else next.positions[idx] = { ru, kz: kz || next.positions[idx].kz };
+    const norm = v => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase().replace(/ё/g, 'е');
+    const idx = next.positions.findIndex(p => norm(p.ru) === norm(ru));
+    if (idx === -1) next.positions.push({ ru: ru.replace(/\s+/g, ' '), kz });
+    else if (kz && kz !== next.positions[idx].kz) next.positions[idx] = { ru: next.positions[idx].ru, kz };
+    else {
+      alert(`Должность «${next.positions[idx].ru}» уже есть в справочнике.\n\nЧтобы она появилась у сотрудников, закрепите её за отделом: в карточке отдела выберите «+ добавить должность…».`);
+      return;
+    }
     ruInput.value = '';
     kzInput.value = '';
   }
@@ -2992,7 +2998,19 @@ function addOrgPosition(di) {
   const o = orgStructTarget(next);
   const dep = o && o.departments[di];
   if (!dep) return;
-  if (!dep.positions.includes(ru)) dep.positions.push(ru);
+  let name = ru;
+  if (ru === '__new__') {
+    // новая должность прямо из отдела: добавляем в справочник (если её там нет) и сразу закрепляем за отделом
+    const typed = (prompt(`Новая должность для отдела «${dep.name}»:`) || '').replace(/\s+/g, ' ').trim();
+    if (sel) sel.value = '';
+    if (!typed) return;
+    const norm = v => String(v || '').toLowerCase().replace(/ё/g, 'е');
+    const exist = next.positions.find(p => norm(p.ru) === norm(typed));
+    name = exist ? exist.ru : typed;
+    if (!exist) next.positions.push({ ru: name, kz: '' });
+  }
+  if (!dep.positions.includes(name)) dep.positions.push(name);
+  else { alert(`«${name}» уже закреплена за этим отделом.`); return; }
   saveOrgDictionaries(next);
 }
 
