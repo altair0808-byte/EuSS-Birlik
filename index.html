@@ -1767,6 +1767,8 @@ async function loadTabContent() {
                 <button onclick="downloadUsersTemplate()" class="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-50">⬇ ${_L('Бланк для добавления сотрудников', 'Қызметкерлер бланкі')}</button>
                 <button onclick="exportUsersForTraining()" class="w-full text-left px-3 py-2 rounded-lg hover:bg-emerald-50">📤 ${_L('Выгрузить для обучения', 'Оқыту үшін шығару')}</button>
                 <button onclick="openBulkTrainingModal()" class="w-full text-left px-3 py-2 rounded-lg hover:bg-emerald-50">📥 ${_L('Загрузить обучение', 'Оқытуды жүктеу')}</button>`}
+                ${!isObserverUser() ? `<div class="border-t my-1.5"></div>
+                <button onclick="openFioRename()" class="w-full text-left px-3 py-2 rounded-lg hover:bg-violet-50">🔤 ${_L('Исправить ФИО и пропуска', 'ТАӘ мен рұқсатнамаларды түзету')}<span class="block text-[11px] text-slate-400">${_L('массово, например латиница → кириллица', 'жаппай, мысалы латын → кирилл')}</span></button>` : ''}
                 ${isSuperadminUser() ? `<div class="border-t my-1.5"></div>
                 <button onclick="openPositionRemap()" class="w-full text-left px-3 py-2 rounded-lg hover:bg-violet-50">🔁 ${_L('Порядок в должностях', 'Лауазымдарды реттеу')}<span class="block text-[11px] text-slate-400">${_L('массовая замена неверных должностей', 'лауазымдарды ауыстыру')}</span></button>` : ''}
               </div>
@@ -4267,6 +4269,7 @@ const AUDIT_ACTION_LABELS = {
   medexam_removed: ['🏥', 'Сбросил ежегодный медосмотр'],
   medexam_imported: ['🏥', 'Загрузил ежегодные медосмотры из Excel'],
   positions_remapped: ['🔁', 'Заменил должности сотрудников из Excel'],
+  fio_renamed: ['🔤', 'Исправил ФИО / пропуска сотрудников из Excel'],
   users_imported: ['📥', 'Импорт сотрудников из Excel'],
   rotation_set: ['👷', 'Указал вахту (заезд / отъезд)'],
   overtime_set: ['⏱', 'Указал овертайм'],
@@ -9657,6 +9660,44 @@ async function runPositionRemap(dry) {
       <div class="mt-2 max-h-56 overflow-y-auto border rounded p-2 bg-slate-50 space-y-0.5">${r.changes.map(line).join('') || '—'}</div>
       ${r.errors && r.errors.length ? `<div class="mt-2 text-amber-700">${r.errors.map(e => `<div>${esc(e)}</div>`).join('')}</div>` : ''}`;
     if (!r.dry_run) { await loadDictionaries(true); if (state.tab === 'users') loadUsersList(); }
+  } catch (err) { out.innerHTML = `<div class="p-2 rounded bg-red-50 text-red-700">${esc(err.message || '')}</div>`; }
+}
+
+// Массовое исправление ФИО и № пропуска (сервер: routes/fioRename.js)
+function openFioRename() {
+  mbModal(`
+    <div class="flex justify-between items-start mb-2">
+      <h3 class="text-base font-bold text-slate-900">🔤 ${_L('Исправить ФИО и № пропуска', 'ТАӘ мен рұқсатнаманы түзету')}</h3>
+      <button onclick="mbCloseModal()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none">&times;</button>
+    </div>
+    <ol class="text-xs text-slate-600 mb-3 list-decimal pl-4 space-y-1">
+      <li>${_L('Скачайте список сотрудников (ФИО как сейчас на сайте).', 'Қызметкерлер тізімін жүктеп алыңыз.')}</li>
+      <li>${_L('Впишите «Новая фамилия» / «Новое имя» (и «Номер пропуска»). Пустые — без изменений.', '«Жаңа тегі» / «Жаңа аты» толтырыңыз.')}</li>
+      <li>${_L('Загрузите файл → «Проверить» → «Применить».', 'Файлды жүктеп, «Тексеру», содан кейін «Қолдану».')}</li>
+    </ol>
+    <button type="button" onclick="downloadAuthed('/api/fio-rename/template.xlsx', 'fio_rename.xlsx')" class="px-3 py-2 border rounded-lg text-xs font-semibold mb-3">⬇ ${_L('Скачать список сотрудников', 'Тізімді жүктеу')}</button>
+    <input type="file" id="frFile" accept=".xlsx" class="w-full text-sm border rounded p-2">
+    <div id="frResult" class="text-xs mt-3"></div>
+    <div class="flex justify-end gap-2 pt-3 mt-3 border-t">
+      <button type="button" onclick="mbCloseModal()" class="px-4 py-2 border rounded-lg text-sm">${_L('Закрыть', 'Жабу')}</button>
+      <button type="button" onclick="runFioRename(true)" class="px-4 py-2 border border-violet-300 text-violet-700 rounded-lg text-sm font-semibold">${_L('Проверить', 'Тексеру')}</button>
+      <button type="button" onclick="runFioRename(false)" class="px-4 py-2 bg-violet-600 text-white rounded-lg text-sm font-semibold">${_L('Применить', 'Қолдану')}</button>
+    </div>`);
+}
+async function runFioRename(dry) {
+  const f = document.getElementById('frFile').files[0];
+  const out = document.getElementById('frResult');
+  if (!f) { out.innerHTML = `<span class="text-red-600">${_L('Выберите файл', 'Файлды таңдаңыз')}</span>`; return; }
+  if (!dry && !confirm(_L('Изменить ФИО сотрудников по этому файлу?', 'Осы файл бойынша ТАӘ өзгерту керек пе?'))) return;
+  const fd = new FormData(); fd.append('file', f); fd.append('dry_run', dry ? '1' : '0');
+  out.innerHTML = `<span class="text-slate-400">${t('loading')}</span>`;
+  try {
+    const r = await api.req('/api/fio-rename', { method: 'POST', body: fd });
+    out.innerHTML = `
+      <div class="p-2 rounded ${r.dry_run ? 'bg-violet-50 text-violet-800' : 'bg-emerald-50 text-emerald-800'} font-semibold">${r.dry_run ? _L('Проверка (ничего не изменено)', 'Тексеру') : '✅ ' + _L('Готово', 'Дайын')}: ${r.changed} ${_L('сотрудников', 'қызметкер')}</div>
+      <div class="mt-2 max-h-56 overflow-y-auto border rounded p-2 bg-slate-50 space-y-0.5">${(r.changes || []).map(c => `<div>${esc(c.from)} → <b>${esc(c.to)}</b>${c.badge ? ` · ${_L('пропуск', 'рұқсатнама')} ${esc(c.badge)}` : ''}</div>`).join('') || '—'}</div>
+      ${r.errors && r.errors.length ? `<div class="mt-2 text-amber-700">${r.errors.map(e => `<div>${esc(e)}</div>`).join('')}</div>` : ''}`;
+    if (!r.dry_run && state.tab === 'users') loadUsersList();
   } catch (err) { out.innerHTML = `<div class="p-2 rounded bg-red-50 text-red-700">${esc(err.message || '')}</div>`; }
 }
 

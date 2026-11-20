@@ -48,6 +48,7 @@ app.use('/api/course-positions', require('./routes/coursePositions'));
 app.use('/api/medbooks', require('./routes/medbooks'));
 app.use('/api/medexams', require('./routes/medexams'));
 app.use('/api/positions', require('./routes/positionRemap'));
+app.use('/api/fio-rename', require('./routes/fioRename'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/export', require('./routes/export'));
 app.use('/api/certificates', require('./routes/certificate'));
