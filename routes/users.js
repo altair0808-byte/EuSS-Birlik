@@ -837,6 +837,7 @@ router.post('/rotations/import', authRequired, requireRole('admin', 'assistant',
 
     let updated = 0, emptyRows = 0;
     const errors = [];
+    let skelIndex = null; // индекс «скелетов» ФИО для поиска (строится один раз при первой необходимости)
     for (let r = 1; r < sheetRows.length; r++) {
       const row = sheetRows[r];
       const rowNum = r + 1;
@@ -858,6 +859,18 @@ router.post('/rotations/import', authRequired, requireRole('admin', 'assistant',
         if (!found.length && last_name && first_name) {
           const norm = computeFioFields(last_name, first_name).normalized;
           if (norm) found = (await query(`SELECT * FROM users WHERE role = 'employee' AND full_name_normalized = $1`, [norm])).rows;
+        }
+        // Не нашли — ищем по «скелету» ФИО: латиница ↔ кириллица, перепутанные Фамилия/Имя, Гулнара = Гульнара
+        if (!found.length && last_name && first_name) {
+          const { skeletonFio } = require('./medbooks').helpers;
+          if (!skelIndex) {
+            skelIndex = new Map();
+            (await query(`SELECT * FROM users WHERE role = 'employee'`)).rows.forEach(u => {
+              const k1 = skeletonFio(`${u.last_name} ${u.first_name}`), k2 = skeletonFio(`${u.first_name} ${u.last_name}`);
+              [k1, k2].forEach(k => { if (!k) return; if (!skelIndex.has(k)) skelIndex.set(k, []); if (!skelIndex.get(k).includes(u)) skelIndex.get(k).push(u); });
+            });
+          }
+          found = (skelIndex.get(skeletonFio(`${last_name} ${first_name}`)) || []).slice();
         }
         if (found.length > 1) {
           const act = found.filter(u => u.employment_status === 'active');
