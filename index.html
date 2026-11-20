@@ -9561,21 +9561,17 @@ async function mbOpenForm(userId, preset) {
       <p class="text-xs text-slate-500 mb-4">${esc(posLabel(u.position) || '—')} · ${esc(u.object || '—')} / ${esc(u.department || '—')}</p>
       <form onsubmit="mbSubmitForm(event, ${userId})" class="space-y-3">
         <div>
-          <div class="flex gap-4 text-xs font-semibold text-slate-600 mb-1.5">
-            <label class="flex items-center gap-1.5"><input type="radio" name="mbMode" value="exp" checked onchange="mbModeChange()"> ${_L('Допуск до (как в журнале)', 'Рұқсат мерзімі (журналдағыдай)')}</label>
-            <label class="flex items-center gap-1.5"><input type="radio" name="mbMode" value="start" onchange="mbModeChange()"> ${_L('Дата медосмотра', 'Медтексеру күні')}</label>
-          </div>
-          <input type="date" id="mbExpires" value="${esc((e.applicable && e.expires) || '')}" class="w-full border p-2 rounded text-sm">
-          <input type="date" id="mbStart" max="${today}" value="${esc((e.applicable && e.start_date) || '')}" class="w-full border p-2 rounded text-sm hidden">
-          <p class="text-[11px] text-slate-400 mt-1">${_L('Вторую дату сайт посчитает сам: «допуск до» = дата медосмотра + период (6 или 12 мес.).', 'Екінші күнді сайт өзі есептейді.')}</p>
+          <label class="text-xs font-semibold text-slate-600">${_L('Дата прохождения медосмотра', 'Медтексеруден өткен күні')}</label>
+          <input type="date" id="mbStart" required max="${today}" value="${esc((e.applicable && e.start_date) || '')}" oninput="mbExpiryPreview(${fixed ? period : 0})" class="w-full border p-2 rounded text-sm">
+          <p id="mbExpiryHint" class="text-xs text-slate-500 mt-1"></p>
         </div>
         <div>
           <label class="text-xs font-semibold text-slate-600">${_L('Напоминание', 'Еске салу')}</label>
           ${fixed
             ? `<div class="text-sm border rounded p-2 bg-slate-50">${esc(mbPeriodText(period))} <span class="text-xs text-slate-400">· ${_L('задано для должности', 'лауазымға тағайындалған')}</span></div>`
             : `<div class="flex gap-4 text-sm pt-1">
-                <label class="flex items-center gap-1.5"><input type="radio" name="mbPeriod" value="6" ${period === 6 ? 'checked' : ''}> ${_L('Полугодичное (6 мес.)', 'Жарты жылдық (6 ай)')}</label>
-                <label class="flex items-center gap-1.5"><input type="radio" name="mbPeriod" value="12" ${period !== 6 ? 'checked' : ''}> ${_L('Годичное (12 мес.)', 'Жылдық (12 ай)')}</label>
+                <label class="flex items-center gap-1.5"><input type="radio" name="mbPeriod" value="6" ${period === 6 ? 'checked' : ''} onchange="mbExpiryPreview(0)"> ${_L('Полугодичное (6 мес.)', 'Жарты жылдық (6 ай)')}</label>
+                <label class="flex items-center gap-1.5"><input type="radio" name="mbPeriod" value="12" ${period !== 6 ? 'checked' : ''} onchange="mbExpiryPreview(0)"> ${_L('Годичное (12 мес.)', 'Жылдық (12 ай)')}</label>
               </div>
               <p class="text-[11px] text-slate-400 mt-1">${_L('Для этой должности книжка не обязательна — сотрудник добавлен вручную.', 'Бұл лауазымға кітапша міндетті емес — қызметкер қолмен қосылған.')}</p>`}
         </div>
@@ -9589,22 +9585,31 @@ async function mbOpenForm(userId, preset) {
           <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">${_L('Сохранить', 'Сақтау')}</button>
         </div>
       </form>`);
-    mbModeChange();
+    mbExpiryPreview(fixed ? period : 0);
   } catch (err) { mbModal(`<p class="text-sm text-red-600">${esc(err.message)}</p><div class="text-right mt-3"><button onclick="mbCloseModal()" class="px-4 py-2 border rounded-lg text-sm">OK</button></div>`); }
 }
-function mbModeChange() {
-  const mode = (document.querySelector('input[name="mbMode"]:checked') || {}).value || 'exp';
-  document.getElementById('mbExpires').classList.toggle('hidden', mode !== 'exp');
-  document.getElementById('mbStart').classList.toggle('hidden', mode !== 'start');
+// «Действует до» считается сам: дата прохождения + период (должности или выбранный)
+function addMonthsYmd(ymd, n) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const total = (m - 1) + n, ty = y + Math.floor(total / 12), tm = ((total % 12) + 12) % 12;
+  const dim = new Date(Date.UTC(ty, tm + 1, 0)).getUTCDate();
+  return `${ty}-${String(tm + 1).padStart(2, '0')}-${String(Math.min(d, dim)).padStart(2, '0')}`;
 }
+function mbExpiryPreview(fixedPeriod) {
+  const el = document.getElementById('mbExpiryHint'), v = (document.getElementById('mbStart') || {}).value;
+  if (!el) return;
+  const radio = document.querySelector('input[name="mbPeriod"]:checked');
+  const period = fixedPeriod || (radio ? Number(radio.value) : 12);
+  el.innerHTML = v ? `${_L('Действует до', 'Дейін жарамды')}: <b>${fmtDate(addMonthsYmd(v, period))}</b> <span class="text-slate-400">(+${period} ${_L('мес.', 'ай')})</span>` : `<span class="text-slate-400">${_L('Сайт сам прибавит период и посчитает «действует до».', 'Сайт мерзімді өзі есептейді.')}</span>`;
+}
+function mbModeChange() { /* оставлено для совместимости */ }
 async function mbSubmitForm(ev, userId) {
   ev.preventDefault();
   const radio = document.querySelector('input[name="mbPeriod"]:checked');
-  const mode = (document.querySelector('input[name="mbMode"]:checked') || {}).value || 'exp';
-  const val = document.getElementById(mode === 'exp' ? 'mbExpires' : 'mbStart').value;
-  if (!val) { const el = document.getElementById('mbFormMsg'); if (el) el.textContent = _L('Укажите дату', 'Күнді көрсетіңіз'); return; }
+  const val = document.getElementById('mbStart').value;
+  if (!val) { const el = document.getElementById('mbFormMsg'); if (el) el.textContent = _L('Укажите дату прохождения', 'Өткен күнді көрсетіңіз'); return; }
   try {
-    await api.req('/api/medbooks/user/' + userId, { method: 'PUT', body: { ...(mode === 'exp' ? { expires_date: val } : { start_date: val }), period_months: radio ? Number(radio.value) : undefined, note: (document.getElementById('mbNote') || {}).value || '' } });
+    await api.req('/api/medbooks/user/' + userId, { method: 'PUT', body: { start_date: val, period_months: radio ? Number(radio.value) : undefined, note: (document.getElementById('mbNote') || {}).value || '' } });
     mbAfterChange();
   } catch (err) { const el = document.getElementById('mbFormMsg'); if (el) el.textContent = err.message; }
 }
@@ -9971,13 +9976,9 @@ async function meOpenForm(userId) {
       <p class="text-xs text-slate-500 mb-4">${esc(posLabel(u.position) || '—')} · ${esc(u.object || '—')} / ${esc(u.department || '—')}</p>
       <form onsubmit="meSubmitForm(event, ${userId})" class="space-y-3">
         <div>
-          <div class="flex gap-4 text-xs font-semibold text-slate-600 mb-1.5">
-            <label class="flex items-center gap-1.5"><input type="radio" name="meMode" value="exp" checked onchange="meModeChange()"> ${_L('Действует до', 'Дейін жарамды')}</label>
-            <label class="flex items-center gap-1.5"><input type="radio" name="meMode" value="exam" onchange="meModeChange()"> ${_L('Дата медосмотра', 'Медтексеру күні')}</label>
-          </div>
-          <input type="date" id="meExpires" value="${esc(e.expires || '')}" class="w-full border p-2 rounded text-sm">
-          <input type="date" id="meExam" max="${today}" value="${esc(e.exam_date || '')}" class="w-full border p-2 rounded text-sm hidden">
-          <p class="text-[11px] text-slate-400 mt-1">${_L('Вторую дату сайт посчитает сам: медосмотр + 12 месяцев.', 'Екінші күнді сайт өзі есептейді: медтексеру + 12 ай.')}</p>
+          <label class="text-xs font-semibold text-slate-600">${_L('Дата прохождения медосмотра', 'Медтексеруден өткен күні')}</label>
+          <input type="date" id="meExam" required max="${today}" value="${esc(e.exam_date || '')}" oninput="meModeChange()" class="w-full border p-2 rounded text-sm">
+          <p id="meExpiryHint" class="text-xs text-slate-500 mt-1"></p>
         </div>
         <div>
           <label class="text-xs font-semibold text-slate-600">${_L('Примечание', 'Ескертпе')}</label>
@@ -9989,21 +9990,20 @@ async function meOpenForm(userId) {
           <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">${_L('Сохранить', 'Сақтау')}</button>
         </div>
       </form>`);
+    meModeChange();
   } catch (err) { mbModal(`<p class="text-sm text-red-600">${esc(err.message)}</p><div class="text-right mt-3"><button onclick="mbCloseModal()" class="px-4 py-2 border rounded-lg text-sm">OK</button></div>`); }
 }
 function meModeChange() {
-  const mode = (document.querySelector('input[name="meMode"]:checked') || {}).value || 'exp';
-  document.getElementById('meExpires').classList.toggle('hidden', mode !== 'exp');
-  document.getElementById('meExam').classList.toggle('hidden', mode !== 'exam');
+  const el = document.getElementById('meExpiryHint'), v = (document.getElementById('meExam') || {}).value;
+  if (el) el.innerHTML = v ? `${_L('Действует до', 'Дейін жарамды')}: <b>${fmtDate(addMonthsYmd(v, 12))}</b> <span class="text-slate-400">(+12 ${_L('мес.', 'ай')})</span>` : `<span class="text-slate-400">${_L('Сайт сам прибавит 12 месяцев.', 'Сайт 12 айды өзі қосады.')}</span>`;
 }
 async function meSubmitForm(ev, userId) {
   ev.preventDefault();
-  const mode = (document.querySelector('input[name="meMode"]:checked') || {}).value || 'exp';
-  const val = document.getElementById(mode === 'exp' ? 'meExpires' : 'meExam').value;
+  const val = document.getElementById('meExam').value;
   const msg = document.getElementById('meFormMsg');
-  if (!val) { if (msg) msg.textContent = _L('Укажите дату', 'Күнді көрсетіңіз'); return; }
+  if (!val) { if (msg) msg.textContent = _L('Укажите дату прохождения', 'Өткен күнді көрсетіңіз'); return; }
   try {
-    await api.req('/api/medexams/user/' + userId, { method: 'PUT', body: { ...(mode === 'exp' ? { expires_date: val } : { exam_date: val }), note: (document.getElementById('meNote') || {}).value || '' } });
+    await api.req('/api/medexams/user/' + userId, { method: 'PUT', body: { exam_date: val, note: (document.getElementById('meNote') || {}).value || '' } });
     meAfterChange();
   } catch (err) { if (msg) msg.textContent = err.message; }
 }
