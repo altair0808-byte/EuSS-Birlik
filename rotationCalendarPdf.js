@@ -43,7 +43,8 @@ const isoOf = (ms) => new Date(ms).toISOString().slice(0, 10);
 // частично выходит за окно). Цикл = (отъезд - заезд + 1) дней вахты + restDays дней дома, повтор в обе стороны.
 function buildShifts({ arrival, departure, restDays, fromIso, toIso }) {
   const a0 = toMs(arrival);
-  const len = Math.round((toMs(departure) - a0) / DAY) + 1;
+  // len = срок вахты (отъезд − заезд, напр. 14); цикл = срок + дома (14/14 → 28 дн.), как в routes/users.js
+  const len = Math.max(1, Math.round((toMs(departure) - a0) / DAY));
   const cycle = len + restDays;
   const from = toMs(fromIso), to = toMs(toIso);
   // первая смена, которая заканчивается не раньше начала окна
@@ -51,7 +52,7 @@ function buildShifts({ arrival, departure, restDays, fromIso, toIso }) {
   const shifts = [];
   for (;; k++) {
     const s = a0 + k * cycle * DAY;
-    const e = s + (len - 1) * DAY;
+    const e = s + len * DAY;
     if (e < from) continue;
     if (s > to) break;
     shifts.push({ arrival: isoOf(s), departure: isoOf(e), days: len });

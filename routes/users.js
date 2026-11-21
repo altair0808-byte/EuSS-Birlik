@@ -106,7 +106,10 @@ const ROT_TODAY_SQL = `(NOW() AT TIME ZONE 'Asia/Atyrau')::date`;
 // Раньше статус считался только по одной сохранённой вахте — после отъезда сотрудник навсегда оставался
 // «дома», даже когда по графику уже снова заехал.
 const ROT_REST_SQL = `COALESCE(rotation_rest_days, rotation_days, 0)`;
-const ROT_CYCLE_SQL = `(rotation_departure - rotation_arrival + 1 + ${ROT_REST_SQL})`;
+// Цикл = (отъезд − заезд) + дома. День отъезда — день пересменки: 14/14 с отъездом 1-го → заезд 15-го →
+// отъезд 29-го (цикл 28 дн.). Раньше к циклу прибавлялся лишний день (+1), и каждая следующая вахта
+// съезжала на сутки позже (заезд 16-го вместо 15-го и т.д.).
+const ROT_CYCLE_SQL = `(rotation_departure - rotation_arrival + ${ROT_REST_SQL})`;
 // Сдвиг (в днях) от сохранённой вахты к текущей / ближайшей будущей: 0, пока сохранённая вахта не закончилась,
 // иначе — целое число циклов, чтобы отъезд этой смены был не раньше сегодняшнего дня.
 const ROT_OFFSET_SQL = `(CASE WHEN rotation_arrival IS NOT NULL AND rotation_departure IS NOT NULL AND ${ROT_REST_SQL} > 0
