@@ -533,6 +533,23 @@ function qs(obj) {
   return '?' + parts.map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v)).join('&');
 }
 
+// Если вкладка долго была скрыта/без дела (≥ 10 мин), при возвращении тихо перерисовываем
+// текущий раздел, чтобы данные были свежими и не висели ошибки после «сна» сервера.
+(function () {
+  let hiddenAt = 0;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { hiddenAt = Date.now(); return; }
+    if (!hiddenAt || Date.now() - hiddenAt < 10 * 60 * 1000) return;
+    hiddenAt = 0;
+    try {
+      if (!state || !state.token || !state.user) return;
+      if ([...document.querySelectorAll('.fixed.inset-0')].some(el => el.offsetParent !== null || getComputedStyle(el).display !== 'none' && !el.classList.contains('hidden'))) return;   // открыто окно — не мешаем
+      if (state.activeTest) return;               // идёт тест — не перерисовываем
+      if (typeof render === 'function') render();
+    } catch (e) { /* ignore */ }
+  });
+})();
+
 const api = {
   async req(url, opts = {}) {
     opts.headers = opts.headers || {};
@@ -541,7 +558,25 @@ const api = {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(opts.body);
     }
-    const res = await fetch(url, opts);
+    // После долгого простоя сервер на Render «засыпает» или переоткрывает соединение с базой —
+    // первые запросы могут упасть (нет сети / 502 / 503 / 504). Чтение (GET) повторяем
+    // автоматически: до 3 попыток с паузой, чтобы вместо «Произошла ошибка» просто подождать.
+    const method = String(opts.method || 'GET').toUpperCase();
+    const retryable = method === 'GET';
+    let res;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        res = await fetch(url, opts);
+        if (retryable && attempt < 3 && [502, 503, 504].includes(res.status)) {
+          await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
+          continue;
+        }
+        break;
+      } catch (netErr) {
+        if (!retryable || attempt >= 3) throw new Error('Нет связи с сервером. Проверьте интернет и обновите страницу.');
+        await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
+      }
+    }
     if (res.status === 401) {
       logout();
       throw new Error('Unauthorized');

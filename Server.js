@@ -116,8 +116,20 @@ app.get('/p/:uid', (req, res) => {
   res.sendFile(path.join(__dirname, 'person.html'));
 });
 
+// Лёгкая проверка «сервер жив» — для внешнего пинга (чтобы Render не усыплял сайт)
+app.get('/healthz', (req, res) => res.type('text').send('ok'));
+
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// Случайная ошибка в фоновой задаче (напоминания, синхронизация, обрыв связи с базой)
+// не должна ронять весь сайт — пишем в лог и работаем дальше.
+process.on('unhandledRejection', (reason) => {
+  console.error('[process] необработанная ошибка (промис):', reason && reason.message ? reason.message : reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[process] необработанная ошибка:', err && err.stack ? err.stack : err);
 });
 
 // Запуск после подключения и проверки таблиц в Supabase

@@ -88,8 +88,47 @@ if (!connectionString) {
 
 const pool = new Pool({
   connectionString,
-  ssl: connectionString && connectionString.includes('localhost') ? false : { rejectUnauthorized: false }
+  ssl: connectionString && connectionString.includes('localhost') ? false : { rejectUnauthorized: false },
+  // Supabase/сеть молча обрывают соединения, простаивающие долго. Раньше пул держал такие
+  // «мёртвые» соединения бесконечно: после долгого простоя первый же запрос падал
+  // («Connection terminated unexpectedly»), и на главной было «Произошла ошибка».
+  max: 10,
+  idleTimeoutMillis: 30000,        // закрываем простаивающее соединение через 30 с — новое откроется само
+  connectionTimeoutMillis: 15000,  // не ждём соединение вечно
+  keepAlive: true
 });
+
+// Без этого обработчика обрыв простаивающего соединения роняет весь сервер (unhandled 'error'),
+// Render его перезапускает, и запросы в этот момент получают ошибку.
+pool.on('error', (err) => {
+  console.error('[db] соединение с базой оборвано (пул откроет новое):', err.message);
+});
+
+// Ошибки «соединение оборвано / база недоступна» — такой запрос безопасно повторить
+function isConnError(e) {
+  if (!e) return false;
+  const code = String(e.code || '');
+  const msg = String(e.message || '');
+  return ['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', '57P01', '57P02', '57P03', '08000', '08003', '08006', '08001', '08004']
+    .includes(code) ||
+    /Connection terminated|connection timeout|terminating connection|Client has encountered a connection error|timeout exceeded when trying to connect/i.test(msg);
+}
+
+// pool.query с повтором (до 2 раз) при обрыве соединения. Используется и напрямую в routes (pool.query),
+// поэтому подменяем сам метод. Транзакции через pool.connect() не затрагиваются.
+const rawPoolQuery = pool.query.bind(pool);
+pool.query = async function (text, params, cb) {
+  if (typeof params === 'function' || typeof cb === 'function') return rawPoolQuery(text, params, cb);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await rawPoolQuery(text, params);
+    } catch (e) {
+      if (attempt >= 2 || !isConnError(e)) throw e;
+      console.warn('[db] повтор запроса после обрыва соединения:', e.message);
+      await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
+    }
+  }
+};
 
 // Хелпер для SQL запросов
 async function query(text, params) {
