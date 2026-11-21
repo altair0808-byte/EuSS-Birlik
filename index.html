@@ -1364,6 +1364,14 @@ function renderLogin(app) {
 }
 
 // ===================== СМЕНА СВОЕГО ПАРОЛЯ (сервер: POST /api/auth/change-password) =====================
+// «Не напоминать» о смене простого пароля: запоминается в этом браузере для этого логина
+function pwNagKey() { return 'pw_nag_off_' + ((state.user && (state.user.login || state.user.id)) || ''); }
+function pwNagOff() { try { return localStorage.getItem(pwNagKey()) === '1'; } catch (e) { return false; } }
+function setPwNagOff() {
+  try { localStorage.setItem(pwNagKey(), '1'); } catch (e) { /* ignore */ }
+  const m = document.getElementById('pwModal'); if (m) m.remove();
+  render();
+}
 function openChangePassword() {
   let m = document.getElementById('pwModal');
   if (m) m.remove();
@@ -1387,6 +1395,7 @@ function openChangePassword() {
       <ul id="pwRules" class="text-[11px] space-y-0.5"></ul>
       <p id="pwMsg" class="text-xs text-red-600"></p>
       <div class="flex justify-end gap-2 pt-3 border-t">
+        ${state.user && state.user.must_change_password ? `<button type="button" onclick="setPwNagOff()" class="mr-auto px-3 py-2 text-xs text-slate-500 hover:text-slate-800 underline">${_L('Не напоминать', 'Еске салмау')}</button>` : ''}
         <button type="button" onclick="document.getElementById('pwModal').remove()" class="px-4 py-2 border rounded-lg text-sm">${_L('Отмена', 'Бас тарту')}</button>
         <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">${_L('Сохранить', 'Сақтау')}</button>
       </div>
@@ -1439,7 +1448,7 @@ async function handleLogin(e) {
     if (typeof pwaAfterLogin === 'function') pwaAfterLogin();
     state.tab = res.user.role === 'employee' ? 'my_tests' : 'dashboard';
     render();
-    if (res.user.must_change_password) setTimeout(openChangePassword, 300);
+    if (res.user.must_change_password && !pwNagOff()) setTimeout(openChangePassword, 300);
   } catch (err) {
     errDiv.textContent = err.message || t('login_error');
     errDiv.classList.remove('hidden');
@@ -1595,9 +1604,10 @@ function renderMain(app) {
           </button>
         </div>
       </div>
-      ${state.user.must_change_password ? `<div class="bg-red-600 text-white text-xs sm:text-sm px-4 py-2 flex flex-wrap items-center justify-center gap-2">
+      ${state.user.must_change_password && !pwNagOff() ? `<div class="bg-red-600 text-white text-xs sm:text-sm px-4 py-2 flex flex-wrap items-center justify-center gap-2">
         <span>⚠ ${_L('Вы входите со стандартным или слишком простым паролем — его легко подобрать.', 'Сіз қарапайым құпиясөзбен кірдіңіз.')}</span>
-        <button onclick="openChangePassword()" class="px-3 py-1 rounded bg-white text-red-700 font-semibold">${_L('Сменить пароль', 'Құпиясөзді өзгерту')}</button></div>` : ''}
+        <button onclick="openChangePassword()" class="px-3 py-1 rounded bg-white text-red-700 font-semibold">${_L('Сменить пароль', 'Құпиясөзді өзгерту')}</button>
+        <button onclick="setPwNagOff()" class="px-3 py-1 rounded border border-white/70 text-white font-semibold hover:bg-red-700">${_L('Не напоминать', 'Еске салмау')}</button></div>` : ''}
       <!-- Навигация -->
       <nav class="bg-slate-50 border-t border-slate-200">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-1 sm:space-x-4 overflow-x-auto py-2">
