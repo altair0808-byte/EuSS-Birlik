@@ -231,12 +231,14 @@ function parseImportDate(v) {
   return iso;
 }
 
+const { narrowNamesakes, namesakesHint, NAMESAKE_ERROR } = require('../lib/namesakes');
 const IMPORT_HEADERS = {
   'фамилия': 'last_name', 'имя': 'first_name', 'фио': 'fio', 'ф.и.о.': 'fio', 'ф.и.о': 'fio', 'иин': 'iin',
   'допуск до': 'expires', 'действует до': 'expires', 'срок допуска': 'expires', 'сроки допуска': 'expires', 'срок действия': 'expires', 'годна до': 'expires',
   'дата начала': 'start', 'начало': 'start', 'дата медосмотра': 'start',
   'период': 'period', 'период (мес.)': 'period', 'период (мес)': 'period', 'периодичность': 'period', 'периодичность (мес.)': 'period',
-  'примечание': 'note', 'примечания': 'note'
+  'примечание': 'note', 'примечания': 'note',
+  ...require('../lib/namesakes').NAMESAKE_HEADERS
 };
 
 router.get('/import-template.xlsx', authRequired, STAFF, async (req, res) => {
@@ -318,7 +320,7 @@ router.post('/import', authRequired, STAFF, upload.single('file'), async (req, r
 
     // Все сотрудники один раз — для быстрого поиска
     const users = (await query(
-      `SELECT id, last_name, first_name, iin, object, department, position, role, employment_status, active
+      `SELECT id, last_name, first_name, iin, tco_badge, object, department, position, role, employment_status, active
          FROM users WHERE role = 'employee'`
     )).rows;
     const byIin = new Map(), byName = new Map(), byLoose = new Map(), bySkel = new Map();
@@ -369,7 +371,8 @@ router.post('/import', authRequired, STAFF, upload.single('file'), async (req, r
         if (!found.length && last && first) found = pick(byLoose.get(looseFio(`${last} ${first}`)));
         if (!found.length && last && first) found = pick(bySkel.get(skeletonFio(`${last} ${first}`)));
         if (!found.length) { notFound.push({ row: rowNum, name: label, iin, position: txt(row, 'pos') }); continue; }
-        if (found.length > 1) { errors.push(`Строка ${rowNum}: найдено несколько сотрудников «${label}» — укажите ИИН`); continue; }
+        if (found.length > 1) found = narrowNamesakes(found, { badge: txt(row, 'badge'), dept: txt(row, 'dept'), pos: txt(row, 'pos') });
+        if (found.length > 1) { errors.push(`Строка ${rowNum}: «${label}» — ${NAMESAKE_ERROR}. Совпали: ${namesakesHint(found)}`); continue; }
         const u = found[0];
         if (!inScope(req.user, u)) { errors.push(`Строка ${rowNum}: «${label}» вне вашей зоны доступа`); continue; }
         if (seen.has(u.id)) { errors.push(`Строка ${rowNum}: «${label}» уже был выше в файле — взята первая строка`); continue; }

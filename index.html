@@ -4566,6 +4566,11 @@ async function loadUsersList() {
   // кнопки полного редактирования/статуса/удаления и чекбоксы массового назначения скрыты.
   const isObserver = isObserverUser();
   if (!isAdminsTab) {
+    // Тёзки (одинаковые Фамилия + Имя) — помечаем, чтобы различать по пропуску / отделу / должности
+    const nameCount = new Map();
+    const nk = u => `${u.last_name || ''} ${u.first_name || ''}`.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
+    state.users.forEach(u => nameCount.set(nk(u), (nameCount.get(nk(u)) || 0) + 1));
+    state.users.forEach(u => { u._namesake = nameCount.get(nk(u)) > 1; });
     tbody.innerHTML = state.users.map(u => userRowHtml(u, { isArchiveTab, showCheckbox: showCheckbox && !isObserver, isObserver })).join('');
     populateUsersMetaFilters();
     if (showCheckbox) updateBulkAssignButton();
@@ -4662,6 +4667,7 @@ function userRowHtml(u, ctx) {
             <div class="flex flex-wrap items-center gap-1.5">
               <button onclick="openUserProfile(${u.id})" class="font-semibold text-slate-900 hover:text-blue-600 text-left">${esc(u.last_name)} ${esc(u.first_name)}</button>
               ${categoryBadgeHtml(u)} ${login}
+              ${u._namesake ? `<span title="${esc(_L('Есть сотрудник с такими же фамилией и именем. Различайте по № пропуска, отделу и должности; в файлах загрузки указывайте «Номер пропуска» или ИИН.', 'Аты-жөні бірдей қызметкер бар. Рұқсатнама нөмірі, бөлім және лауазым бойынша ажыратыңыз.'))}" class="cursor-help text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 whitespace-nowrap">👥 ${_L('тёзка', 'аттас')}${u.tco_badge ? ' · №' + esc(u.tco_badge) : ' · ' + _L('нет № пропуска', '№ жоқ')}</span>` : ''}
             </div>
             <div class="text-xs text-slate-600 mt-0.5 break-words">${esc(posLabel(u.position) || '—')}${positionIssueBadge(u)}</div>
             ${where ? `<div class="text-[11px] text-slate-400 break-words">${where}</div>` : ''}

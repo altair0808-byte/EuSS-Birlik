@@ -100,6 +100,7 @@ function normalizeDateOnly(v) {
 // в БД не хранится — считается на лету по сегодняшней дате (Атырау, UTC+5): с дня заезда по день
 // отъезда сотрудник «на вахте», до заезда и после отъезда — «дома». Пересменка в 12:00: в день отъезда
 // «на вахте» до 12:00, в день заезда — с 12:00 (ROT_CHANGE_HOUR ниже).
+const { narrowNamesakes, namesakesHint, NAMESAKE_ERROR } = require('../lib/namesakes');
 const ROT_TODAY_SQL = `(NOW() AT TIME ZONE 'Asia/Atyrau')::date`;
 // Вахта повторяется по циклу: (заезд … отъезд включительно) → дома N дней → снова заезд … (как в PDF-календаре,
 // rotationCalendarPdf.js: buildShifts). N = rotation_rest_days, а если не задано — срок вахты (14/14, 28/28).
@@ -819,7 +820,8 @@ router.post('/rotations/import', authRequired, requireRole('admin', 'assistant',
     'отъезд': 'departure', 'дата отъезда': 'departure', 'выезд': 'departure',
     'дома (дней)': 'rest', 'дома между вахтами (дней)': 'rest', 'дома между вахтами': 'rest', 'дома': 'rest', 'отдых (дней)': 'rest',
     'овертайм с': 'ot_from', 'овертайм от': 'ot_from', 'овертайм начало': 'ot_from',
-    'овертайм по': 'ot_to', 'овертайм до': 'ot_to', 'овертайм конец': 'ot_to'
+    'овертайм по': 'ot_to', 'овертайм до': 'ot_to', 'овертайм конец': 'ot_to',
+    ...require('../lib/namesakes').NAMESAKE_HEADERS
   };
   let sheetRows;
   try {
@@ -887,7 +889,8 @@ router.post('/rotations/import', authRequired, requireRole('admin', 'assistant',
           if (act.length === 1) found = act;
         }
         if (!found.length) { errors.push(`Строка ${rowNum}: сотрудник «${label}» не найден в системе`); continue; }
-        if (found.length > 1) { errors.push(`Строка ${rowNum}: найдено несколько сотрудников «${label}» — укажите ИИН`); continue; }
+        if (found.length > 1) found = narrowNamesakes(found, { badge: txt(row, 'badge'), dept: txt(row, 'dept'), pos: txt(row, 'pos') });
+        if (found.length > 1) { errors.push(`Строка ${rowNum}: «${label}» — ${NAMESAKE_ERROR}. Совпали: ${namesakesHint(found)}`); continue; }
         const target = found[0];
         if (!isInAssistantScope(req.user, target)) { errors.push(`Строка ${rowNum}: «${label}» вне вашей зоны доступа`); continue; }
 

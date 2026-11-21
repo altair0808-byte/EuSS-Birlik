@@ -163,6 +163,7 @@ router.get('/import-template.xlsx', authRequired, STAFF, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'template_failed', details: e.message }); }
 });
 
+const { narrowNamesakes, namesakesHint, NAMESAKE_ERROR } = require('../lib/namesakes');
 const HEAD = {
   'фамилия': 'last_name', 'имя': 'first_name', 'фио': 'fio', 'ф.и.о.': 'fio', 'ф.и.о': 'fio', 'иин': 'iin',
   'действует до': 'expires', 'допуск до': 'expires', 'срок действия': 'expires', 'годен до': 'expires', 'срок допуска': 'expires',
@@ -170,7 +171,8 @@ const HEAD = {
   'примечание': 'note', 'примечания': 'note',
   // точные ФИО, как они сейчас записаны на сайте (для надёжного поиска), и № пропуска
   'фамилия на сайте': 'site_last', 'имя на сайте': 'site_first',
-  'номер пропуска': 'badge', '№ пропуска': 'badge', 'пропуск': 'badge', '№ пропуска тшо': 'badge'
+  'номер пропуска': 'badge', '№ пропуска': 'badge', 'пропуск': 'badge', '№ пропуска тшо': 'badge',
+  'отдел': 'dept', 'департамент': 'dept', 'должность': 'pos', 'должность на сайте': 'pos'
 };
 
 router.post('/import', authRequired, STAFF, upload.single('file'), async (req, res) => {
@@ -192,7 +194,7 @@ router.post('/import', authRequired, STAFF, upload.single('file'), async (req, r
     if (!(col.expires >= 0 || col.exam >= 0)) return res.status(400).json({ error: 'missing_columns', message: 'Нужна колонка «Действует до» или «Дата медосмотра».' });
     const txt = (row, f) => String((f in col ? row[col[f]] : '') ?? '').replace(/\s+/g, ' ').trim();
 
-    const users = (await query(`SELECT id, last_name, first_name, iin, object, department, active, employment_status FROM users WHERE role = 'employee'`)).rows;
+    const users = (await query(`SELECT id, last_name, first_name, iin, tco_badge, object, department, position, active, employment_status FROM users WHERE role = 'employee'`)).rows;
     const maps = { iin: new Map(), name: new Map(), loose: new Map(), skel: new Map() };
     const push = (m, k, u) => { if (!k) return; if (!m.has(k)) m.set(k, []); m.get(k).push(u); };
     users.forEach((u) => {
@@ -230,7 +232,8 @@ router.post('/import', authRequired, STAFF, upload.single('file'), async (req, r
       if (!found.length && last && first) found = pick(maps.loose.get(looseFio(`${last} ${first}`)));
       if (!found.length && last && first) found = pick(maps.skel.get(skeletonFio(`${last} ${first}`)));
       if (!found.length) { notFound.push({ row: r + 1, name: label, iin }); continue; }
-      if (found.length > 1) { errors.push(`Строка ${r + 1}: найдено несколько сотрудников «${label}» — укажите ИИН`); continue; }
+      if (found.length > 1) found = narrowNamesakes(found, { badge: txt(row, 'badge'), dept: txt(row, 'dept'), pos: txt(row, 'pos') });
+      if (found.length > 1) { errors.push(`Строка ${r + 1}: «${label}» — ${NAMESAKE_ERROR}. Совпали: ${namesakesHint(found)}`); continue; }
       const u = found[0];
       if (!inScope(req.user, u)) { errors.push(`Строка ${r + 1}: «${label}» вне вашей зоны доступа`); continue; }
       if (seen.has(u.id)) { errors.push(`Строка ${r + 1}: «${label}» уже был выше — взята первая строка`); continue; }
