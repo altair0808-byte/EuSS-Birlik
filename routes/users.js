@@ -23,15 +23,16 @@ const { buildRotationCalendarPdf } = require('../rotationCalendarPdf');
 // есть в системе под другим написанием: порядок Ф/И, регистр, русский/английский/казахский,
 // ё/е, лишнее отчество, опечатка в 1–2 символа. Объект/отдел/должность не учитываются —
 // человек мог перейти в другой отдел. Если у обоих указан ИИН, он решает: одинаковый ИИН —
-// это один человек, разный ИИН — разные люди (однофамильцы).
+// это один человек, разный ИИН — разные люди (однофамильцы). Так же работает № пропуска ТШО.
+// Полное совпадение ФИО без ИИН/пропуска админ может подтвердить как тёзку (confirm_not_duplicate).
 // Возвращает null или { ...сотрудник, level: 'strong' | 'possible', reason }.
 //   strong   — почти наверняка тот же человек (создание блокируется);
 //   possible — очень похож (админ может подтвердить, что это другой человек).
 // excludeId — id сотрудника, которого не нужно считать дублем самого себя (при редактировании).
-async function findDuplicateEmployee(lastName, firstName, excludeId, iin) {
+async function findDuplicateEmployee(lastName, firstName, excludeId, iin, badge) {
   if (!computeFioFields(lastName, firstName).normalized) return null;
   const params = [];
-  let sql = `SELECT id, last_name, first_name, object, department, position, active, employment_status, iin
+  let sql = `SELECT id, last_name, first_name, object, department, position, active, employment_status, iin, tco_badge
              FROM users WHERE role = 'employee'`;
   if (excludeId) { params.push(excludeId); sql += ` AND id != $${params.length}`; }
   const rows = (await query(sql, params)).rows;
@@ -42,6 +43,13 @@ async function findDuplicateEmployee(lastName, firstName, excludeId, iin) {
     if (myIin && row.iin) {
       if (row.iin === myIin) return { ...row, level: 'strong', reason: 'iin' };
       continue; // разные ИИН — разные люди, даже если ФИО похожи
+    }
+    // № пропуска ТШО у каждого свой: одинаковый — тот же человек, разный — тёзки (разные люди)
+    const myBadge = String(badge || '').replace(/\s+/g, '');
+    const rowBadge = String(row.tco_badge || '').replace(/\s+/g, '');
+    if (myBadge && rowBadge) {
+      if (myBadge === rowBadge) return { ...row, level: 'strong', reason: 'badge' };
+      continue;
     }
     const level = compareFio(cand, row);
     // при нескольких совпадениях показываем в сообщении действующего сотрудника, а не архивного
@@ -65,12 +73,19 @@ function describeDuplicate(dup) {
 function rejectDuplicate(req, res, dup) {
   if (!dup) return false;
   const existing = { id: dup.id, last_name: dup.last_name, first_name: dup.first_name, object: dup.object, department: dup.department, position: dup.position, employment_status: dup.employment_status };
+  const canConfirm = req.user.role === 'admin' || req.user.role === 'superadmin';
+  // Полное совпадение только по ФИО (без ИИН / пропуска) — это может быть тёзка: админ подтверждает
+  if (dup.level === 'strong' && dup.reason === 'name' && canConfirm) {
+    if (req.body && req.body.confirm_not_duplicate === true) return false;
+    res.status(409).json({ error: 'duplicate_employee', level: 'strong', reason: 'name', can_confirm: true, namesake: true,
+      message: `Сотрудник с таким же ФИО уже есть: ${describeDuplicate(dup)}${dup.tco_badge ? ', № пропуска ' + dup.tco_badge : ''}.`, existing_user: existing });
+    return true;
+  }
   if (dup.level === 'strong') {
-    const why = dup.reason === 'iin' ? 'Сотрудник с таким ИИН уже есть в системе' : 'Такой сотрудник уже есть в системе (то же ФИО: порядок слов, регистр, язык написания и отдел не важны)';
+    const why = dup.reason === 'iin' ? 'Сотрудник с таким ИИН уже есть в системе' : dup.reason === 'badge' ? 'Сотрудник с таким № пропуска уже есть в системе' : 'Такой сотрудник уже есть в системе (то же ФИО: порядок слов, регистр, язык написания и отдел не важны)';
     res.status(409).json({ error: 'duplicate_employee', level: 'strong', message: `${why}: ${describeDuplicate(dup)}. Используйте существующую карточку${dup.employment_status !== 'active' ? ' (во вкладке «Архив» её можно восстановить)' : ''}.`, existing_user: existing });
     return true;
   }
-  const canConfirm = req.user.role === 'admin' || req.user.role === 'superadmin';
   if (canConfirm && req.body && req.body.confirm_not_duplicate === true) return false;
   res.status(409).json({ error: 'possible_duplicate', level: 'possible', can_confirm: canConfirm, message: `Очень похожий сотрудник уже есть: ${describeDuplicate(dup)}.${canConfirm ? '' : ' Если это действительно другой человек — обратитесь к администратору.'}`, existing_user: existing });
   return true;
@@ -438,7 +453,7 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
         // регистра/пробелов, "УТЯШЕВ АЛТАИР" = "Утяшев Алтаир") уже есть в системе,
         // новая запись не создаётся — используется существующий сотрудник, и к нему
         // же, если указано, привязывается историческая запись об обучении из строки.
-        const dup = await findDuplicateEmployee(last_name, first_name);
+        const dup = await findDuplicateEmployee(last_name, first_name, null, null, get('tco_badge'));
         let userId;
         if (dup && dup.level === 'possible') {
           // Очень похожее ФИО (опечатка / другое написание): автоматически не создаём и не привязываем —
@@ -1366,7 +1381,7 @@ router.post('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), 
     // Регистр и лишние пробелы в ФИО не считаются — если такой сотрудник уже есть,
     // новая запись не создаётся, а вызывающая сторона получает данные существующего.
     if (targetRole === 'employee') {
-      const dup = await findDuplicateEmployee(last_name, first_name, null, iinVal);
+      const dup = await findDuplicateEmployee(last_name, first_name, null, iinVal, tco_badge);
       if (rejectDuplicate(req, res, dup)) return;
     }
 
@@ -1525,7 +1540,8 @@ router.put('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
         || String(newFirst).trim() !== String(target.first_name || '').trim();
       if (target.role === 'employee' && nameChanged) {
         const iinForCheck = iin !== undefined ? (String(iin || '').trim() || null) : target.iin;
-        const dup = await findDuplicateEmployee(newLast, newFirst, id, iinForCheck);
+        const badgeForCheck = tco_badge !== undefined ? tco_badge : target.tco_badge;
+        const dup = await findDuplicateEmployee(newLast, newFirst, id, iinForCheck, badgeForCheck);
         if (rejectDuplicate(req, res, dup)) return;
       }
 

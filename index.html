@@ -8492,6 +8492,17 @@ async function handleDuplicateError(err, opts) {
   const d = err && err.data;
   if (!d || (d.error !== 'duplicate_employee' && d.error !== 'possible_duplicate')) return false;
   const ex = d.existing_user;
+  // Полный тёзка (то же ФИО, без ИИН / № пропуска): админ может подтвердить, что это другой человек
+  if (d.error === 'duplicate_employee' && d.namesake && d.can_confirm) {
+    const ok = confirm(d.message + '\n\n' + _L('Это ДРУГОЙ человек с такими же фамилией и именем (тёзка)?\nОК — сохранить как нового сотрудника, Отмена — не сохранять.\n\nСовет: укажите № пропуска ТШО или ИИН, чтобы тёзок не путать при загрузке файлов.', 'Бұл аты-жөні бірдей БАСҚА адам ба?\nОК — жаңа қызметкер ретінде сақтау, Болдырмау — сақтамау.'));
+    if (ok && opts && opts.resend) {
+      try { await opts.resend(); } catch (e2) { alert(_L('Не удалось сохранить: ', 'Сақтау мүмкін болмады: ') + (e2.message || '')); }
+    } else if (!ok && ex && ex.id && confirm(_L('Открыть карточку существующего сотрудника?', 'Бар қызметкердің карточкасын ашу керек пе?'))) {
+      if (opts && opts.close) opts.close();
+      openUserProfile(ex.id);
+    }
+    return true;
+  }
   if (d.error === 'possible_duplicate' && d.can_confirm) {
     const ok = confirm(d.message + '\n\n' + _L('Это ДРУГОЙ человек (однофамилец)?\nОК — всё равно сохранить, Отмена — не сохранять.', 'Бұл БАСҚА адам ба?\nОК — сақтау, Болдырмау — сақтамау.'));
     if (ok && opts && opts.resend) {
