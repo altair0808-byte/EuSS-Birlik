@@ -4773,9 +4773,10 @@ function rotBadgeClass(st) {
 // Короткая пометка: «осталось 5 дн.» / «заезд через 3 дн.»
 function rotNoteText(u) {
   if (u.rotation_status === 'on_shift' && u.rotation_days_left != null) {
-    return u.rotation_days_left === 0 ? _L('отъезд сегодня', 'бүгін кетеді') : `${_L('осталось', 'қалды')} ${u.rotation_days_left} ${_L('дн.', 'күн')}`;
+    return u.rotation_days_left === 0 ? _L('отъезд сегодня в 12:00', 'бүгін 12:00-де кетеді') : `${_L('осталось', 'қалды')} ${u.rotation_days_left} ${_L('дн.', 'күн')}`;
   }
   if (u.rotation_status === 'home' && u.rotation_days_to_arrival != null) {
+    if (u.rotation_days_to_arrival === 0) return _L('заезд сегодня в 12:00', 'бүгін 12:00-де келеді');
     return `${_L('заезд через', 'келуге')} ${u.rotation_days_to_arrival} ${_L('дн.', 'күн қалды')}`;
   }
   return '';
@@ -4984,7 +4985,7 @@ async function openRotationModal(userId) {
         <div>
           <label class="text-xs font-semibold text-slate-600">${_L('Дата отъезда', 'Кету күні')}</label>
           <input type="date" id="rotDeparture" value="${esc(departure)}" oninput="rotRecalc('departure')" class="w-full border p-2 rounded text-sm">
-          <p class="text-[11px] text-slate-400 mt-1">${_L('Считается сама: заезд + срок. Можно поправить вручную. По день отъезда включительно сотрудник отображается «на вахте» 👷, потом — «дома» 🏠.', 'Өзі есептеледі: келу + мерзім. Қолмен түзетуге болады.')}</p>
+          <p class="text-[11px] text-slate-400 mt-1">${_L('Считается сама: заезд + срок. Можно поправить вручную. Пересменка в 12:00: с 12:00 дня заезда до 12:00 дня отъезда сотрудник «на вахте» 👷, потом — «дома» 🏠.', 'Өзі есептеледі: келу + мерзім. Қолмен түзетуге болады.')}</p>
         </div>
         <div>
           <label class="text-xs font-semibold text-slate-600">${_L('Дома между вахтами (дней)', 'Вахта аралығында үйде (күн)')}</label>

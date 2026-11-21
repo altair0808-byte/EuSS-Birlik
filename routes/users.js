@@ -98,7 +98,8 @@ function normalizeDateOnly(v) {
 // Вахта хранится в users: rotation_arrival (заезд), rotation_days (срок: 14 / 21 / 28 или любой),
 // rotation_departure (отъезд = заезд + срок, можно поправить вручную). Статус «на вахте / дома»
 // в БД не хранится — считается на лету по сегодняшней дате (Атырау, UTC+5): с дня заезда по день
-// отъезда включительно сотрудник «на вахте», до заезда и после отъезда — «дома».
+// отъезда сотрудник «на вахте», до заезда и после отъезда — «дома». Пересменка в 12:00: в день отъезда
+// «на вахте» до 12:00, в день заезда — с 12:00 (ROT_CHANGE_HOUR ниже).
 const ROT_TODAY_SQL = `(NOW() AT TIME ZONE 'Asia/Atyrau')::date`;
 // Вахта повторяется по циклу: (заезд … отъезд включительно) → дома N дней → снова заезд … (как в PDF-календаре,
 // rotationCalendarPdf.js: buildShifts). N = rotation_rest_days, а если не задано — срок вахты (14/14, 28/28).
@@ -112,14 +113,20 @@ const ROT_REST_SQL = `COALESCE(rotation_rest_days, rotation_days, 0)`;
 const ROT_CYCLE_SQL = `(rotation_departure - rotation_arrival + ${ROT_REST_SQL})`;
 // Сдвиг (в днях) от сохранённой вахты к текущей / ближайшей будущей: 0, пока сохранённая вахта не закончилась,
 // иначе — целое число циклов, чтобы отъезд этой смены был не раньше сегодняшнего дня.
+// Пересменка в ROT_CHANGE_HOUR (12:00 по Атырау): в день отъезда сотрудник на вахте до 12:00, в день
+// заезда — с 12:00. «Сменная дата» = (сейчас − 12 ч)::date: на вахте, если заезд ≤ сменная дата < отъезд.
+const ROT_CHANGE_HOUR = 12;
+const ROT_SHIFT_DATE_SQL = `((NOW() AT TIME ZONE 'Asia/Atyrau') - interval '${ROT_CHANGE_HOUR} hours')::date`;
+// Сдвиг (в днях) от сохранённой вахты к текущей / ближайшей будущей: 0, пока сохранённая вахта не закончилась
+// (до 12:00 дня отъезда), иначе — целое число циклов, чтобы следующая вахта ещё не закончилась.
 const ROT_OFFSET_SQL = `(CASE WHEN rotation_arrival IS NOT NULL AND rotation_departure IS NOT NULL AND ${ROT_REST_SQL} > 0
-                              AND ${ROT_TODAY_SQL} > rotation_departure
-                         THEN ((${ROT_TODAY_SQL} - rotation_departure + ${ROT_CYCLE_SQL} - 1) / ${ROT_CYCLE_SQL}) * ${ROT_CYCLE_SQL}
+                              AND ${ROT_SHIFT_DATE_SQL} >= rotation_departure
+                         THEN ((${ROT_SHIFT_DATE_SQL} - rotation_departure) / ${ROT_CYCLE_SQL} + 1) * ${ROT_CYCLE_SQL}
                          ELSE 0 END)`;
 const ROT_CUR_ARR_SQL = `(rotation_arrival + ${ROT_OFFSET_SQL})`;
 const ROT_CUR_DEP_SQL = `(rotation_departure + ${ROT_OFFSET_SQL})`;
 // Вахта по графику (заезд … отъезд) и овертайм (с … по) — два независимых признака «на работе».
-const ROT_BASE_SQL = `(rotation_arrival IS NOT NULL AND ${ROT_CUR_ARR_SQL} <= ${ROT_TODAY_SQL} AND (rotation_departure IS NULL OR ${ROT_CUR_DEP_SQL} >= ${ROT_TODAY_SQL}))`;
+const ROT_BASE_SQL = `(rotation_arrival IS NOT NULL AND ${ROT_CUR_ARR_SQL} <= ${ROT_SHIFT_DATE_SQL} AND (rotation_departure IS NULL OR ${ROT_CUR_DEP_SQL} > ${ROT_SHIFT_DATE_SQL}))`;
 const OT_ON_SQL = `(overtime_from IS NOT NULL AND overtime_to IS NOT NULL AND overtime_from <= ${ROT_TODAY_SQL} AND overtime_to >= ${ROT_TODAY_SQL})`;
 // «На вахте» = на вахте по графику ИЛИ в овертайме
 const ROT_ON_SQL = `(${ROT_BASE_SQL} OR ${OT_ON_SQL})`;
@@ -137,7 +144,7 @@ const ROTATION_SELECT = `to_char(${ROT_CUR_ARR_SQL}, 'YYYY-MM-DD') AS rotation_a
                       to_char(overtime_from, 'YYYY-MM-DD') AS overtime_from,
                       to_char(overtime_to, 'YYYY-MM-DD') AS overtime_to,
                       ${OT_ON_SQL} AS overtime_active,
-                      CASE WHEN ${ROT_CUR_ARR_SQL} > ${ROT_TODAY_SQL} THEN ${ROT_CUR_ARR_SQL} - ${ROT_TODAY_SQL} END AS rotation_days_to_arrival`;
+                      CASE WHEN ${ROT_CUR_ARR_SQL} > ${ROT_SHIFT_DATE_SQL} THEN ${ROT_CUR_ARR_SQL} - ${ROT_TODAY_SQL} END AS rotation_days_to_arrival`;
 
 function addDaysIso(iso, n) {
   const d = new Date(iso + 'T00:00:00Z');
