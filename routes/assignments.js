@@ -285,9 +285,18 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), requireCo
     const skippedIds = uniqueUserIds.filter(id => !validIds.has(id));
 
     const createdIds = [];
+    const createdUserIds = [];
+    const alreadyAssignedIds = [];
     const pendingCertAssignmentIds = [];
+    // Уже записан на этот курс (тест назначен / начат, но не сдан) — повторно не записываем
+    const pendRes = historical ? { rows: [] } : await client.query(
+      `SELECT DISTINCT user_id FROM assignments WHERE user_id = ANY($1::bigint[]) AND course_id = $2 AND status IN ('pending', 'in_progress')`,
+      [uniqueUserIds, course_id]);
+    const alreadyPending = new Set(pendRes.rows.map(r => Number(r.user_id)));
     for (const userId of uniqueUserIds) {
       if (!validIds.has(userId)) continue;
+      if (alreadyPending.has(userId)) { alreadyAssignedIds.push(userId); continue; }
+      createdUserIds.push(userId);
       if (historical) {
         // Каждому сотруднику отдельный номер сертификата (getNextCertNumber читает
         // максимум из БД на каждый вызов — работает корректно и в цикле).
@@ -341,7 +350,7 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), requireCo
     if (!historical && !external && createdIds.length) {
       push.notifyCourseAssigned([...validIds], course_id).catch(() => {});
     }
-    res.json({ created: createdIds.length, ids: createdIds, skipped: skippedIds.length });
+    res.json({ created: createdIds.length, ids: createdIds, skipped: skippedIds.length, user_ids: createdUserIds, already_assigned: alreadyAssignedIds.length, already_assigned_ids: alreadyAssignedIds });
   } catch (e) {
     await client.query('ROLLBACK');
     res.status(500).json({ error: 'db_error', details: e.message });
@@ -439,6 +448,8 @@ router.get('/expiring', authRequired, requireRole('admin', 'assistant', 'superad
     const result = await query(`
       SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position, u.login, u.staff_category,
              c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.is_external,
+             (SELECT p.status FROM assignments p WHERE p.user_id = a.user_id AND p.course_id = a.course_id
+                AND p.status IN ('pending', 'in_progress') ORDER BY p.id DESC LIMIT 1) AS pending_status,
              ${ROTATION_SELECT}
       FROM assignments a
       JOIN users u ON u.id = a.user_id

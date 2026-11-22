@@ -4098,8 +4098,8 @@ function renderExpiringFilters() {
         ${_L('Выбрать всех видимых', 'Барлығын таңдау')}
       </label>
       <button type="button" id="expShowSelectedBtn" onclick="toggleExpShowSelected()" class="text-emerald-700 hover:underline font-semibold">${expShowOnlySelected ? _L('Показать всех', 'Барлығын көрсету') : _L('Показать выбранных', 'Таңдалғандарды көрсету')}</button>
-      <button type="button" onclick="assignExpiringSelected()" class="text-blue-600 hover:underline font-semibold">📚 ${_L('Назначить обучение выбранным', 'Таңдалғандарға оқу тағайындау')} (<span id="expSelectedCount">${expSelected.size}</span>)</button>
-      <button type="button" onclick="downloadCredentialsNoticeFromExpiring()" class="text-indigo-700 hover:underline font-semibold">⬇ ${_L('Уведомление (логин/пароль)', 'Хабарлама (логин/құпиясөз)')}</button>
+      <button type="button" onclick="assignExpiringSelected()" class="px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 font-semibold" title="${_L('Откроется окно назначения теста; после записи логин/пароль выдаются автоматически и скачивается уведомление', 'Тест тағайындау терезесі ашылады; логин/құпиясөз автоматты беріліп, хабарлама жүктеледі')}">📚 ${_L('Записать и уведомить выбранных', 'Таңдалғандарды жазу және хабарлау')} (<span id="expSelectedCount">${expSelected.size}</span>)</button>
+      <button type="button" onclick="downloadCredentialsNoticeFromExpiring()" class="text-indigo-700 hover:underline font-semibold" title="${_L('Скачать уведомление ещё раз (без записи на обучение)', 'Хабарламаны қайта жүктеу')}">⬇ ${_L('Уведомление повторно', 'Хабарлама қайта')}</button>
     </div>`;
 }
 
@@ -4202,7 +4202,9 @@ function renderExpiringList() {
         <div class="flex items-center gap-2">
           <span class="text-xs font-bold px-2.5 py-1 rounded-lg ${badgeClass}">${badgeText}</span>
           <span class="text-xs text-slate-400">${un ? (a.pending_status ? _L('тест назначен', 'тест тағайындалған') : _L('не назначен', 'тағайындалмаған')) : nextDate.toLocaleDateString('ru-RU')}</span>
-          <button type="button" onclick="openAssignModal(${a.user_id}, null, ${a.course_id})" class="text-xs font-semibold px-2.5 py-1 rounded-lg bg-blue-600 text-white hover:bg-blue-700 whitespace-nowrap">${_L('Записать на обучение', 'Оқуға жазу')}</button>
+          ${a.pending_status
+            ? `<button type="button" disabled class="text-xs font-semibold px-2.5 py-1 rounded-lg bg-slate-200 text-slate-500 cursor-not-allowed whitespace-nowrap" title="${_L('Тест уже назначен — повторно записывать не нужно', 'Тест тағайындалған')}">✓ ${_L('Уже записан', 'Жазылған')}</button>`
+            : `<button type="button" onclick="expAssignOne(${a.user_id}, ${a.course_id})" class="text-xs font-semibold px-2.5 py-1 rounded-lg bg-blue-600 text-white hover:bg-blue-700 whitespace-nowrap" title="${_L('Назначить тест, выдать логин/пароль и скачать уведомление', 'Тест тағайындау және хабарлау')}">${_L('Записать и уведомить', 'Жазу және хабарлау')}</button>`}
         </div>
       </div>
     `;
@@ -4249,7 +4251,33 @@ function assignExpiringSelected() {
     alert(_L('Сначала отметьте сотрудников галочками в списке.', 'Алдымен тізімде қызметкерлерді белгілеңіз.'));
     return;
   }
-  openAssignModal(null, [...expSelected]);
+  // курс: если у выбранных строк один курс — подставляем его в окно назначения
+  const sc = expScopeIds();
+  const rows = expData.filter(a => expSelected.has(Number(a.user_id)) && (!sc || sc.has(String(a.course_id))));
+  const courseIds = [...new Set(rows.map(a => String(a.course_id)))];
+  const courseId = courseIds.length === 1 ? courseIds[0] : null;
+  let ids = [...expSelected];
+  let already = [];
+  if (courseId) {
+    // уже записанных на этот курс (тест назначен, не сдан) повторно не записываем
+    already = ids.filter(id => {
+      const own = rows.filter(a => Number(a.user_id) === id && String(a.course_id) === courseId);
+      return own.length && own.every(a => a.pending_status);
+    });
+    ids = ids.filter(id => !already.includes(id));
+  }
+  if (!ids.length) {
+    alert(_L('Все выбранные уже записаны на обучение — повторно записывать не нужно.\nУведомление можно скачать ещё раз кнопкой «Уведомление повторно».', 'Таңдалғандардың бәрі жазылған.'));
+    return;
+  }
+  if (already.length) {
+    alert(_L(`${already.length} из выбранных уже записаны на этот курс — их пропускаем. Записываем: ${ids.length}.`, `${already.length} қызметкер бұрын жазылған — өткізіп жібереміз.`));
+  }
+  openAssignModal(null, ids, courseId, { notify: true });
+}
+// Кнопка в строке: записать одного сотрудника и сразу выдать уведомление
+function expAssignOne(userId, courseId) {
+  openAssignModal(null, [Number(userId)], courseId, { notify: true });
 }
 
 // Скачивает файл-уведомление (Сотрудник/Логин/Пароль + текст обращения) для выбранных
@@ -4261,6 +4289,12 @@ async function downloadCredentialsNoticeFromExpiring() {
     alert(_L('Нет сотрудников для уведомления.', 'Хабарлау үшін қызметкер жоқ.'));
     return;
   }
+  return downloadCredentialsNotice(ids);
+}
+
+// Скачивает уведомление (ФИО / логин / пароль) по списку id. Кому логин не выдан — сервер выдаёт его сам.
+// prefix — текст, который показать в итоговом сообщении перед списком новых логинов (например, «Записано: 5»).
+async function downloadCredentialsNotice(ids, prefix) {
   // Пароль сотрудника в файле всегда равен его логину (ничего отдельно не генерируется
   // и не «перевыпускается» — см. routes/export.js), поэтому дополнительный вопрос
   // про перевыпуск пароля больше не нужен.
@@ -4282,15 +4316,17 @@ async function downloadCredentialsNoticeFromExpiring() {
       try {
         const missing = JSON.parse(decodeURIComponent(escape(atob(missingHeader))));
         if (Array.isArray(missing) && missing.length) {
-          alert(_L(
-            `Файл скачан.\n\nУ ${missing.length} сотрудник(ов) логин/пароль не были указаны — созданы заново:\n${missing.join('\n')}`,
-            `Файл жүктелді.\n\n${missing.length} қызметкерде логин/құпия сөз көрсетілмеген — қайта жасалды:\n${missing.join('\n')}`
+          alert((prefix ? prefix + '\n\n' : '') + _L(
+            `Файл-уведомление скачан.\n\nУ ${missing.length} сотрудник(ов) не было логина — выданы автоматически (пароль = логин):\n${missing.join('\n')}`,
+            `Файл жүктелді.\n\n${missing.length} қызметкерде логин болмаған — автоматты берілді:\n${missing.join('\n')}`
           ));
+          return;
         }
       } catch (e) { /* заголовок не критичен для скачивания */ }
     }
+    if (prefix) alert(prefix + '\n\n' + _L('Файл-уведомление скачан (логин и пароль у всех уже были).', 'Хабарлама жүктелді.'));
   } catch (e) {
-    alert('Не удалось сформировать файл: ' + (e.message || 'ошибка сервера'));
+    alert((prefix ? prefix + '\n\n' : '') + 'Не удалось сформировать уведомление: ' + (e.message || 'ошибка сервера'));
   }
 }
 
@@ -7613,9 +7649,12 @@ function ensureAssignModal() {
 }
 
 let assignModalOpening = false;
-async function openAssignModal(presetUserId, presetUserIds, presetCourseId) {
+// opts.notify — после записи сразу выдать логины (кому нет) и скачать уведомление (из «Просрочено и скоро истекает»)
+let asNotifyAfter = false;
+async function openAssignModal(presetUserId, presetUserIds, presetCourseId, opts) {
   if (assignModalOpening) return;           // защита от повторных нажатий, пока грузятся списки
   assignModalOpening = true;
+  asNotifyAfter = !!(opts && opts.notify);
   try {
     ensureAssignModal();
     await _openAssignModalImpl(presetUserId, presetUserIds, presetCourseId);
@@ -7963,8 +8002,17 @@ async function submitAssignForm(e) {
   }
   const res = await api.createAssignmentsBulk(data);
   document.getElementById('assignModal').classList.add('hidden');
-  if (res.skipped) {
-    alert(`Назначено: ${res.created}. Пропущено (некорректный id): ${res.skipped}.`);
+  const notify = asNotifyAfter;
+  asNotifyAfter = false;
+  const alreadyMsg = res.already_assigned ? _L(`Уже были записаны на этот курс (повторно не записаны): ${res.already_assigned}.`, `Бұрын жазылғандар: ${res.already_assigned}.`) : '';
+  if (notify && !historical) {
+    // записали → выдаём логины тем, у кого нет, и скачиваем уведомление на записанных
+    const notifyIds = (res.user_ids && res.user_ids.length) ? res.user_ids : [];
+    const head = _L(`Записано на обучение: ${res.created}.`, `Оқуға жазылды: ${res.created}.`) + (alreadyMsg ? '\n' + alreadyMsg : '');
+    if (notifyIds.length) await downloadCredentialsNotice(notifyIds, head);
+    else alert(head);
+  } else if (res.skipped || res.already_assigned) {
+    alert(`Назначено: ${res.created}.` + (res.skipped ? ` Пропущено (некорректный id): ${res.skipped}.` : '') + (alreadyMsg ? '\n' + alreadyMsg : ''));
   }
   // Назначали с карточки сотрудника — обновляем именно её, а не список всех назначений.
   // Назначали с главной (виджет «Скоро истекает») — обновляем весь дашборд, чтобы
@@ -7980,6 +8028,10 @@ async function submitAssignForm(e) {
   } else if (document.getElementById('coursesList')) {
     // Назначали "всем непрошедшим" со страницы курсов — обновляем счётчики на карточках
     loadCoursesList();
+  } else if (document.getElementById('expiringList')) {
+    // главная — «Просрочено и скоро истекает»: обновить список (кнопки «Уже записан»)
+    expSelected.clear();
+    loadExpiringWidget();
   }
 }
 
