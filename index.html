@@ -1994,7 +1994,10 @@ async function loadTabContent() {
       const overdueUsers = new Set();
       latestPassed.forEach(x => {
         const isOverdue = x.next_test_date && new Date(x.next_test_date) < now;
-        (isOverdue ? overdueUsers : passedUsers).add(x.user_id);
+        if (!isOverdue) { passedUsers.add(x.user_id); return; }
+        // просрочка — только там, где курс сотруднику обязателен (как в «Статистике по курсам» и списке ниже):
+        // руководитель, которому курс не обязателен, «просроченным» не считается
+        if (x.course_required !== false) overdueUsers.add(x.user_id);
       });
       document.getElementById('dashPassed').textContent = passedUsers.size;
       document.getElementById('dashPending').textContent = pendingUsers.size;

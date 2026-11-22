@@ -385,7 +385,9 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), a
     const { status, user_id, course_id, object, department, q, date_from, date_to, active_only, category } = req.query;
     let sql = `
       SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position, u.public_uid, u.staff_category,
-             c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.no_expiry, c.pass_score_percent, c.is_external
+             c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.no_expiry, c.pass_score_percent, c.is_external,
+             -- курс обязателен этому сотруднику (или курс вообще не обязательный) — для «Просрочено» на главной
+             (NOT c.is_mandatory OR ${require('./courses').mandatoryForSql('c', 'u')}) AS course_required
       FROM assignments a
       JOIN users u ON u.id = a.user_id
       JOIN courses c ON c.id = a.course_id
