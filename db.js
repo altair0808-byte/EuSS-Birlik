@@ -489,6 +489,11 @@ async function initDb() {
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS category_kz TEXT DEFAULT '';
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS no_expiry BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE assignments ADD COLUMN IF NOT EXISTS assigned_variant INT;
+    -- Продолжение теста после выхода: когда начата попытка, какие вопросы выданы, сохранённые ответы
+    ALTER TABLE assignments ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+    ALTER TABLE assignments ADD COLUMN IF NOT EXISTS question_ids BIGINT[];
+    ALTER TABLE assignments ADD COLUMN IF NOT EXISTS progress_answers JSONB;
+    ALTER TABLE assignments ADD COLUMN IF NOT EXISTS progress_violations INT NOT NULL DEFAULT 0;
     CREATE INDEX IF NOT EXISTS idx_questions_course_variant ON questions(course_id, variant_number);
 
     ALTER TABLE settings ADD COLUMN IF NOT EXISTS member2_name TEXT DEFAULT '';

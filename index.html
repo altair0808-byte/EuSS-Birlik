@@ -643,6 +643,7 @@ const api = {
   deleteAssignment(id) { return this.req('/api/assignments/' + id, { method: 'DELETE' }); },
   allowRetake(id) { return this.req('/api/assignments/' + id + '/allow-retake', { method: 'POST' }); },
   startTest(id) { return this.req('/api/assignments/' + id + '/start', { method: 'POST' }); },
+  saveTestProgress(id, answers, focus_violations) { return this.req('/api/assignments/' + id + '/progress', { method: 'POST', body: { answers, focus_violations } }); },
   submitTest(id, answers, focus_violations) { return this.req('/api/assignments/' + id + '/submit', { method: 'POST', body: { answers, focus_violations } }); },
   getSettings() { return this.req('/api/settings'); },
   saveSettings(data) { return this.req('/api/settings', { method: 'PUT', body: data }); },
@@ -2684,7 +2685,10 @@ async function loadTabContent() {
               <h3 class="text-base font-bold text-slate-900" id="testRunTitle">Тестирование</h3>
               <p class="text-xs text-slate-500 font-medium mt-0.5" id="testRunSubtitle">Вопрос 1 из 10</p>
             </div>
-            <span id="testRunTimer" class="font-mono font-bold text-red-600 bg-red-50 px-3 py-1 rounded-lg text-sm">00:00</span>
+            <div class="flex items-center gap-2">
+              <button type="button" onclick="pauseTest()" class="text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50" title="Ответы сохранятся, продолжить можно до конца отведённого времени">⏸ <span class="hidden sm:inline">Продолжить позже</span><span class="sm:hidden">Позже</span></button>
+              <span id="testRunTimer" class="font-mono font-bold text-red-600 bg-red-50 px-3 py-1 rounded-lg text-sm">00:00</span>
+            </div>
           </div>
 
           <!-- Кнопки быстрого перехода по номерам вопросов (1..10) -->
@@ -9323,6 +9327,10 @@ function myTestCardHtml(a, color) {
   let hintHtml = '';
   if (kind === 'failed') {
     hintHtml = `<p class="mt-3 text-sm font-semibold" style="color:${ST.fg}">${_L('Тест не сдан. Для пересдачи обратитесь к администратору.', 'Тест тапсырылмады. Қайта тапсыру үшін әкімшіге жүгініңіз.')}</p>`;
+  } else if (kind === 'started' && a.started_at) {
+    hintHtml = startedLeftMin > 0
+      ? `<p class="mt-3 text-sm font-semibold" style="color:${ST.fg}">${_L(`Тест начат, ответы сохранены. Можно продолжить — осталось около ${startedLeftMin} мин.`, `Тест басталды, жауаптар сақталды. ${startedLeftMin} мин қалды.`)}</p>`
+      : `<p class="mt-3 text-sm font-semibold" style="color:${ST.fg}">${_L('Время на тест вышло. Нажмите кнопку — будут засчитаны сохранённые ответы.', 'Уақыт бітті. Сақталған жауаптар есептеледі.')}</p>`;
   } else if (kind === 'started') {
     hintHtml = `<p class="mt-3 text-sm font-semibold" style="color:${ST.fg}">${_L('Тест был начат, но не завершён. Для новой попытки обратитесь к администратору.', 'Тест басталды, бірақ аяқталмады. Жаңа әрекет үшін әкімшіге жүгініңіз.')}</p>`;
   }
@@ -9333,7 +9341,11 @@ function myTestCardHtml(a, color) {
     a.protocol_number ? `${_L('Протокол', 'Хаттама')} № ${esc(a.protocol_number)}${a.protocol_date ? ' ' + _L('от', 'күні') + ' ' + fmtDate(a.protocol_date) : ''}` : ''
   ].filter(Boolean).join(' · ');
 
-  const canStart = kind === 'new' || kind === 'retake';
+  // Начатый тест можно продолжить, пока не вышло отведённое время (сервер считает от начала попытки)
+  const startedLeftMin = (kind === 'started' && a.started_at)
+    ? Math.ceil((new Date(a.started_at).getTime() + (a.time_limit_minutes || 20) * 60000 - Date.now()) / 60000) : null;
+  const canResume = kind === 'started' && a.started_at;   // время вышло — кнопка покажет результат
+  const canStart = kind === 'new' || kind === 'retake' || canResume;
   const mediaBtnCls = 'inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-800 text-sm font-bold transition';
 
   return `
@@ -9352,7 +9364,7 @@ function myTestCardHtml(a, color) {
           ${videoSrc ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(videoSrc)}', '${jsAttrEsc(title)}')" class="${mediaBtnCls}">🎬 ${_L('Видео', 'Бейне')}</button>` : ''}
           ${canStart ? `
             <button type="button" onclick="runTest(${a.id}, '${jsAttrEsc(title)}', ${a.time_limit_minutes || 20})" class="w-full sm:w-auto sm:ml-auto px-8 py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-xl text-base shadow-md transition">
-              ${kind === 'retake' ? '↻ ' + _L('Пересдать тест', 'Қайта тапсыру') : '▶ ' + _L('Начать тест', 'Тестті бастау')}
+              ${kind === 'started' ? (startedLeftMin > 0 ? '▶ ' + _L('Продолжить тест', 'Тестті жалғастыру') : '✓ ' + _L('Узнать результат', 'Нәтижені білу')) : kind === 'retake' ? '↻ ' + _L('Пересдать тест', 'Қайта тапсыру') : '▶ ' + _L('Начать тест', 'Тестті бастау')}
             </button>` : ''}
         </div>
       </div>
@@ -9460,7 +9472,51 @@ function parseOpts(raw) {
 function onTestVisibilityChange() {
   if (document.hidden && state.activeTest) {
     state.activeTest.violations = (state.activeTest.violations || 0) + 1;
+    testSaveNow(true);   // свернули / закрыли — сразу сохраняем ответы, чтобы потом продолжить
   }
+}
+
+// ---- Сохранение ответов по ходу теста (продолжение после выхода) ----
+let testSaveTimer = 0;
+function testQueueSave() {
+  clearTimeout(testSaveTimer);
+  testSaveTimer = setTimeout(() => testSaveNow(false), 800);
+}
+function testSaveNow(leaving) {
+  clearTimeout(testSaveTimer);
+  const t = state.activeTest;
+  if (!t) return;
+  try { syncAnswersFromDom(); } catch (e) {}
+  const body = JSON.stringify({ answers: t.answers || {}, focus_violations: t.violations || 0 });
+  if (leaving) {
+    // при закрытии вкладки обычный запрос может не успеть — keepalive доставит его даже после ухода со страницы
+    try {
+      fetch('/api/assignments/' + t.id + '/progress', {
+        method: 'POST', keepalive: true, body,
+        headers: { 'Content-Type': 'application/json', ...(state.token ? { 'Authorization': 'Bearer ' + state.token } : {}) }
+      }).catch(() => {});
+    } catch (e) {}
+    return;
+  }
+  api.saveTestProgress(t.id, t.answers || {}, t.violations || 0).catch(() => {});
+}
+window.addEventListener('pagehide', () => { if (state.activeTest) testSaveNow(true); });
+
+// «Продолжить позже»: ответы сохраняются, время продолжает идти; вернуться можно до конца отведённого времени
+async function pauseTest() {
+  if (!state.activeTest) return;
+  const mins = Math.max(0, Math.ceil((state.timeLeft || 0) / 60));
+  if (!confirm(_L(`Выйти из теста? Ответы сохранятся, и вы сможете продолжить с того же места.\n\nВнимание: время НЕ останавливается — осталось около ${mins} мин. Если не вернуться, по истечении времени будут засчитаны сохранённые ответы.`,
+                  `Тесттен шығасыз ба? Жауаптар сақталады. Уақыт тоқтамайды — шамамен ${mins} мин қалды.`))) return;
+  syncAnswersFromDom();
+  try { await api.saveTestProgress(state.activeTest.id, state.activeTest.answers || {}, state.activeTest.violations || 0); } catch (e) {}
+  clearInterval(state.timerInterval);
+  clearInterval(state.testTimer);
+  document.removeEventListener('visibilitychange', onTestVisibilityChange);
+  document.getElementById('testRunModal').classList.add('hidden');
+  document.body.style.overflow = '';
+  state.activeTest = null;
+  loadMyTests();
 }
 
 let currentTestIndex = 0;
@@ -9471,6 +9527,13 @@ async function runTest(assignmentId, title, timeLimitMinutes) {
     data = await api.startTest(assignmentId);
   } catch (e) {
     console.error('startTest failed', e);
+    if (e && e.data && e.data.error === 'time_expired') {
+      const d = e.data;
+      alert(_L('Время на тест истекло, пока вас не было. Засчитаны сохранённые ответы: ', 'Тест уақыты өтті. Сақталған жауаптар есептелді: ')
+        + (d.passed ? _L('тест СДАН', 'тест ТАПСЫРЫЛДЫ') : _L('тест не сдан', 'тест тапсырылмады')) + (d.scorePercent != null ? ` (${d.scorePercent}%)` : ''));
+      try { await loadMyTests(); } catch (err) {}
+      return;
+    }
     const raw = (e && e.message ? e.message : '').toLowerCase();
     const MESSAGES = [
       ['retake not allowed', 'Пересдача по этому курсу не разрешена. Попросите администратора открыть пересдачу в разделе «Назначения» (кнопка «Пересдача»).'],
@@ -9503,13 +9566,19 @@ async function runTest(assignmentId, title, timeLimitMinutes) {
     return;
   }
 
+  const resumed = !!(data && data.resume);
   state.activeTest = {
     id: assignmentId,
     questions: questions,
-    answers: {},
-    violations: 0
+    answers: (resumed && data.answers && typeof data.answers === 'object') ? { ...data.answers } : {},
+    violations: resumed ? (Number(data.violations) || 0) : 0
   };
   currentTestIndex = 0;
+  if (resumed) {
+    // открыть первый вопрос без ответа
+    const firstOpen = questions.findIndex(q => state.activeTest.answers[answerKey(q)] === undefined);
+    currentTestIndex = firstOpen >= 0 ? firstOpen : 0;
+  }
 
   document.getElementById('testRunTitle').textContent = title;
   document.getElementById('testRunModal').classList.remove('hidden');
@@ -9522,7 +9591,16 @@ async function runTest(assignmentId, title, timeLimitMinutes) {
 
   // Обратный отсчет таймера
   const timerEl = document.getElementById('testRunTimer');
-  state.timeLeft = Math.max(1, parseInt(timeLimitMinutes, 10) || 20) * 60;
+  // Время считает сервер от момента начала попытки: при продолжении — только оставшееся
+  state.timeLeft = (data && Number.isFinite(Number(data.remaining_seconds)) && Number(data.remaining_seconds) > 0)
+    ? Math.floor(Number(data.remaining_seconds))
+    : Math.max(1, parseInt(timeLimitMinutes, 10) || 20) * 60;
+  if (resumed) {
+    const answered = Object.keys(state.activeTest.answers).length;
+    const mm = Math.floor(state.timeLeft / 60), ss = String(state.timeLeft % 60).padStart(2, '0');
+    setTimeout(() => alert(_L(`Продолжаем тест с того места, где вы остановились.\nОтвечено вопросов: ${answered} из ${questions.length}. Осталось времени: ${mm}:${ss}.`,
+                              `Тестті жалғастырамыз. Жауап берілді: ${answered}/${questions.length}. Қалған уақыт: ${mm}:${ss}.`)), 50);
+  }
   const renderTimer = () => {
     const m = Math.floor(state.timeLeft / 60).toString().padStart(2, '0');
     const s = (state.timeLeft % 60).toString().padStart(2, '0');
@@ -9536,7 +9614,7 @@ async function runTest(assignmentId, title, timeLimitMinutes) {
     if (state.timeLeft <= 0) {
       clearInterval(state.timerInterval);
       alert('Время вышло! Тест будет завершен.');
-      finishTest();
+      finishTest(true);
     }
   }, 1000);
 }
@@ -9604,6 +9682,7 @@ function setAnswer(questionId, optIdx) {
   if (!state.activeTest) return;
   state.activeTest.answers[String(questionId)] = optIdx;
   renderTestStep();
+  testQueueSave();
 }
 
 // Снимаем выбранные варианты прямо из разметки — на случай, если событие
