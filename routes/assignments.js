@@ -433,9 +433,13 @@ router.get('/expiring', authRequired, requireRole('admin', 'assistant', 'superad
     if (departments.length) { params.push(departments); orgSql += ` AND u.department = ANY($${params.length}::text[])`; }
     const cats = splitMulti(category).filter(c => ['manager', 'specialist', 'employee'].includes(c));
     if (cats.length) { params.push(cats); orgSql += ` AND COALESCE(u.staff_category, 'employee') = ANY($${params.length}::text[])`; }
+    // Вахта сотрудника (на вахте / дома, даты текущей смены) — те же правила, что во вкладке «Сотрудники».
+    // Колонки rotation_* / overtime_* есть только в users, поэтому без префикса u. неоднозначности нет.
+    const ROTATION_SELECT = require('./users').ROTATION_SELECT || 'NULL AS rotation_status';
     const result = await query(`
       SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position, u.login, u.staff_category,
-             c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.is_external
+             c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.is_external,
+             ${ROTATION_SELECT}
       FROM assignments a
       JOIN users u ON u.id = a.user_id
       JOIN courses c ON c.id = a.course_id

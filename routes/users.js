@@ -1707,4 +1707,5 @@ router.delete('/:id', authRequired, requireRole('superadmin'), async (req, res) 
   }
 });
 
+router.ROTATION_SELECT = ROTATION_SELECT;
 module.exports = router;

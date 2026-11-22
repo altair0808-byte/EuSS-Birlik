@@ -3868,7 +3868,23 @@ function dashCreateSession(courseId) {
 
 // --- DASHBOARD: EXPIRING CERTIFICATES WIDGET (сортировка, фильтры, период, экспорт) ---
 let expData = [];
-const expState = { days: 30, q: '', course: '', status: 'overdue', sort: 'date_asc' };
+const expState = { days: 30, q: '', course: '', status: 'overdue', sort: 'date_asc', rot: '' };
+// Вахта в списке «Просрочено и скоро истекает»: on_shift / home / none (не указана)
+function expRotKey(a) { return a.rotation_status === 'on_shift' ? 'on_shift' : a.rotation_status === 'home' ? 'home' : 'none'; }
+function expRotShort(iso) { if (!iso) return ''; const [y, m, d] = String(iso).slice(0, 10).split('-'); return `${d}.${m}`; }
+function expRotText(a) {
+  const k = expRotKey(a);
+  if (k === 'on_shift') return a.overtime_active && !a.rotation_days_left && a.rotation_days_left !== 0
+    ? '👷 ' + _L('На вахте (овертайм)', 'Вахтада (овертайм)')
+    : '👷 ' + _L('На вахте', 'Вахтада') + (a.rotation_departure ? ' · ' + _L('отъезд', 'кетеді') + ' ' + expRotShort(a.rotation_departure) : '');
+  if (k === 'home') return '🏠 ' + _L('Дома', 'Үйде') + (a.rotation_arrival ? ' · ' + _L('заезд', 'келеді') + ' ' + expRotShort(a.rotation_arrival) : '');
+  return '❔ ' + _L('Вахта не указана', 'Вахта көрсетілмеген');
+}
+function expRotChip(a) {
+  const k = expRotKey(a);
+  const cls = k === 'on_shift' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : k === 'home' ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-slate-50 text-slate-500 border-slate-200';
+  return `<span class="text-[11px] font-semibold px-2 py-0.5 rounded-md border ${cls} whitespace-nowrap">${expRotText(a)}</span>`;
+}
 let expShowOnlySelected = false; // «Показать выбранных»: в списке только отмеченные сотрудники
 let expSelected = new Set(); // выбранные user_id — для скачивания уведомления с логинами/паролями (п.4 запроса)
 
@@ -3923,6 +3939,12 @@ function renderExpiringFilters() {
         ${opt('14', _L('Истекает ≤ 14 дней', '≤ 14 күнде аяқталады'), expState.status)}
         ${opt('30', _L('Истекает ≤ 30 дней', '≤ 30 күнде аяқталады'), expState.status)}
       </select>
+      <select id="expRot" onchange="onExpFilterChange()" class="${cls}" title="${_L('Вахта', 'Вахта')}">
+        ${opt('', _L('Вахта: все', 'Вахта: барлығы'), expState.rot)}
+        ${opt('on_shift', '👷 ' + _L('На вахте', 'Вахтада') + ` (${expData.filter(a => expRotKey(a) === 'on_shift').length})`, expState.rot)}
+        ${opt('home', '🏠 ' + _L('Дома', 'Үйде') + ` (${expData.filter(a => expRotKey(a) === 'home').length})`, expState.rot)}
+        ${opt('none', '❔ ' + _L('Вахта не указана', 'Көрсетілмеген') + ` (${expData.filter(a => expRotKey(a) === 'none').length})`, expState.rot)}
+      </select>
       <select id="expCourse" onchange="onExpFilterChange()" class="${cls}">
         ${opt('', _L('Все курсы', 'Барлық курстар'), expState.course)}${courses.map(c => opt(c, c, expState.course)).join('')}
       </select>
@@ -3954,6 +3976,7 @@ function onExpFilterChange() {
   expState.q = document.getElementById('expQ').value;
   expState.status = document.getElementById('expStatus').value;
   expState.course = document.getElementById('expCourse').value;
+  const rotEl = document.getElementById('expRot'); expState.rot = rotEl ? rotEl.value : '';
   expState.sort = document.getElementById('expSort').value;
   clearTimeout(expFilterTimeout);
   expFilterTimeout = setTimeout(renderExpiringList, 120);
@@ -3965,7 +3988,7 @@ function onExpDaysChange() {
 }
 
 function resetExpFilters() {
-  Object.assign(expState, { q: '', course: '', status: 'overdue', sort: 'date_asc' });
+  Object.assign(expState, { q: '', course: '', status: 'overdue', sort: 'date_asc', rot: '' });
   expShowOnlySelected = false;
   renderExpiringFilters();
   renderExpiringList();
@@ -3984,6 +4007,7 @@ function getExpiringFiltered() {
     if (scopeIds && !scopeIds.has(String(a.course_id))) return false;
     if (['7', '14', '30'].includes(expState.status) && !(dl >= 0 && dl <= Number(expState.status))) return false;
     if (expState.course && title(a) !== expState.course) return false;
+    if (expState.rot && expRotKey(a) !== expState.rot) return false;
     if (q) {
       const hay = `${a.last_name} ${a.first_name} ${title(a)} ${a.object || ''} ${a.department || ''} ${a.position || ''} ${posLabel(a.position || '')}`.toLowerCase();
       if (!hay.includes(q)) return false;
@@ -4036,7 +4060,7 @@ function renderExpiringList() {
               <span class="text-xs font-mono text-slate-500" title="${_L('Логин', 'Логин')}">${_L('логин', 'логин')}: ${a.login ? esc(a.login) : '—'}</span>
               <span class="text-xs font-semibold px-2 py-0.5 rounded-md" style="border:1.5px solid ${col.fg};background:${col.bg};color:${col.fg}" title="${esc(catLabelOf(a))}">${esc(CURRENT_LANG === 'kz' ? a.title_kz : a.title_ru)}</span>
             </div>
-            <div class="text-xs text-slate-500 mt-0.5">${esc(a.object || '—')} / ${esc(a.department || '—')}</div>
+            <div class="flex flex-wrap items-center gap-2 text-xs text-slate-500 mt-0.5">${esc(a.object || '—')} / ${esc(a.department || '—')} ${expRotChip(a)}</div>
           </div>
         </div>
         <div class="flex items-center gap-2">
@@ -4138,9 +4162,9 @@ function exportExpiringCsv() {
   const list = getExpiringFiltered();
   const title = a => (CURRENT_LANG === 'kz' ? (a.title_kz || a.title_ru) : (a.title_ru || a.title_kz)) || '';
   const q = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
-  const rows = [['ФИО', 'Курс', 'Объект', 'Отдел', 'Должность', 'Действителен до', 'Осталось дней']];
+  const rows = [['ФИО', 'Курс', 'Объект', 'Отдел', 'Должность', 'Действителен до', 'Осталось дней', 'Вахта']];
   list.forEach(a => rows.push([`${a.last_name} ${a.first_name}`, title(a), a.object, a.department, posLabel(a.position),
-    new Date(a.next_test_date).toLocaleDateString('ru-RU'), expDaysLeft(a)]));
+    new Date(a.next_test_date).toLocaleDateString('ru-RU'), expDaysLeft(a), expRotText(a).replace(/^\S+\s/, '')]));
   const csv = '\uFEFF' + rows.map(r => r.map(q).join(';')).join('\r\n');
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
   const a = document.createElement('a');
@@ -8135,7 +8159,9 @@ function renderProtocolsView() {
         </span>
         ${p.status === 'revoked' && p.revoke_reason ? `<div class="text-[11px] text-red-500 mt-1" title="${esc(p.revoke_reason)}">${esc(p.revoke_reason)}</div>` : ''}
       </td>
-      <td class="px-4 py-3 text-slate-600">${p.assignments_count || 0}</td>
+      <td class="px-4 py-3 text-slate-600">${(orgActive() && p.assignments_total != null && p.assignments_total !== p.assignments_count)
+        ? `<span title="${esc(_L('Слева — сотрудники выбранного вверху объекта/отдела, справа — всего в протоколе', 'Сол жақта — сүзгі бойынша, оң жақта — барлығы'))}">${p.assignments_count || 0} <span class="text-slate-400">${_L('из', '/')} ${p.assignments_total}</span></span>`
+        : (p.assignments_total != null && !orgActive() ? p.assignments_total : (p.assignments_count || 0))}</td>
       <td class="px-4 py-3 text-right space-x-2 whitespace-nowrap">
         <button onclick="downloadProtocolDocx(${p.id})" class="text-indigo-600 hover:underline text-xs font-semibold">Скачать Word</button>
         <button onclick="downloadProtocolPdf(${p.id})" class="text-purple-600 hover:underline text-xs font-semibold">Скачать PDF</button>
@@ -8205,6 +8231,7 @@ async function openProtocolMembersModal(id) {
         <button type="button" onclick="downloadProtocolPdf(${id})" class="text-purple-600 hover:underline text-xs font-semibold">Скачать PDF</button>
       </div>
       <div id="protoSignBlock" class="mb-4"></div>
+      ${data.members.length ? `<div class="text-sm text-slate-600 mb-2">${_L('Сотрудников в протоколе', 'Хаттамадағы қызметкерлер')}: <b>${new Set(data.members.map(m => m.user_id)).size}</b>${new Set(data.members.map(m => m.user_id)).size !== data.members.length ? ` · ${_L('записей', 'жазба')}: ${data.members.length}` : ''}</div>` : ''}
       ${membersHtml}
     `;
     loadProtocolSignBlock(id);

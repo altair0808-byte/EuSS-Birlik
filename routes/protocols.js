@@ -178,7 +178,10 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), r
         WHERE u.role = 'employee' AND ${MEMBER_JOIN}
           AND (cardinality($1::text[]) = 0 OR u.object = ANY($1::text[]))
           AND (cardinality($2::text[]) = 0 OR u.department = ANY($2::text[]))
-      ) AS assignments_count
+      ) AS assignments_count, (
+        SELECT COUNT(DISTINCT a.user_id)::int FROM assignments a JOIN users u ON u.id = a.user_id
+        WHERE u.role = 'employee' AND ${MEMBER_JOIN}
+      ) AS assignments_total
       FROM protocols p
       ORDER BY p.open_date DESC, p.id DESC
     `, [objects, departments]);
