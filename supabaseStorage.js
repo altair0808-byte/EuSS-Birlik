@@ -31,8 +31,14 @@ function getClient() {
     );
   }
   if (!client) {
+    // Новые версии supabase-js при создании клиента требуют WebSocket (для Realtime), а в Node 20
+    // встроенного WebSocket нет — без этого падала загрузка файлов: «Node.js 20 detected without native
+    // WebSocket support». Realtime нам не нужен, но транспорт передаём, чтобы клиент создавался.
+    let WS = globalThis.WebSocket;
+    if (!WS) { try { WS = require('ws'); } catch (e) { WS = undefined; } }
     client = createClient(SUPABASE_URL, SUPABASE_KEY, {
-      auth: { persistSession: false }
+      auth: { persistSession: false },
+      ...(WS ? { realtime: { transport: WS } } : {})
     });
   }
   return client;
