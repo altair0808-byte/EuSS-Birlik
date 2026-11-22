@@ -10,13 +10,15 @@ FROM node:20-bookworm-slim
 # ЗАПУЩЕННОМУ LibreOffice (см. start.sh) вместо того, чтобы поднимать его заново
 # на каждый запрос (иначе каждое «Скачать PDF» — это заново запустить весь
 # LibreOffice, 10-40+ секунд на слабом сервере). Шрифты — чтобы кириллица в PDF
-# не превращалась в кракозябры.
+# не превращалась в кракозябры. Именно fonts-liberation2 (Liberation 2.x): в старом fonts-liberation 1.07
+# нет казахских букв (Ә Ғ Қ Ң Ө Ұ Ү Һ І) — LibreOffice подставлял для них DejaVu Serif, и ФИО с
+# казахскими буквами в PDF-протоколе выглядели другим шрифтом, чем остальные.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libreoffice-writer \
       unoconv \
       python3-uno \
       fonts-dejavu \
-      fonts-liberation \
+      fonts-liberation2 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
