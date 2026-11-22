@@ -63,6 +63,7 @@ app.use('/api/audit', require('./routes/audit'));
 app.use('/api/drive', require('./routes/drive'));
 // Веб-пуши: ключ, подписка устройства, тестовое уведомление (lib/push.js)
 app.use('/api/push', require('./routes/push'));
+app.use('/api/staff-notifications', require('./routes/staffNotifications'));
 
 // Иконка сайта (favicon). Корень проекта не раздаётся как статика, а catch-all `app.get('*')` ниже отдаёт
 // index.html на любой неизвестный путь — поэтому иконки отдаются явно и ДО него. /favicon.ico нужен тем

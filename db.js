@@ -673,6 +673,24 @@ async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_course_positions_key ON course_positions(key);
   `);
 
+  // Уведомления для администраторов: «сотрудник, которого вы записали, сдал / не сдал тест»
+  // (колокольчик в шапке сайта, routes/staffNotifications.js; дублируются веб-пушем, если он включён)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS staff_notifications (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      assignment_id BIGINT REFERENCES assignments(id) ON DELETE CASCADE,
+      employee_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+      employee_name TEXT NOT NULL DEFAULT '',
+      course_title TEXT NOT NULL DEFAULT '',
+      score INT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      read_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_staff_notif_user ON staff_notifications(user_id, created_at DESC);
+  `);
+
   // Веб-пуши (lib/push.js, routes/push.js): подписки устройств и журнал уже отправленных напоминаний
   // о сроке обучения (чтобы одно и то же напоминание по одной записи не уходило дважды).
   await pool.query(`

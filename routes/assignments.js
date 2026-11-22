@@ -666,6 +666,9 @@ router.post('/:id/submit', authRequired, async (req, res) => {
       driveSync.enqueueIdCard(a.id, req);
     }
 
+    // уведомить того, кто записал сотрудника на обучение (колокольчик + пуш), не задерживая ответ
+    require('../lib/staffNotify').notifyTestResult(a, passed, scorePercent);
+
     res.json({ passed, scorePercent, certificate_number: certNum, protocol_number: protocolNumber });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });

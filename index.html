@@ -1213,6 +1213,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 function logout() {
+  if (SN.timer) { clearInterval(SN.timer); SN.timer = 0; SN.unread = 0; SN.items = []; snClose(); }
   if (typeof pwaOnLogout === 'function') pwaOnLogout(state.token);   // отвязать уведомления этого устройства от выходящего пользователя
   state.token = null;
   state.user = null;
@@ -1449,6 +1450,7 @@ function labelResponsiveTables(root) {
 function render() {
   const app = document.getElementById('app');
   if (!state.token || !state.user) {
+    if (SN.timer) { clearInterval(SN.timer); SN.timer = 0; SN.unread = 0; SN.items = []; }
     renderLogin(app);
     return;
   }
@@ -1456,6 +1458,7 @@ function render() {
 }
 
 function renderLogin(app) {
+  if (snIsStaff() && !SN.timer) setTimeout(snStart, 0);   // колокольчик результатов тестов
   app.innerHTML = `
     <div class="min-h-screen flex items-center justify-center p-4">
       <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-8 fade-in border border-slate-200">
@@ -1499,6 +1502,94 @@ function setPwNagOff() {
   const m = document.getElementById('pwModal'); if (m) m.remove();
   render();
 }
+// ===== Колокольчик: «сотрудник, которого вы записали, сдал / не сдал тест» =====
+const SN = { unread: 0, items: [], timer: 0, open: false };
+function snIsStaff() { return !!(state && state.user && ['superadmin', 'admin', 'assistant'].includes(state.user.role)); }
+async function snRefresh() {
+  if (!snIsStaff() || !state.token) return;
+  try {
+    const r = await api.req('/api/staff-notifications');
+    const prev = SN.unread;
+    SN.unread = r.unread || 0; SN.items = r.items || [];
+    const b = document.getElementById('snBadge');
+    if (b) { b.textContent = SN.unread > 99 ? '99+' : String(SN.unread); b.classList.toggle('hidden', !SN.unread); }
+    if (SN.open) snRenderPanel();
+    if (SN.unread > prev && prev >= 0 && SN._loaded && document.hidden === false) {
+      const b2 = document.getElementById('snBell'); if (b2) { b2.classList.add('animate-bounce'); setTimeout(() => b2.classList.remove('animate-bounce'), 2500); }
+    }
+    SN._loaded = true;
+  } catch (e) { /* не критично */ }
+}
+function snStart() {
+  clearInterval(SN.timer);
+  if (!snIsStaff()) return;
+  snRefresh();
+  SN.timer = setInterval(() => { if (!document.hidden) snRefresh(); }, 60 * 1000);
+}
+function snTimeAgo(iso) {
+  const d = new Date(iso); const m = Math.round((Date.now() - d) / 60000);
+  if (m < 1) return _L('только что', 'жаңа ғана');
+  if (m < 60) return `${m} ${_L('мин назад', 'мин бұрын')}`;
+  if (m < 60 * 24) return `${Math.round(m / 60)} ${_L('ч назад', 'сағ бұрын')}`;
+  return d.toLocaleDateString('ru-RU') + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+}
+function snRenderPanel() {
+  let p = document.getElementById('snPanel');
+  if (!p) return;
+  const items = SN.items;
+  p.innerHTML = `
+    <div class="flex items-center justify-between px-4 py-3 border-b">
+      <div class="font-bold text-slate-900 text-sm">🔔 ${_L('Результаты тестов', 'Тест нәтижелері')}</div>
+      <button onclick="snMarkAll()" class="text-xs text-blue-600 hover:underline font-semibold ${SN.unread ? '' : 'invisible'}">${_L('Прочитать все', 'Барлығын оқу')}</button>
+    </div>
+    <div class="max-h-[60vh] overflow-y-auto divide-y">
+      ${items.length ? items.map(n => {
+        const ok = n.kind === 'test_passed';
+        return `<button type="button" onclick="snOpen(${n.id}, ${n.employee_id || 'null'})" class="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex gap-3 ${n.read_at ? '' : 'bg-blue-50/60'}">
+          <span class="text-lg leading-none mt-0.5">${ok ? '✅' : '❌'}</span>
+          <span class="min-w-0 flex-1">
+            <span class="block text-sm ${n.read_at ? 'text-slate-700' : 'text-slate-900 font-semibold'}">${esc(n.employee_name || '—')} — ${ok ? _L('сдал', 'тапсырды') : `<span class="text-red-700">${_L('не сдал', 'тапсырмады')}</span>`}${n.score != null ? ` · ${n.score}%` : ''}</span>
+            <span class="block text-xs text-slate-500 truncate">${esc(n.course_title || '')}</span>
+            <span class="block text-[11px] text-slate-400">${snTimeAgo(n.created_at)}</span>
+          </span>
+        </button>`;
+      }).join('') : `<div class="px-4 py-6 text-sm text-slate-500 text-center">${_L('Пока пусто. Здесь появятся результаты тестов сотрудников, которых вы записали на обучение.', 'Әзірге бос.')}</div>`}
+    </div>
+    <div class="px-4 py-2.5 border-t text-center">
+      <button onclick="snClose(); openAppSettingsModal();" class="text-xs text-slate-600 hover:text-blue-600 font-semibold">📱 ${_L('Получать на телефон (push)', 'Телефонға алу (push)')}</button>
+    </div>`;
+}
+function toggleStaffNotif(ev) {
+  if (ev) ev.stopPropagation();
+  if (SN.open) return snClose();
+  SN.open = true;
+  const p = document.createElement('div');
+  p.id = 'snPanel';
+  p.className = 'fixed z-[120] bg-white rounded-xl shadow-2xl border border-slate-200 w-[min(380px,calc(100vw-16px))]';
+  const btn = document.getElementById('snBell');
+  const r = btn ? btn.getBoundingClientRect() : { bottom: 56, right: window.innerWidth - 8 };
+  p.style.top = (r.bottom + 6) + 'px';
+  p.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
+  p.onclick = (e) => e.stopPropagation();
+  document.body.appendChild(p);
+  snRenderPanel();
+  snRefresh();
+  setTimeout(() => document.addEventListener('click', snClose, { once: true }), 0);
+}
+function snClose() { SN.open = false; const p = document.getElementById('snPanel'); if (p) p.remove(); }
+async function snMarkAll() {
+  try { await api.req('/api/staff-notifications/read', { method: 'POST', body: {} }); } catch (e) {}
+  SN.items.forEach(n => { n.read_at = n.read_at || new Date().toISOString(); }); SN.unread = 0;
+  const b = document.getElementById('snBadge'); if (b) b.classList.add('hidden');
+  snRenderPanel();
+}
+async function snOpen(id, employeeId) {
+  try { await api.req('/api/staff-notifications/read', { method: 'POST', body: { ids: [id] } }); } catch (e) {}
+  snClose();
+  snRefresh();
+  if (employeeId) openUserProfile(employeeId);
+}
+
 function openChangePassword() {
   let m = document.getElementById('pwModal');
   if (m) m.remove();
@@ -1722,6 +1813,7 @@ function renderMain(app) {
         </div>
         <div class="flex items-center space-x-2 sm:space-x-3 shrink-0">
           
+          ${['superadmin', 'admin', 'assistant'].includes(state.user.role) ? `<button id="snBell" onclick="toggleStaffNotif(event)" title="${_L('Результаты тестов', 'Тест нәтижелері')}" class="relative text-xs font-semibold px-2 sm:px-2.5 py-1.5 border rounded-lg text-slate-700 hover:bg-slate-50">🔔<span id="snBadge" class="${SN.unread ? '' : 'hidden'} absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold leading-[18px] text-center">${SN.unread > 99 ? '99+' : SN.unread}</span></button>` : ''}
           <button onclick="switchLang(CURRENT_LANG === 'ru' ? 'kz' : 'ru')" class="text-xs font-semibold px-2 sm:px-2.5 py-1.5 border rounded-lg text-slate-700 hover:bg-slate-50">
             ${CURRENT_LANG === 'ru' ? 'ҚАЗ' : 'РУС'}
           </button>
