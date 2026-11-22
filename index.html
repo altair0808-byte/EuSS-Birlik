@@ -85,6 +85,7 @@
   #mediaViewerBox:fullscreen { border-radius: 0 !important; }
   #mediaViewerBox:-webkit-full-screen { border-radius: 0 !important; }
   #mvStage { display: flex; }
+  #mvStage.mv-feed { display: block; }
   #mvCanvas { margin: auto; flex: 0 0 auto; }
   .mv-btn { min-width: 36px; height: 34px; padding: 0 10px; border-radius: 8px; background: rgba(255,255,255,.12); color: #fff; font-size: 15px; font-weight: 600; line-height: 1; }
   .mv-btn:hover { background: rgba(255,255,255,.22); }
@@ -995,7 +996,7 @@ async function openPdfInViewer(absUrl, body) {
       <div class="mv-progress shrink-0"><div id="mvProgressBar" style="width:0%"></div></div>
       <div id="mvFinish" class="hidden shrink-0 bg-slate-900 px-3 pt-2 text-center">${mvFinishBtnHtml()}</div>
       <div class="flex items-center justify-center gap-2 px-3 py-2 bg-slate-900 shrink-0 flex-wrap" style="padding-bottom:max(.5rem, env(safe-area-inset-bottom))">
-        <button type="button" id="mvModeBtn" class="mv-btn" onclick="mvToggleMode()" title="${_L('Лента / по одному слайду', 'Лента / бір слайд')}">${_L('▤ Лента', '▤ Лента')}</button>
+        <button type="button" id="mvModeBtn" class="mv-btn" onclick="mvToggleMode()" title="${_L('Лента / по одному слайду', 'Лента / бір слайд')}">${_L('Лента', 'Лента')}</button>
         <button type="button" id="mvPrev" class="mv-btn mv-slide-only" onclick="mvGo(MV.page-1)" title="←">‹</button>
         <span id="mvPageInfo" class="text-slate-100 text-sm font-semibold min-w-[64px] text-center">–</span>
         <button type="button" id="mvNext" class="mv-btn mv-slide-only" onclick="mvGo(MV.page+1)" title="→">›</button>
@@ -1062,7 +1063,8 @@ function mvApplyMode(mode) {
   if (!stage) return;
   document.querySelectorAll('#mediaViewerBody .mv-slide-only').forEach(b => b.classList.toggle('hidden', mode === 'feed'));
   const mb = document.getElementById('mvModeBtn');
-  if (mb) mb.textContent = mode === 'feed' ? _L('▢ По слайду', '▢ Бір слайд') : _L('▤ Лента', '▤ Лента');
+  if (mb) mb.textContent = mode === 'feed' ? _L('Слайды', 'Слайдтар') : _L('Лента', 'Лента');
+  const fsb = document.getElementById('mvFs'); if (fsb) fsb.classList.toggle('hidden', mvIsPhone());
   if (MV.feedObs) { try { MV.feedObs.disconnect(); } catch (e) {} MV.feedObs = null; }
   if (MV.feedSeen) { try { MV.feedSeen.disconnect(); } catch (e) {} MV.feedSeen = null; }
   if (mode === 'feed') {
@@ -1085,7 +1087,7 @@ function mvToggleMode() {
 
 // Лента: все слайды друг под другом во всю ширину; рисуются только те, что рядом с экраном
 function mvRenderFeed(stage) {
-  stage.className = 'flex-1 min-h-0 overflow-y-auto overflow-x-hidden relative px-2 pt-2';
+  stage.className = 'mv-feed flex-1 min-h-0 overflow-y-auto overflow-x-hidden relative px-2 pt-2';
   const W = Math.max(200, stage.clientWidth - 16);
   const cssH = Math.round(W * MV.ratio);
   let html = '';
