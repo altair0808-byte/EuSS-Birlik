@@ -463,7 +463,33 @@ router.get('/expiring', authRequired, requireRole('admin', 'assistant', 'superad
         ${orgSql}
       ORDER BY a.next_test_date::timestamptz ASC
     `, params);
-    res.json(result.rows);
+    let rows = result.rows;
+    // ?untrained=1 — добавить тех, кому курс ОБЯЗАТЕЛЕН, но успешной записи по нему нет вообще
+    // (новые сотрудники и т.п.) — то же правило, что у «Не прошли обязательное обучение» на главной.
+    if (String(req.query.untrained || '') === '1') {
+      const u2 = await query(`
+        SELECT NULL::int AS id, u.id AS user_id, c.id AS course_id, NULL AS next_test_date, NULL AS test_date,
+               'untrained' AS row_kind,
+               (SELECT p.status FROM assignments p WHERE p.user_id = u.id AND p.course_id = c.id
+                  AND p.status IN ('pending', 'in_progress') ORDER BY p.id DESC LIMIT 1) AS pending_status,
+               u.last_name, u.first_name, u.object, u.department, u.position, u.login, u.staff_category,
+               c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.is_external,
+               ${ROTATION_SELECT}
+        FROM users u
+        CROSS JOIN courses c
+        WHERE u.role = 'employee'
+          AND u.active = 1
+          AND c.is_mandatory
+          AND ${kindSqlFilter(req.user, 'c')}
+          AND ${require('./courses').mandatoryForSql('c', 'u')}
+          AND NOT EXISTS (SELECT 1 FROM assignments a WHERE a.user_id = u.id AND a.course_id = c.id AND a.status = 'passed')
+          AND $1::text IS NOT NULL
+          ${orgSql}
+        ORDER BY u.last_name, u.first_name
+      `, params);
+      rows = rows.concat(u2.rows);
+    }
+    res.json(rows);
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }

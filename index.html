@@ -4016,14 +4016,17 @@ let expShowOnlySelected = false; // «Показать выбранных»: в 
 let expSelected = new Set(); // выбранные user_id — для скачивания уведомления с логинами/паролями (п.4 запроса)
 
 function expDaysLeft(a) {
+  if (expIsUntrained(a)) return -Infinity;
   return Math.ceil((new Date(a.next_test_date) - new Date()) / 86400000);
 }
+// Строка «не обучен»: курс обязателен, а успешной записи нет вообще (сервер присылает row_kind = 'untrained')
+function expIsUntrained(a) { return a && a.row_kind === 'untrained'; }
 
 async function loadExpiringWidget() {
   const div = document.getElementById('expiringList');
   if (!div) return;
   try {
-    expData = await api.getExpiring(expState.days, dashParams());
+    expData = await api.getExpiring(expState.days, { ...dashParams(), untrained: 1 });
     expSelected = new Set();
     renderExpiringFilters();
     renderExpiringList();
@@ -4048,6 +4051,7 @@ function renderExpiringFilters() {
     <div class="flex flex-wrap items-center gap-2 mb-3">
       ${pill('overdue', _L('Просрочено', 'Мерзімі өткен'), cn.o, 'bg-red-600 text-white border-red-600', 'bg-red-50 text-red-700 border-red-200')}
       ${pill('soon', _L('Скоро истекает', 'Жақында аяқталады'), cn.n, 'bg-amber-500 text-white border-amber-500', 'bg-amber-50 text-amber-700 border-amber-200')}
+      ${pill('untrained', _L('Не обучены', 'Оқымағандар'), cn.u, 'bg-violet-600 text-white border-violet-600', 'bg-violet-50 text-violet-700 border-violet-200')}
       ${pill('', _L('Все', 'Барлығы'), cn.all, 'bg-slate-700 text-white border-slate-700', 'bg-white text-slate-600 border-slate-300')}
       ${scope
         ? `<span class="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">${esc(scope)} <button type="button" onclick="clearExpScope()" class="font-black leading-none" title="${_L('Показать все курсы', 'Барлық курстар')}">×</button></span>`
@@ -4062,6 +4066,7 @@ function renderExpiringFilters() {
         ${opt('', _L('Любой статус', 'Кез келген күй'), expState.status)}
         ${opt('overdue', _L('Просрочено', 'Мерзімі өткен'), expState.status)}
         ${opt('soon', _L('Ещё не просрочено', 'Әлі мерзімі өтпеген'), expState.status)}
+        ${opt('untrained', _L('Не обучены (обязательно пройти)', 'Оқымағандар (міндетті)'), expState.status)}
         ${opt('7', _L('Истекает ≤ 7 дней', '≤ 7 күнде аяқталады'), expState.status)}
         ${opt('14', _L('Истекает ≤ 14 дней', '≤ 14 күнде аяқталады'), expState.status)}
         ${opt('30', _L('Истекает ≤ 30 дней', '≤ 30 күнде аяқталады'), expState.status)}
@@ -4129,6 +4134,9 @@ function getExpiringFiltered() {
   let list = expData.filter(a => {
     if (showSel) return expSelected.has(Number(a.user_id));   // «Показать выбранных» игнорирует статус/курс/поиск
     const dl = expDaysLeft(a);
+    const un = expIsUntrained(a);
+    if (expState.status === 'untrained' && !un) return false;
+    if (un && expState.status && expState.status !== 'untrained') return false;
     if (expState.status === 'overdue' && !(dl < 0)) return false;
     if (expState.status === 'soon' && dl < 0) return false;
     if (scopeIds && !scopeIds.has(String(a.course_id))) return false;
@@ -4144,8 +4152,8 @@ function getExpiringFiltered() {
   const loc = CURRENT_LANG === 'kz' ? 'kk' : 'ru';
   const fio = a => `${a.last_name} ${a.first_name}`;
   const cmp = {
-    date_asc: (a, b) => new Date(a.next_test_date) - new Date(b.next_test_date),
-    date_desc: (a, b) => new Date(b.next_test_date) - new Date(a.next_test_date),
+    date_asc: (a, b) => (expIsUntrained(b) - expIsUntrained(a)) || (new Date(a.next_test_date) - new Date(b.next_test_date)) || fio(a).localeCompare(fio(b), loc),
+    date_desc: (a, b) => (expIsUntrained(a) - expIsUntrained(b)) || (new Date(b.next_test_date) - new Date(a.next_test_date)) || fio(a).localeCompare(fio(b), loc),
     name_asc: (a, b) => fio(a).localeCompare(fio(b), loc),
     name_desc: (a, b) => fio(b).localeCompare(fio(a), loc),
     course: (a, b) => title(a).localeCompare(title(b), loc) || fio(a).localeCompare(fio(b), loc),
@@ -4169,15 +4177,16 @@ function renderExpiringList() {
     return;
   }
   div.innerHTML = list.map(a => {
+    const un = expIsUntrained(a);
     const nextDate = new Date(a.next_test_date);
     const daysLeft = expDaysLeft(a);
-    const overdue = daysLeft < 0;
+    const overdue = daysLeft < 0 && !un;
     const today = daysLeft === 0;
     const col = catColorOf(catKeyOf(a));   // цвет курса = цвет его категории (как на вкладке «Курсы»)
-    const badgeClass = overdue ? 'bg-red-100 text-red-800' : daysLeft <= 7 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700';
-    const badgeText = overdue ? `${Math.abs(daysLeft)} ${CURRENT_LANG === 'kz' ? 'күн' : 'дн.'} ${t('overdue')}` : today ? t('expires_today') : `${daysLeft} ${t('days_left')}`;
+    const badgeClass = un ? 'bg-violet-100 text-violet-800' : overdue ? 'bg-red-100 text-red-800' : daysLeft <= 7 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700';
+    const badgeText = un ? _L('Не обучен', 'Оқымаған') : overdue ? `${Math.abs(daysLeft)} ${CURRENT_LANG === 'kz' ? 'күн' : 'дн.'} ${t('overdue')}` : today ? t('expires_today') : `${daysLeft} ${t('days_left')}`;
     return `
-      <div class="flex flex-wrap items-center justify-between gap-2 p-3 rounded-lg border ${overdue ? 'border-red-200 bg-red-50/40' : 'border-slate-100'}">
+      <div class="flex flex-wrap items-center justify-between gap-2 p-3 rounded-lg border ${un ? 'border-violet-200 bg-violet-50/40' : overdue ? 'border-red-200 bg-red-50/40' : 'border-slate-100'}">
         <div class="flex items-start gap-2 min-w-0">
           <input type="checkbox" class="mt-1.5" onchange="toggleExpRow(${a.user_id}, this.checked)" ${expSelected.has(Number(a.user_id)) ? 'checked' : ''}>
           <div class="min-w-0">
@@ -4192,7 +4201,7 @@ function renderExpiringList() {
         </div>
         <div class="flex items-center gap-2">
           <span class="text-xs font-bold px-2.5 py-1 rounded-lg ${badgeClass}">${badgeText}</span>
-          <span class="text-xs text-slate-400">${nextDate.toLocaleDateString('ru-RU')}</span>
+          <span class="text-xs text-slate-400">${un ? (a.pending_status ? _L('тест назначен', 'тест тағайындалған') : _L('не назначен', 'тағайындалмаған')) : nextDate.toLocaleDateString('ru-RU')}</span>
           <button type="button" onclick="openAssignModal(${a.user_id}, null, ${a.course_id})" class="text-xs font-semibold px-2.5 py-1 rounded-lg bg-blue-600 text-white hover:bg-blue-700 whitespace-nowrap">${_L('Записать на обучение', 'Оқуға жазу')}</button>
         </div>
       </div>
@@ -4291,7 +4300,8 @@ function exportExpiringCsv() {
   const q = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
   const rows = [['ФИО', 'Курс', 'Объект', 'Отдел', 'Должность', 'Действителен до', 'Осталось дней', 'Вахта']];
   list.forEach(a => rows.push([`${a.last_name} ${a.first_name}`, title(a), a.object, a.department, posLabel(a.position),
-    new Date(a.next_test_date).toLocaleDateString('ru-RU'), expDaysLeft(a), expRotText(a).replace(/^\S+\s/, '')]));
+    expIsUntrained(a) ? '' : new Date(a.next_test_date).toLocaleDateString('ru-RU'),
+    expIsUntrained(a) ? (a.pending_status ? 'не обучен (тест назначен)' : 'не обучен') : expDaysLeft(a), expRotText(a).replace(/^\S+\s/, '')]));
   const csv = '\uFEFF' + rows.map(r => r.map(q).join(';')).join('\r\n');
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
   const a = document.createElement('a');
@@ -6496,12 +6506,13 @@ function expScopeLabel() {
 }
 function expCounts() {
   const sc = expScopeIds();
-  let o = 0, n = 0;
+  let o = 0, n = 0, u = 0;
   expData.forEach(a => {
     if (sc && !sc.has(String(a.course_id))) return;
-    if (expDaysLeft(a) < 0) o++; else n++;
+    if (expIsUntrained(a)) u++;
+    else if (expDaysLeft(a) < 0) o++; else n++;
   });
-  return { o, n, all: o + n };
+  return { o, n, u, all: o + n + u };
 }
 function expScopeChanged() {
   if (!document.getElementById('expiringList')) return;
