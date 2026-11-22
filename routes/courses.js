@@ -179,6 +179,9 @@ router.get('/stats/summary', authRequired, requireRole('admin', 'assistant', 'su
         (SELECT COUNT(*)::int FROM assignments a JOIN users u ON u.id = a.user_id
            WHERE u.role = 'employee' AND a.course_id = c.id AND a.status = 'passed' AND ${ORG_SQL}
             AND NULLIF(a.next_test_date, '') IS NOT NULL AND NULLIF(a.next_test_date, '')::timestamptz < NOW()
+            -- просрочка считается только у работающих и только там, где курс ему обязателен
+            -- (руководитель / специалист, для которых курс не обязателен, «просроченным» не считается)
+            AND u.active = 1 AND (NOT c.is_mandatory OR ${mandatoryForSql('c', 'u')})
             -- только актуальная запись: если сотрудник уже пересдал курс, старая просроченная не считается
             AND NOT EXISTS (
               SELECT 1 FROM assignments n
@@ -695,4 +698,5 @@ router.delete('/:id/variants/:variant', authRequired, requireRole('admin', 'supe
   }
 });
 
+router.mandatoryForSql = mandatoryForSql;
 module.exports = router;

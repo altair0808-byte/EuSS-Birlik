@@ -450,6 +450,10 @@ router.get('/expiring', authRequired, requireRole('admin', 'assistant', 'superad
         AND c.no_expiry = FALSE
         AND ${kindSqlFilter(req.user, 'c')}
         AND a.next_test_date::timestamptz <= NOW() + ($1 || ' days')::interval
+        -- обязательный курс — только тем, кому он обязателен (по категории / матрице должностей):
+        -- иначе руководитель, однажды прошедший курс «для сотрудников», висит в «Просрочено»,
+        -- а его сменщик-руководитель без записи нигде не считается
+        AND (NOT c.is_mandatory OR ${require('./courses').mandatoryForSql('c', 'u')})
         AND NOT EXISTS (
           SELECT 1 FROM assignments n
           WHERE n.user_id = a.user_id AND n.course_id = a.course_id AND n.status = 'passed'
