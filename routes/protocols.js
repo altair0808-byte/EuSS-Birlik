@@ -257,7 +257,7 @@ async function loadProtocolWithMembers(id) {
   const mRes = await query(`
     SELECT a.user_id, a.status, a.test_date,
            u.last_name, u.first_name, u.position, u.object, u.department,
-           u.permanent_certificate_number, u.tco_badge
+           u.permanent_certificate_number, u.tco_badge, u.login
     FROM protocols p
     JOIN assignments a ON ${MEMBER_JOIN}
     JOIN users u ON u.id = a.user_id AND u.role = 'employee'

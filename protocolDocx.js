@@ -716,7 +716,9 @@ function buildEmployeeRows(members) {
   }
   return [...byUser.values()].filter((e) => e.allPassed).map((e, i) => ({
     n: `${i + 1}.`,
-    cert: cleanText(e.permanent_certificate_number),
+    // № удостоверения = № сертификата сотрудника = его ЛОГИН (то же правило, что getCertNumberForUser в
+    // routes/assignments.js); нет логина — постоянный номер из карточки, затем номер из записи теста
+    cert: cleanText(e.login) || cleanText(e.permanent_certificate_number) || cleanText(e.certificate_number),
     fio: fullNameCyr(e.last_name, e.first_name),
     badge: cleanText(e.tco_badge),
     pos: toCyrillic(cleanText(e.position), false),
