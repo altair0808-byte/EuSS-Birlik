@@ -89,6 +89,11 @@
   .mv-btn { min-width: 36px; height: 34px; padding: 0 10px; border-radius: 8px; background: rgba(255,255,255,.12); color: #fff; font-size: 15px; font-weight: 600; line-height: 1; }
   .mv-btn:hover { background: rgba(255,255,255,.22); }
   .mv-btn:disabled { opacity: .35; cursor: default; }
+  .mv-feed-page { position: relative; width: 100%; background: #fff; margin: 0 auto 10px; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+  .mv-feed-page canvas { display: block; width: 100%; height: 100%; }
+  .mv-feed-num { position: absolute; right: 6px; bottom: 6px; font-size: 11px; font-weight: 700; color: #fff; background: rgba(15,23,42,.6); border-radius: 6px; padding: 1px 6px; }
+  .mv-progress { height: 3px; background: rgba(255,255,255,.15); }
+  .mv-progress > div { height: 100%; background: #3b82f6; transition: width .2s; }
   .test-scroll {
     min-height: 0;
     overflow-y: auto;
@@ -821,7 +826,16 @@ function loadPdfJs() {
   return _pdfjsPromise;
 }
 
-const MV = { doc: null, page: 1, total: 0, zoom: 1, token: 0, loadId: 0, ro: null, cache: new Map(), pages: new Map(), touchX: null, touchY: null, raf: 0 };
+const MV = { doc: null, page: 1, total: 0, zoom: 1, token: 0, loadId: 0, ro: null, cache: new Map(), pages: new Map(), touchX: null, touchY: null, raf: 0,
+  mode: 'slide', test: null, feedObs: null, feedSeen: null, ratio: 0.5625 };
+// Телефон: узкий экран или сенсор с маленькой стороной — презентация открывается на весь экран,
+// в вертикальном положении — лентой слайдов (листать пальцем вниз)
+function mvIsPhone() {
+  const small = Math.min(window.innerWidth, window.innerHeight) < 560;
+  const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+  return window.innerWidth < 768 || (coarse && small);
+}
+function mvPortrait() { return window.innerHeight > window.innerWidth; }
 
 function mvFullActive() {
   const box = document.getElementById('mediaViewerBox');
@@ -894,7 +908,7 @@ async function mvRenderToCanvas(n) {
 }
 
 async function mvShow() {
-  if (!MV.doc) return;
+  if (!MV.doc || MV.mode === 'feed') return;
   const my = ++MV.token;
   const n = MV.page;
   try {
@@ -915,7 +929,11 @@ async function mvShow() {
 
 function mvUpdateNav() {
   const info = document.getElementById('mvPageInfo');
-  if (info) info.textContent = `${MV.page} / ${MV.total}`;
+  if (info) info.textContent = MV.mode === 'feed' ? `${_L('Слайд', 'Слайд')} ${MV.page} ${_L('из', '/')} ${MV.total}` : `${MV.page} / ${MV.total}`;
+  const bar = document.getElementById('mvProgressBar');
+  if (bar) bar.style.width = (MV.total ? Math.round(MV.page / MV.total * 100) : 0) + '%';
+  const fin = document.getElementById('mvFinish');
+  if (fin) fin.classList.toggle('hidden', !(MV.total && MV.page >= MV.total) || MV.mode === 'feed');
   const pv = document.getElementById('mvPrev'), nx = document.getElementById('mvNext');
   if (pv) pv.disabled = MV.page <= 1;
   if (nx) nx.disabled = MV.page >= MV.total;
@@ -923,6 +941,7 @@ function mvUpdateNav() {
 
 function mvGo(n) {
   if (!MV.doc) return;
+  if (MV.mode === 'feed') { n = Math.max(1, Math.min(MV.total, n)); const el = document.getElementById('mvFeedPage' + n); if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
   n = Math.max(1, Math.min(MV.total, n));
   if (n === MV.page) return;
   MV.page = n;
@@ -953,7 +972,9 @@ function mvResetState() {
   MV.token++; MV.loadId++;
   if (MV.ro) { try { MV.ro.disconnect(); } catch (e) {} MV.ro = null; }
   if (MV.doc) { try { MV.doc.destroy(); } catch (e) {} }
-  MV.doc = null; MV.page = 1; MV.total = 0; MV.zoom = 1;
+  if (MV.feedObs) { try { MV.feedObs.disconnect(); } catch (e) {} MV.feedObs = null; }
+  if (MV.feedSeen) { try { MV.feedSeen.disconnect(); } catch (e) {} MV.feedSeen = null; }
+  MV.doc = null; MV.page = 1; MV.total = 0; MV.zoom = 1; MV.mode = 'slide';
   MV.cache.clear(); MV.pages.clear();
 }
 
@@ -971,13 +992,16 @@ async function openPdfInViewer(absUrl, body) {
         <canvas id="mvCanvas" class="bg-white shadow-lg"></canvas>
         <div id="mvLoading" class="absolute inset-0 flex items-center justify-center text-slate-200 text-sm pointer-events-none">${_L('Загрузка…', 'Жүктелуде…')}</div>
       </div>
-      <div class="flex items-center justify-center gap-2 px-3 py-2 bg-slate-900 shrink-0 flex-wrap">
-        <button type="button" id="mvPrev" class="mv-btn" onclick="mvGo(MV.page-1)" title="←">‹</button>
+      <div class="mv-progress shrink-0"><div id="mvProgressBar" style="width:0%"></div></div>
+      <div id="mvFinish" class="hidden shrink-0 bg-slate-900 px-3 pt-2 text-center">${mvFinishBtnHtml()}</div>
+      <div class="flex items-center justify-center gap-2 px-3 py-2 bg-slate-900 shrink-0 flex-wrap" style="padding-bottom:max(.5rem, env(safe-area-inset-bottom))">
+        <button type="button" id="mvModeBtn" class="mv-btn" onclick="mvToggleMode()" title="${_L('Лента / по одному слайду', 'Лента / бір слайд')}">${_L('▤ Лента', '▤ Лента')}</button>
+        <button type="button" id="mvPrev" class="mv-btn mv-slide-only" onclick="mvGo(MV.page-1)" title="←">‹</button>
         <span id="mvPageInfo" class="text-slate-100 text-sm font-semibold min-w-[64px] text-center">–</span>
-        <button type="button" id="mvNext" class="mv-btn" onclick="mvGo(MV.page+1)" title="→">›</button>
+        <button type="button" id="mvNext" class="mv-btn mv-slide-only" onclick="mvGo(MV.page+1)" title="→">›</button>
         <span class="w-px h-5 bg-slate-600 mx-1"></span>
-        <button type="button" class="mv-btn" onclick="mvSetZoom(MV.zoom-0.25)" title="−">−</button>
-        <button type="button" class="mv-btn" onclick="mvSetZoom(MV.zoom+0.25)" title="+">+</button>
+        <button type="button" class="mv-btn mv-slide-only" onclick="mvSetZoom(MV.zoom-0.25)" title="−">−</button>
+        <button type="button" class="mv-btn mv-slide-only" onclick="mvSetZoom(MV.zoom+0.25)" title="+">+</button>
         <button type="button" id="mvFs" class="mv-btn" onclick="toggleMediaFullscreen()" title="${_L('На весь экран', 'Толық экран')}">⛶</button>
       </div>
     </div>`;
@@ -985,7 +1009,7 @@ async function openPdfInViewer(absUrl, body) {
   // свайп пальцем влево/вправо — листание (когда страница не увеличена)
   stage.addEventListener('touchstart', (e) => { if (e.touches.length === 1) { MV.touchX = e.touches[0].clientX; MV.touchY = e.touches[0].clientY; } else { MV.touchX = null; } }, { passive: true });
   stage.addEventListener('touchend', (e) => {
-    if (MV.touchX === null || MV.zoom > 1) return;
+    if (MV.touchX === null || MV.zoom > 1 || MV.mode === 'feed') return;
     const t = e.changedTouches[0];
     const dx = t.clientX - MV.touchX, dy = t.clientY - MV.touchY;
     MV.touchX = null;
@@ -1009,18 +1033,113 @@ async function openPdfInViewer(absUrl, body) {
     const doc = await task.promise;
     if (loadId !== MV.loadId) { try { doc.destroy(); } catch (e) {} return; }
     MV.doc = doc; MV.total = doc.numPages; MV.page = 1;
-    mvUpdateNav();
-    mvShow();
+    try { const p1 = await doc.getPage(1); const v = p1.getViewport({ scale: 1 }); MV.ratio = v.height / v.width; } catch (e) {}
+    if (loadId !== MV.loadId) return;
+    mvApplyMode(mvIsPhone() && mvPortrait() ? 'feed' : 'slide');
   } catch (e) {
     console.warn('pdf.js недоступен, открываю встроенным просмотром:', e && e.message);
     if (loadId === MV.loadId) mvIframeFallback(body, absUrl);
   }
 }
 
+// Кнопка в конце презентации: «Перейти к тесту» (если презентацию открыли из карточки теста) или «Готово»
+function mvFinishBtnHtml() {
+  return MV.test
+    ? `<button type="button" onclick="mvStartTest()" class="w-full sm:w-auto px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-base">▶ ${_L('Перейти к тесту', 'Тестке өту')}</button>`
+    : `<button type="button" onclick="closeMediaViewer()" class="w-full sm:w-auto px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-base">✓ ${_L('Готово — закрыть', 'Дайын — жабу')}</button>`;
+}
+function mvStartTest() {
+  const t = MV.test; if (!t) return;
+  closeMediaViewer();
+  runTest(t.id, t.title, t.limit);
+}
+
+// Режим просмотра PDF: 'slide' — по одному слайду (стрелки, свайп, масштаб), 'feed' — все слайды лентой
+function mvApplyMode(mode) {
+  if (!MV.doc) return;
+  MV.mode = mode;
+  const stage = document.getElementById('mvStage');
+  if (!stage) return;
+  document.querySelectorAll('#mediaViewerBody .mv-slide-only').forEach(b => b.classList.toggle('hidden', mode === 'feed'));
+  const mb = document.getElementById('mvModeBtn');
+  if (mb) mb.textContent = mode === 'feed' ? _L('▢ По слайду', '▢ Бір слайд') : _L('▤ Лента', '▤ Лента');
+  if (MV.feedObs) { try { MV.feedObs.disconnect(); } catch (e) {} MV.feedObs = null; }
+  if (MV.feedSeen) { try { MV.feedSeen.disconnect(); } catch (e) {} MV.feedSeen = null; }
+  if (mode === 'feed') {
+    MV.zoom = 1;
+    mvRenderFeed(stage);
+  } else {
+    stage.className = 'flex-1 min-h-0 overflow-auto relative';
+    stage.innerHTML = `<canvas id="mvCanvas" class="bg-white shadow-lg"></canvas>`;
+    stage.scrollTop = 0;
+    mvShow();
+  }
+  mvUpdateNav();
+}
+function mvToggleMode() {
+  const keep = MV.page;
+  mvApplyMode(MV.mode === 'feed' ? 'slide' : 'feed');
+  if (MV.mode === 'slide') { MV.page = keep; mvUpdateNav(); mvShow(); }
+  else { const el = document.getElementById('mvFeedPage' + keep); if (el) el.scrollIntoView({ block: 'start' }); }
+}
+
+// Лента: все слайды друг под другом во всю ширину; рисуются только те, что рядом с экраном
+function mvRenderFeed(stage) {
+  stage.className = 'flex-1 min-h-0 overflow-y-auto overflow-x-hidden relative px-2 pt-2';
+  const W = Math.max(200, stage.clientWidth - 16);
+  const cssH = Math.round(W * MV.ratio);
+  let html = '';
+  for (let i = 1; i <= MV.total; i++) {
+    html += `<div class="mv-feed-page" id="mvFeedPage${i}" data-n="${i}" style="height:${cssH}px;max-width:${W}px"><span class="mv-feed-num">${i} / ${MV.total}</span></div>`;
+  }
+  html += `<div class="py-6 text-center">${mvFinishBtnHtml()}</div>`;
+  stage.innerHTML = html;
+  const draw = async (box) => {
+    if (box.dataset.drawn === '1') return;
+    box.dataset.drawn = '1';
+    try {
+      const n = Number(box.dataset.n);
+      const page = await MV.doc.getPage(n);
+      const w = box.clientWidth || W;
+      const v1 = page.getViewport({ scale: 1 });
+      let dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const scale = (w / v1.width) * dpr;
+      const vp = page.getViewport({ scale });
+      const cv = document.createElement('canvas');
+      cv.width = Math.floor(vp.width); cv.height = Math.floor(vp.height);
+      await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+      if (box.dataset.drawn !== '1') return;
+      box.style.height = Math.round(w * v1.height / v1.width) + 'px';
+      const old = box.querySelector('canvas'); if (old) old.remove();
+      box.insertBefore(cv, box.firstChild);
+    } catch (e) { box.dataset.drawn = ''; }
+  };
+  const clear = (box) => { if (box.dataset.drawn === '1') { box.dataset.drawn = ''; const c = box.querySelector('canvas'); if (c) c.remove(); } };
+  if (typeof IntersectionObserver === 'undefined') { stage.querySelectorAll('.mv-feed-page').forEach(draw); return; }
+  // рисуем слайды рядом с экраном, далёкие стираем — чтобы телефон не захлебнулся на 60 слайдах
+  MV.feedObs = new IntersectionObserver((entries) => {
+    entries.forEach(en => { if (en.isIntersecting) draw(en.target); else clear(en.target); });
+  }, { root: stage, rootMargin: '1500px 0px' });
+  // какой слайд сейчас на экране — для «Слайд N из M» и полоски прогресса
+  MV.feedSeen = new IntersectionObserver((entries) => {
+    entries.forEach(en => { if (en.isIntersecting) { MV.page = Number(en.target.dataset.n); mvUpdateNav(); } });
+  }, { root: stage, rootMargin: '-45% 0px -45% 0px' });
+  stage.querySelectorAll('.mv-feed-page').forEach(el => { MV.feedObs.observe(el); MV.feedSeen.observe(el); });
+}
+
+// Повернули телефон: вертикально — лента, горизонтально — слайд во весь экран
+window.addEventListener('orientationchange', () => setTimeout(() => {
+  const modal = document.getElementById('mediaViewerModal');
+  if (!modal || modal.classList.contains('hidden') || !MV.doc || !mvIsPhone()) return;
+  const want = mvPortrait() ? 'feed' : 'slide';
+  if (want !== MV.mode) { const keep = MV.page; mvApplyMode(want); if (want === 'slide') { MV.page = keep; mvUpdateNav(); mvShow(); } else { const el = document.getElementById('mvFeedPage' + keep); if (el) el.scrollIntoView({ block: 'start' }); } }
+}, 250));
+
 // Открывает материал/видео (файл на сервере или внешняя ссылка, напр. YouTube) во встроенном
 // модальном окне поверх сайта, вместо перехода в новую вкладку.
-function openMediaViewer(url, title) {
+function openMediaViewer(url, title, opts) {
   if (!url) return;
+  MV.test = (opts && opts.test) || null;
   const modal = document.getElementById('mediaViewerModal');
   const body = document.getElementById('mediaViewerBody');
   const titleEl = document.getElementById('mediaViewerTitle');
@@ -1037,6 +1156,11 @@ function openMediaViewer(url, title) {
 
   modal.classList.remove('hidden');
   modal.classList.add('flex');
+  // На телефоне — сразу во весь экран, без полей и рамок
+  const vbox = document.getElementById('mediaViewerBox');
+  const fsHdr = document.getElementById('mediaViewerFsBtn');
+  if (vbox && mvIsPhone()) { vbox.classList.add('mv-pseudo-full'); mvUpdateFsLabel(); if (fsHdr) fsHdr.classList.add('hidden'); }
+  else if (fsHdr) fsHdr.classList.remove('hidden');
 
   if (isPdfFileUrl(url)) {
     openPdfInViewer(absUrl, body);
@@ -1067,6 +1191,7 @@ function closeMediaViewer() {
   }
   if (box) box.classList.remove('mv-pseudo-full');
   mvResetState();
+  MV.test = null;
   modal.classList.add('hidden');
   modal.classList.remove('flex');
   body.innerHTML = ''; // останавливает воспроизведение видео/iframe при закрытии
@@ -9063,7 +9188,7 @@ function myTestCardHtml(a, color) {
         ${resultHtml}
         ${hintHtml}
         <div class="mt-5 flex flex-wrap items-center gap-3">
-          ${materialPath ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(materialPath)}', '${jsAttrEsc(title)}')" class="${mediaBtnCls}">📄 ${t('view_material')}</button>` : ''}
+          ${materialPath ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(materialPath)}', '${jsAttrEsc(title)}'${canStart ? `, { test: { id: ${a.id}, title: '${jsAttrEsc(title)}', limit: ${a.time_limit_minutes || 20} } }` : ''})" class="${mediaBtnCls}">📄 ${t('view_material')}</button>` : ''}
           ${videoSrc ? `<button type="button" onclick="openMediaViewer('${jsAttrEsc(videoSrc)}', '${jsAttrEsc(title)}')" class="${mediaBtnCls}">🎬 ${_L('Видео', 'Бейне')}</button>` : ''}
           ${canStart ? `
             <button type="button" onclick="runTest(${a.id}, '${jsAttrEsc(title)}', ${a.time_limit_minutes || 20})" class="w-full sm:w-auto sm:ml-auto px-8 py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-xl text-base shadow-md transition">
