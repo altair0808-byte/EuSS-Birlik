@@ -724,6 +724,48 @@ function buildEmployeeRows(members) {
   }));
 }
 
+// ---------- Таблица сотрудников: ширины колонок и выравнивание ----------
+// В исходном бланке колонка «№» очень узкая (360 twips): «10.» переносилось как «1 / 0.»,
+// «Confectionery» в колонке «Цех» рвалось на две строки, а в строках сотрудников часть ячеек
+// была выровнена по центру по вертикали, часть — по верху (№ пропуска «съезжал» вниз).
+// Здесь только перераспределяем ширину между колонками (общая ширина таблицы та же)
+// и ставим всем ячейкам строки сотрудника вертикальное выравнивание по центру.
+//                №    №удост  ФИО   Пропуск  Должность  Цех   Отметка  Прим.
+const COL_WIDTHS = [520, 696,   2250, 1000,    2840,      1400, 1710,    642];   // сумма = 11058, как в шаблоне
+
+function setCellWidths(trXml) {
+  let i = 0;
+  return trXml.replace(/<w:tc>[\s\S]*?<\/w:tc>/g, (tc) => {
+    const w = COL_WIDTHS[i++];
+    if (w === undefined || /<w:gridSpan /.test(tc)) return tc;
+    return tc.replace(/<w:tcW w:w="\d+" w:type="dxa"\/>/, `<w:tcW w:w="${w}" w:type="dxa"/>`);
+  });
+}
+
+function normalizeEmployeeTable(xml) {
+  // сетка таблицы
+  xml = xml.replace(/<w:tblGrid>[\s\S]*?<\/w:tblGrid>/, () =>
+    '<w:tblGrid>' + COL_WIDTHS.map((w) => `<w:gridCol w:w="${w}"/>`).join('') + '</w:tblGrid>');
+  // ширины ячеек во всех строках таблицы, где 8 ячеек (шапка и строки сотрудников)
+  xml = xml.replace(/<w:tbl>[\s\S]*?<\/w:tbl>/, (tbl) => tbl.replace(/<w:tr[ >][\s\S]*?<\/w:tr>/g, (tr) => {
+    const n = (tr.match(/<w:tc>/g) || []).length;
+    return n === COL_WIDTHS.length ? setCellWidths(tr) : tr;
+  }));
+  return xml;
+}
+
+function normalizeEmployeeRowTemplate(rowTpl) {
+  // всем ячейкам — по центру по вертикали
+  rowTpl = rowTpl.replace(/<w:tcPr>([\s\S]*?)<\/w:tcPr>/g, (m, inner) =>
+    /<w:vAlign /.test(inner) ? m : `<w:tcPr>${inner}<w:vAlign w:val="center"/></w:tcPr>`);
+  // в ячейке «Примечание» был лишний пустой абзац + абзац без размера шрифта (12 пт) —
+  // из-за этого строки становились выше. Оставляем один абзац 9 пт по центру.
+  rowTpl = rowTpl.replace(/<w:p [^>]*>(?:(?!<w:p[ >]).)*?<w:snapToGrid w:val="0"\/>(?:(?!<w:p[ >]).)*?<\/w:p>(?=<w:p [^>]*><w:r><w:t>\{\{COMMENT\}\})/s, '');
+  rowTpl = rowTpl.replace(/(<w:p [^>]*>)<w:r><w:t>\{\{COMMENT\}\}<\/w:t><\/w:r>/,
+    '$1<w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t>{{COMMENT}}</w:t></w:r>');
+  return rowTpl;
+}
+
 // dateStr — 'YYYY-MM-DD' (дата открытия протокола)
 function splitDate(dateStr) {
   const m = String(dateStr || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -757,7 +799,7 @@ async function buildProtocolDocx({ protocolNumber, openDate, members, signatures
   const rowRe = /<w:tr[ >](?:(?!<w:tr[ >]).)*?\{\{FIO\}\}.*?<\/w:tr>/s;
   const rowMatch = xml.match(rowRe);
   if (!rowMatch) throw new Error('В шаблоне протокола не найдена строка таблицы');
-  const rowTpl = rowMatch[0];
+  const rowTpl = normalizeEmployeeRowTemplate(rowMatch[0]);
   const employees = buildEmployeeRows(members);
   const rowsXml = employees.map((e) => rowTpl
     .replace('{{N}}', () => xmlEscape(e.n))
@@ -771,6 +813,7 @@ async function buildProtocolDocx({ protocolNumber, openDate, members, signatures
   ).join('');
   // функция-замена, чтобы «$» в данных не воспринимался как спецпоследовательность
   xml = xml.replace(rowRe, () => rowsXml);
+  xml = normalizeEmployeeTable(xml);
 
   if (Array.isArray(signatures) && signatures.length) {
     const byRole = Object.fromEntries(signatures.map((s) => [s.committee_role, s]));
