@@ -109,6 +109,23 @@ router.get('/overview', authRequired, STAFF, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'db_error', details: e.message }); }
 });
 
+// GET /api/medbooks/export.xlsx — все данные по санкнижкам (+ ежегодный медосмотр, если есть доступ)
+// в Excel; учитывает фильтр объекта/отдела/категории и зону ассистента
+router.get('/export.xlsx', authRequired, STAFF, async (req, res) => {
+  try {
+    const reqObjs = splitMulti(req.query.object), reqDeps = splitMulti(req.query.department);
+    const scope = scopedFilter(req.user, reqObjs, reqDeps);
+    const outOfZone = scope.noAccess || (req.user.role === 'assistant' && ((reqObjs.length && !scope.objects.length) || (reqDeps.length && !scope.departments.length)));
+    const cat = ['manager', 'specialist', 'employee'].includes(req.query.category) ? req.query.category : '';
+    const parts = { medbook: outOfZone ? [] : await mb.loadEntries({ objects: scope.objects, departments: scope.departments, category: cat }) };
+    if (require('../lib/adminFunctions').hasFunction(req.user, 'medexam')) {
+      parts.medexam = outOfZone ? [] : await require('./medexams').loadMedexamEntries(scope, cat);
+    }
+    const filterText = [reqObjs.join(', '), reqDeps.join(', ')].filter(Boolean).join(' / ');
+    await require('../lib/medExport').sendMedWorkbook(res, parts, filterText, 'medknizhki');
+  } catch (e) { if (!res.headersSent) res.status(500).json({ error: 'db_error', details: e.message }); }
+});
+
 // ---------- один сотрудник ----------
 async function sendUser(res, userId) {
   const e = await mb.loadEntryForUser(userId);

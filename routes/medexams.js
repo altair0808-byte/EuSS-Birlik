@@ -56,6 +56,34 @@ function summarize(rows) {
   return s;
 }
 
+// Загрузка строк медосмотра по зоне (для выгрузки в Excel, в т.ч. из раздела санкнижек)
+async function loadMedexamEntries(scope, cat) {
+  const params = [];
+  let sql = SELECT;
+  if (scope.objects.length) { params.push(scope.objects); sql += ` AND u.object = ANY($${params.length}::text[])`; }
+  if (scope.departments.length) { params.push(scope.departments); sql += ` AND u.department = ANY($${params.length}::text[])`; }
+  if (cat) { params.push(cat); sql += ` AND COALESCE(u.staff_category, 'employee') = $${params.length}`; }
+  sql += ' ORDER BY u.last_name, u.first_name';
+  const today = mb.todayYmd();
+  return (await query(sql, params)).rows.map((u) => entryOf(u, today));
+}
+
+// GET /api/medexams/export.xlsx — выгрузка (по фильтру объекта/отдела); если есть доступ к санкнижкам — и они
+router.get('/export.xlsx', authRequired, STAFF, async (req, res) => {
+  try {
+    const reqObjs = splitMulti(req.query.object), reqDeps = splitMulti(req.query.department);
+    const scope = scopedFilter(req.user, reqObjs, reqDeps);
+    const outOfZone = scope.noAccess || (req.user.role === 'assistant' && ((reqObjs.length && !scope.objects.length) || (reqDeps.length && !scope.departments.length)));
+    const cat = ['manager', 'specialist', 'employee'].includes(req.query.category) ? req.query.category : '';
+    const parts = { medexam: outOfZone ? [] : await loadMedexamEntries(scope, cat) };
+    if (require('../lib/adminFunctions').hasFunction(req.user, 'medbook')) {
+      parts.medbook = outOfZone ? [] : await mb.loadEntries({ objects: scope.objects, departments: scope.departments, category: cat });
+    }
+    const filterText = [reqObjs.join(', '), reqDeps.join(', ')].filter(Boolean).join(' / ');
+    await require('../lib/medExport').sendMedWorkbook(res, parts.medbook ? { medbook: parts.medbook, medexam: parts.medexam } : parts, filterText, 'medosmotr');
+  } catch (e) { if (!res.headersSent) res.status(500).json({ error: 'db_error', details: e.message }); }
+});
+
 router.get('/overview', authRequired, STAFF, async (req, res) => {
   try {
     const reqObjs = splitMulti(req.query.object), reqDeps = splitMulti(req.query.department);
@@ -269,4 +297,5 @@ router.post('/import', authRequired, STAFF, upload.single('file'), async (req, r
   }
 });
 
+router.loadMedexamEntries = loadMedexamEntries;
 module.exports = router;
