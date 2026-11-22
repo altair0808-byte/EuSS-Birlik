@@ -1553,7 +1553,7 @@ function snRenderPanel() {
             <span class="block text-[11px] text-slate-400">${snTimeAgo(n.created_at)}</span>
           </span>
         </button>`;
-      }).join('') : `<div class="px-4 py-6 text-sm text-slate-500 text-center">${_L('Пока пусто. Здесь появятся результаты тестов сотрудников, которых вы записали на обучение.', 'Әзірге бос.')}</div>`}
+      }).join('') : `<div class="px-4 py-6 text-sm text-slate-500 text-center">${state.user && state.user.role === 'assistant' ? _L('Пока пусто. Здесь появятся результаты тестов сотрудников вашей зоны (ваши объекты и отделы).', 'Әзірге бос.') : _L('Пока пусто. Здесь появятся результаты тестов сотрудников, которых вы записали на обучение.', 'Әзірге бос.')}</div>`}
     </div>
     <div class="px-4 py-2.5 border-t text-center">
       <button onclick="snClose(); openAppSettingsModal();" class="text-xs text-slate-600 hover:text-blue-600 font-semibold">📱 ${_L('Получать на телефон (push)', 'Телефонға алу (push)')}</button>
