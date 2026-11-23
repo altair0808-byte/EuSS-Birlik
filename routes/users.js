@@ -116,6 +116,7 @@ function normalizeDateOnly(v) {
 // отъезда сотрудник «на вахте», до заезда и после отъезда — «дома». Пересменка в 12:00: в день отъезда
 // «на вахте» до 12:00, в день заезда — с 12:00 (ROT_CHANGE_HOUR ниже).
 const { narrowNamesakes, namesakesHint, NAMESAKE_ERROR } = require('../lib/namesakes');
+const { fuzzyHas } = require('../lib/fuzzy');
 const ROT_TODAY_SQL = `(NOW() AT TIME ZONE 'Asia/Atyrau')::date`;
 // Вахта повторяется по циклу: (заезд … отъезд включительно) → дома N дней → снова заезд … (как в PDF-календаре,
 // rotationCalendarPdf.js: buildShifts). N = rotation_rest_days, а если не задано — срок вахты (14/14, 28/28).
@@ -306,14 +307,13 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), a
       // (п.9 запроса): "Утяшев", "Altair", "Utyashev", "Алтаир" должны находить
       // одного и того же сотрудника — сравниваем и с обычными полями, и с
       // full_name_translit (латинская транслитерация ФИО).
-      params.push(`%${q}%`);
-      sql += ` AND (last_name ILIKE $${params.length} OR first_name ILIKE $${params.length}
-                     OR login ILIKE $${params.length} OR full_name_translit ILIKE $${params.length}
-                     OR full_name_normalized ILIKE $${params.length})`;
+      // + «похожий» поиск (lib/fuzzy.js): Мәжіров = Мажиров = Mazhirov — фильтруем после запроса
     }
     sql += ' ORDER BY last_name, first_name';
     const result = await query(sql, params);
-    res.json(result.rows);
+    const rows = q ? result.rows.filter(u => fuzzyHas(
+      `${u.last_name || ''} ${u.first_name || ''} | ${u.first_name || ''} ${u.last_name || ''} | ${u.login || ''} | ${u.tco_badge || ''} | ${u.full_name_translit || ''}`, q)) : result.rows;
+    res.json(rows);
   } catch (e) {
     console.error('Error fetching users:', e);
     res.status(500).json({ error: 'db_error', details: e.message });
@@ -667,13 +667,10 @@ async function fetchRotationRows(req) {
   if (rotFilter === 'on_shift') sql += ` AND ${ROT_ON_SQL}`;
   else if (rotFilter === 'home') sql += ` AND rotation_arrival IS NOT NULL AND NOT ${ROT_ON_SQL}`;
   else if (rotFilter === 'unset') sql += ` AND rotation_arrival IS NULL AND NOT ${OT_ON_SQL}`;
-  if (req.query.q) {
-    params.push(`%${req.query.q}%`);
-    sql += ` AND (last_name ILIKE $${params.length} OR first_name ILIKE $${params.length}
-                  OR full_name_translit ILIKE $${params.length} OR full_name_normalized ILIKE $${params.length})`;
-  }
   sql += ' ORDER BY object, department, last_name, first_name';
-  return (await query(sql, params)).rows;
+  const rows = (await query(sql, params)).rows;
+  const q = String(req.query.q || '').trim();
+  return q ? rows.filter(u => fuzzyHas(`${u.last_name || ''} ${u.first_name || ''} | ${u.first_name || ''} ${u.last_name || ''}`, q)) : rows;
 }
 
 const ROT_STATUS_TEXT = { on_shift: '👷 На вахте', home: '🏠 Дома' };

@@ -4114,6 +4114,25 @@ function expRotChip(a) {
 let expShowOnlySelected = false; // «Показать выбранных»: в списке только отмеченные сотрудники
 let expSelected = new Set(); // выбранные user_id — для скачивания уведомления с логинами/паролями (п.4 запроса)
 
+// «Похожий» поиск по ФИО: Мәжіров = Мажиров = Mazhirov = Mazhyrov (тот же алгоритм — lib/fuzzy.js на сервере)
+const FZ_KZ = { 'ә': 'а', 'ғ': 'г', 'қ': 'к', 'ң': 'н', 'ө': 'о', 'ұ': 'у', 'ү': 'у', 'һ': 'х', 'і': 'и' };
+const FZ_TR = { 'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'e', 'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'i',
+  'к': 'k', 'л': 'l', 'м': 'm', 'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u', 'ф': 'f', 'х': 'h',
+  'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sh', 'ъ': '', 'ы': 'i', 'ь': '', 'э': 'e', 'ю': 'iu', 'я': 'ia' };
+function fuzzyKey(str) {
+  let out = '';
+  for (const ch0 of String(str || '').toLowerCase()) { const ch = FZ_KZ[ch0] || ch0; out += FZ_TR[ch] !== undefined ? FZ_TR[ch] : ch; }
+  return out.replace(/kh/g, 'h').replace(/y/g, 'i').replace(/j/g, 'zh').replace(/q/g, 'k').replace(/w/g, 'u').replace(/x/g, 'ks')
+    .replace(/[^a-z0-9 ]+/g, ' ').replace(/(.)\1+/g, '$1').replace(/\s+/g, ' ').trim();
+}
+function fuzzyHas(hay, q) {
+  const qq = String(q || '').trim();
+  if (!qq) return true;
+  if (String(hay || '').toLowerCase().includes(qq.toLowerCase())) return true;
+  const k = fuzzyKey(qq);
+  return !!k && fuzzyKey(hay).includes(k);
+}
+
 // «Действителен до» включительно: просрочен, только если дата раньше СЕГОДНЯ (как на сервере и в списке)
 function isExpiredDate(d) {
   if (!d) return false;
@@ -4256,8 +4275,8 @@ function getExpiringFiltered() {
     if (expState.course && title(a) !== expState.course) return false;
     if (expState.rot && expRotKey(a) !== expState.rot) return false;
     if (q) {
-      const hay = `${a.last_name} ${a.first_name} ${title(a)} ${a.object || ''} ${a.department || ''} ${a.position || ''} ${posLabel(a.position || '')}`.toLowerCase();
-      if (!hay.includes(q)) return false;
+      const hay = `${a.last_name} ${a.first_name} | ${a.first_name} ${a.last_name} | ${title(a)} | ${a.object || ''} | ${a.department || ''} | ${a.position || ''} | ${posLabel(a.position || '')}`;
+      if (!fuzzyHas(hay, q)) return false;
     }
     return true;
   });
@@ -5051,6 +5070,104 @@ document.addEventListener('click', e => {
   if (xm && !xm.classList.contains('hidden') && !e.target.closest('#uExcelMenu')) xm.classList.add('hidden');
 });
 window.addEventListener('scroll', closeUserRowMenu, true);
+
+// ── Быстрые действия по правому клику на сотруднике ──────────────────────────
+// Работает везде, где в строке есть ссылка на карточку сотрудника (openUserProfile):
+// список сотрудников и архив, мед. книжки, медосмотр, «Истекает срок», обучение.
+// Права проверяет сервер; меню показываем только персоналу (не обычным сотрудникам).
+const _ctxUserCache = new Map();
+function ctxUidFromTarget(target) {
+  const direct = target.closest('[data-uid]');
+  if (direct && direct.closest('tr, li') === target.closest('tr, li')) {
+    const v = Number(direct.getAttribute('data-uid'));
+    if (v) return v;
+  }
+  const re = /openUserProfile\((\d+)\)/;
+  let el = target;
+  while (el && el !== document.body) {
+    if (el.id === 'userRowMenu') return null;
+    const own = el.getAttribute && el.getAttribute('onclick');
+    let ids = new Set();
+    if (own && re.test(own)) ids.add(Number(own.match(re)[1]));
+    if (el.querySelectorAll) el.querySelectorAll('[onclick*="openUserProfile("]').forEach(x => {
+      const m = (x.getAttribute('onclick') || '').match(re); if (m) ids.add(Number(m[1]));
+    });
+    if (ids.size === 1) return [...ids][0];
+    if (ids.size > 1) return null;
+    // не уходим выше таблицы/модалки — там уже много сотрудников
+    if (el.tagName === 'TABLE' || el.tagName === 'TBODY') return null;
+    el = el.parentElement;
+  }
+  return null;
+}
+async function ctxLoadUser(id) {
+  const fromList = (state.users || []).find(x => String(x.id) === String(id));
+  if (fromList) return fromList;
+  if (_ctxUserCache.has(id)) return _ctxUserCache.get(id);
+  const u = await api.getUser(id);
+  _ctxUserCache.set(id, u);
+  setTimeout(() => _ctxUserCache.delete(id), 60000);
+  return u;
+}
+// Модалки «Изменить» и «Статус» живут в разметке вкладки «Сотрудники»/«Архив»/карточки.
+// Если их на текущей странице нет — переходим на нужную вкладку и открываем там.
+async function ctxEditUser(id) {
+  if (document.getElementById('userModal') && (state.users || []).some(x => String(x.id) === String(id))) return editUser(id);
+  return editUserFromProfile(id);
+}
+function ctxStatus(id, status) {
+  _ctxUserCache.delete(id);
+  if (!document.getElementById('statusUserId')) {
+    state.tab = status === 'active' ? 'archive' : 'users';
+    render();
+  }
+  openStatusModal(id, status);
+}
+function ctxShowMenuAt(x, y, html) {
+  closeUserRowMenu();
+  const m = document.createElement('div');
+  m.id = 'userRowMenu';
+  m.className = 'fixed z-[120] w-60 bg-white border border-slate-200 rounded-xl shadow-xl p-1.5 text-sm';
+  m.innerHTML = html;
+  document.body.appendChild(m);
+  const left = x + m.offsetWidth + 8 > window.innerWidth ? x - m.offsetWidth : x;
+  const top = y + m.offsetHeight + 8 > window.innerHeight ? y - m.offsetHeight : y;
+  m.style.left = Math.max(8, left) + 'px';
+  m.style.top = Math.max(8, top) + 'px';
+}
+document.addEventListener('contextmenu', async ev => {
+  if (!state.user || state.user.role === 'employee') return;
+  if (ev.shiftKey) return; // Shift + правый клик — обычное меню браузера
+  if (ev.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+  const id = ctxUidFromTarget(ev.target);
+  if (!id) return;
+  ev.preventDefault();
+  const x = ev.clientX, y = ev.clientY;
+  ctxShowMenuAt(x, y, `<div class="px-3 py-2 text-slate-400">${_L('Загрузка…', 'Жүктелуде…')}</div>`);
+  let u;
+  try { u = await ctxLoadUser(id); } catch (e) { closeUserRowMenu(); alert(e.message || t('error_generic')); return; }
+  if (!document.getElementById('userRowMenu')) return; // меню уже закрыли
+  const item = (label, onclick, cls = '') => `<button onclick="closeUserRowMenu();${onclick}" class="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-50 ${cls}">${label}</button>`;
+  const archived = u.employment_status && u.employment_status !== 'active';
+  let html = `<div class="px-3 pt-1.5 pb-2 border-b mb-1"><div class="font-semibold text-slate-900 truncate">${esc(u.last_name || '')} ${esc(u.first_name || '')}</div><div class="text-[11px] text-slate-500 truncate">${esc(posLabel(u.position) || '—')}</div></div>`;
+  html += item('👤 ' + _L('Открыть карточку', 'Карточканы ашу'), `openUserProfile(${id})`);
+  if (!isObserverUser() || state.user.role === 'assistant') {
+    if (archived) {
+      html += item('↩️ ' + _L('Вернуть в штат', 'Штатқа қайтару'), `ctxStatus(${id}, 'active')`, 'text-emerald-700');
+    } else {
+      html += item('✏️ ' + _L('Изменить должность / отдел', 'Лауазым / бөлімді өзгерту'), `ctxEditUser(${id})`);
+      html += item('👷 ' + _L('Вахта', 'Вахта'), `openRotationModal(${id})`);
+      html += item('⏱ ' + _L('Овертайм', 'Овертайм'), `openOvertimeModal(${id})`);
+      html += `<div class="border-t my-1"></div>`;
+      html += item('🌴 ' + _L('В отпуск / декрет', 'Демалысқа / декретке'), `ctxStatus(${id}, 'maternity')`, 'text-purple-700');
+      html += item('🚪 ' + _L('Уволить', 'Жұмыстан босату'), `ctxStatus(${id}, 'fired')`, 'text-amber-700');
+    }
+    if (isSuperadminUser()) html += item('🗑 ' + _L('Удалить', 'Жою'), `delUser(${id})`, 'text-red-600');
+  }
+  html += `<div class="px-3 pt-1.5 text-[10px] text-slate-400 border-t mt-1">${_L('Shift + правый клик — обычное меню', 'Shift + оң жақ — әдеттегі мәзір')}</div>`;
+  ctxShowMenuAt(x, y, html);
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeUserRowMenu(); });
 // Сводка над таблицей: всего / на вахте / дома / вахта не указана / ошибки в должности — кликабельные фильтры.
 // Числа считаются по списку без фильтра вахты (при включённом фильтре показываются последние посчитанные).
 function renderUsersSummary() {
@@ -8018,8 +8135,8 @@ function renderAssignEmployeeList() {
     if (obj && u.object !== obj) return false;
     if (dept && u.department !== dept) return false;
     if (q) {
-      const hay = `${u.last_name} ${u.first_name} ${u.login}`.toLowerCase();
-      if (!hay.includes(q)) return false;
+      const hay = `${u.last_name} ${u.first_name} | ${u.first_name} ${u.last_name} | ${u.login || ''}`;
+      if (!fuzzyHas(hay, q)) return false;
     }
     return true;
   });
@@ -8065,8 +8182,8 @@ function asSelectAll(select) {
     if (obj && u.object !== obj) return false;
     if (dept && u.department !== dept) return false;
     if (q) {
-      const hay = `${u.last_name} ${u.first_name} ${u.login}`.toLowerCase();
-      if (!hay.includes(q)) return false;
+      const hay = `${u.last_name} ${u.first_name} | ${u.first_name} ${u.last_name} | ${u.login || ''}`;
+      if (!fuzzyHas(hay, q)) return false;
     }
     return true;
   });
@@ -8329,8 +8446,8 @@ function renderTrainingRows() {
     if (trainUi.status && trainStatusOf(a).key !== trainUi.status) return false;
     if (trainUi.course && title(a) !== trainUi.course) return false;
     if (q) {
-      const hay = `${a.last_name} ${a.first_name} ${title(a)} ${a.object || ''} ${a.department || ''}`.toLowerCase();
-      if (!hay.includes(q)) return false;
+      const hay = `${a.last_name} ${a.first_name} | ${a.first_name} ${a.last_name} | ${title(a)} | ${a.object || ''} | ${a.department || ''}`;
+      if (!fuzzyHas(hay, q)) return false;
     }
     return true;
   });
@@ -9938,7 +10055,7 @@ function renderMedbookPanel(panelDiv) {
     </div>`;
   const q = mbState.q.trim().toLowerCase();
   const rows = mbState.rows.filter(e => (!mbState.status || e.status === mbState.status)
-    && (!q || `${e.last_name} ${e.first_name} ${e.position} ${e.note || ''}`.toLowerCase().includes(q)));
+    && (!q || fuzzyHas(`${e.last_name} ${e.first_name} | ${e.first_name} ${e.last_name} | ${e.position} | ${e.note || ''}`, q)));
   const order = { overdue: 0, soon: 1, no_date: 2, valid: 3 };
   rows.sort((a, b) => (order[a.status] - order[b.status]) || ((a.days_left ?? 1e9) - (b.days_left ?? 1e9)) || a.last_name.localeCompare(b.last_name, 'ru'));
   const canConfig = !isObserverUser();
@@ -10423,7 +10540,7 @@ function renderMedexamPanel(panelDiv) {
     </div>`;
   const q = meState.q.trim().toLowerCase();
   const rows = meState.rows.filter(e => (!meState.status || e.status === meState.status)
-    && (!q || `${e.last_name} ${e.first_name} ${e.position} ${e.note || ''}`.toLowerCase().includes(q)));
+    && (!q || fuzzyHas(`${e.last_name} ${e.first_name} | ${e.first_name} ${e.last_name} | ${e.position} | ${e.note || ''}`, q)));
   const order = { overdue: 0, soon: 1, no_date: 2, valid: 3 };
   rows.sort((a, b) => (order[a.status] - order[b.status]) || ((a.days_left ?? 1e9) - (b.days_left ?? 1e9)) || a.last_name.localeCompare(b.last_name, 'ru'));
   const shown = rows.slice(0, 500);
