@@ -1994,7 +1994,7 @@ async function loadTabContent() {
       const passedUsers = new Set();
       const overdueUsers = new Set();
       latestPassed.forEach(x => {
-        const isOverdue = x.next_test_date && new Date(x.next_test_date) < now;
+        const isOverdue = isExpiredDate(x.next_test_date);
         if (!isOverdue) { passedUsers.add(x.user_id); return; }
         // просрочка — только там, где курс сотруднику обязателен (как в «Статистике по курсам» и списке ниже):
         // руководитель, которому курс не обязателен, «просроченным» не считается
@@ -3729,7 +3729,7 @@ function dashUniqueCounts(courseIds) {
   });
   const valid = new Set(), overdue = new Set();
   latest.forEach(x => {
-    const isOverdue = x.next_test_date && new Date(x.next_test_date) < now;
+    const isOverdue = isExpiredDate(x.next_test_date);
     (isOverdue ? overdue : valid).add(x.user_id);
   });
   return { valid: valid.size, overdue: overdue.size };
@@ -4061,7 +4061,7 @@ function dashCourseUserSets(courseId) {
       if (!cur || tx > tc || (tx === tc && Number(x.id) > Number(cur.id))) latest.set(x.user_id, x);
     }
   });
-  latest.forEach((x, uid) => { if (x.next_test_date && new Date(x.next_test_date) < now) overdue.add(Number(uid)); });
+  latest.forEach((x, uid) => { if (isExpiredDate(x.next_test_date)) overdue.add(Number(uid)); });
   return { overdue, pending };
 }
 
@@ -4114,9 +4114,22 @@ function expRotChip(a) {
 let expShowOnlySelected = false; // «Показать выбранных»: в списке только отмеченные сотрудники
 let expSelected = new Set(); // выбранные user_id — для скачивания уведомления с логинами/паролями (п.4 запроса)
 
+// «Действителен до» включительно: просрочен, только если дата раньше СЕГОДНЯ (как на сервере и в списке)
+function isExpiredDate(d) {
+  if (!d) return false;
+  const ymd = String(d).length >= 10 && /^\d{4}-\d{2}-\d{2}/.test(String(d)) ? String(d).slice(0, 10) : new Date(d).toISOString().slice(0, 10);
+  const t = new Date(); const today = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+  return ymd < today;
+}
 function expDaysLeft(a) {
   if (expIsUntrained(a)) return -Infinity;
-  return Math.ceil((new Date(a.next_test_date) - new Date()) / 86400000);
+  // по календарным дням: «до 23.11» — 23.11 это 0 («истекает сегодня»), с 24.11 — просрочено
+  const d = String(a.next_test_date || '');
+  const ymd = /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0, 10) : new Date(d).toISOString().slice(0, 10);
+  const t = new Date();
+  const today = Date.UTC(t.getFullYear(), t.getMonth(), t.getDate());
+  const [y, m, dd] = ymd.split('-').map(Number);
+  return Math.round((Date.UTC(y, m - 1, dd) - today) / 86400000);
 }
 // Строка «не обучен»: курс обязателен, а успешной записи нет вообще (сервер присылает row_kind = 'untrained')
 function expIsUntrained(a) { return a && a.row_kind === 'untrained'; }
