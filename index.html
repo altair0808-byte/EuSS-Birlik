@@ -500,9 +500,69 @@ function normalizeOrgFilter(raw) {
   return { object: toArr(parsed.object), department: toArr(parsed.department) };
 }
 
+// --- СРОК ВХОДА ---
+// Токен входа живёт 12 ч. Раньше после долгого перерыва страница открывалась со старым (истёкшим)
+// токеном: сотрудники и статистика не грузились, пока не нажмёшь «Выйти». Теперь:
+//  • при открытии сайта истёкший токен сразу убираем и показываем экран входа с пояснением;
+//  • пока сайтом пользуются, токен тихо продлевается (POST /api/auth/refresh);
+//  • если сервер ответил «сессия истекла» — тоже сразу экран входа.
+let SESSION_NOTICE = '';
+function tokenPayload(tok) {
+  try {
+    const b = String(tok || '').split('.')[1];
+    if (!b) return null;
+    return JSON.parse(decodeURIComponent(escape(atob(b.replace(/-/g, '+').replace(/_/g, '/')))));
+  } catch (e) { return null; }
+}
+function tokenMsLeft(tok) {
+  const p = tokenPayload(tok);
+  return p && p.exp ? p.exp * 1000 - Date.now() : -1;
+}
+function storedValidToken() {
+  const tok = localStorage.getItem('token');
+  if (!tok) return null;
+  if (tokenMsLeft(tok) > 60 * 1000) return tok;
+  localStorage.removeItem('token');
+  localStorage.removeItem('user');
+  SESSION_NOTICE = 'Время входа истекло — войдите снова. / Кіру уақыты аяқталды — қайта кіріңіз.';
+  return null;
+}
+function showSessionNotice() {
+  if (!SESSION_NOTICE) return;
+  const el = document.getElementById('loginError');
+  if (!el) return;
+  el.textContent = SESSION_NOTICE;
+  el.className = 'text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2';
+  SESSION_NOTICE = '';
+}
+function sessionExpired() {
+  if (!state.token) return;
+  SESSION_NOTICE = 'Время входа истекло — войдите снова. / Кіру уақыты аяқталды — қайта кіріңіз.';
+  logout();
+  setTimeout(showSessionNotice, 0);
+}
+let _refreshingToken = null;
+async function maybeRefreshToken(force) {
+  if (!state.token) return;
+  const left = tokenMsLeft(state.token);
+  if (left <= 60 * 1000) { sessionExpired(); return; }
+  if (!force && left > 6 * 3600 * 1000) return;     // ещё больше 6 ч — продлевать рано
+  if (_refreshingToken) return _refreshingToken;
+  _refreshingToken = (async () => {
+    try {
+      const r = await api.req('/api/auth/refresh', { method: 'POST' });
+      if (r && r.token && state.token) { state.token = r.token; localStorage.setItem('token', r.token); }
+    } catch (e) { /* 401 уже обработан в api.req; сеть — попробуем позже */ }
+    finally { _refreshingToken = null; }
+  })();
+  return _refreshingToken;
+}
+setInterval(() => { if (!document.hidden) maybeRefreshToken(); }, 20 * 60 * 1000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) maybeRefreshToken(); });
+
 // --- STATE & API ---
 const state = {
-  token: localStorage.getItem('token') || null,
+  token: storedValidToken(),
   user: JSON.parse(localStorage.getItem('user') || 'null'),
   tab: 'dashboard',
   courses: [],
@@ -584,8 +644,19 @@ const api = {
       }
     }
     if (res.status === 401) {
-      logout();
-      throw new Error('Unauthorized');
+      let msg401 = '';
+      try { const j = JSON.parse(await res.clone().text()); msg401 = j.message || ''; } catch (e) {}
+      if (/\/api\/auth\/login/.test(url)) throw new Error(msg401 || t('login_error'));   // неверный логин/пароль
+      sessionExpired();
+      throw new Error(_L('Время входа истекло — войдите снова', 'Кіру уақыты аяқталды — қайта кіріңіз'));
+    }
+    // Старый сервер отвечал на истёкший токен 403 «Недействительный токен» — обрабатываем так же
+    if (res.status === 403 && state.token) {
+      const peek = await res.clone().text().catch(() => '');
+      if (/Недействительный токен|token_expired|invalid_token/.test(peek)) {
+        sessionExpired();
+        throw new Error(_L('Время входа истекло — войдите снова', 'Кіру уақыты аяқталды — қайта кіріңіз'));
+      }
     }
     if (!res.ok) {
       const raw = await res.text().catch(() => '');
@@ -10889,6 +10960,8 @@ async function pwaRefreshModal() {
 
 pwaAfterLogin();
 refreshAdminFunctions();
+maybeRefreshToken();
+setTimeout(showSessionNotice, 0);
 </script>
 </body>
 </html>

@@ -63,7 +63,12 @@ function authRequired(req, res, next) {
   if (!token) return res.status(401).json({ error: 'unauthorized', message: 'Токен отсутствует' });
 
   jwt.verify(token, JWT_SECRET, async (err, user) => {
-    if (err) return res.status(403).json({ error: 'forbidden', message: 'Недействительный токен' });
+    // Истёк срок входа или токен испорчен — 401, чтобы сайт сам показал экран входа
+    // (раньше было 403, и страница висела с ошибками, пока не нажмёшь «Выйти»).
+    if (err) return res.status(401).json({
+      error: err.name === 'TokenExpiredError' ? 'token_expired' : 'invalid_token',
+      message: 'Сессия истекла — войдите заново'
+    });
     req.user = user;
     // Зона доступа ассистента лежит в токене (живёт 12 ч). Если суперадмин изменил зону, отключил учётную запись или
     // сменил роль — токен об этом не знает, и ассистент видел бы старую зону / получал «вне зоны» до повторного входа.
@@ -87,7 +92,7 @@ function authRequired(req, res, next) {
         );
         const row = r.rows[0];
         if (!row || Number(row.active) === 0) {
-          return res.status(403).json({ error: 'forbidden', message: 'Учётная запись ассистента отключена или изменена — войдите заново' });
+          return res.status(401).json({ error: 'unauthorized', message: 'Учётная запись ассистента отключена или изменена — войдите заново' });
         }
         req.user.assistant_objects = row.assistant_objects || [];
         req.user.assistant_departments = row.assistant_departments || [];
@@ -215,10 +220,28 @@ router.get('/me', authRequired, async (req, res) => {
   try {
     const r = await query('SELECT id, role, active, admin_functions FROM users WHERE id = $1', [req.user.id]);
     const row = r.rows[0];
-    if (!row || Number(row.active) === 0) return res.status(403).json({ error: 'forbidden', message: 'Учётная запись отключена' });
+    if (!row || Number(row.active) === 0) return res.status(401).json({ error: 'unauthorized', message: 'Учётная запись отключена' });
     res.json({ id: row.id, role: row.role, admin_functions: row.admin_functions || [] });
   } catch (err) {
     res.status(500).json({ error: 'server_error', details: err.message });
+  }
+});
+
+// POST /api/auth/refresh — продлить вход. Сайт зовёт его сам, пока им пользуются (раз в несколько часов),
+// поэтому активный пользователь не «вылетает» каждые 12 часов. Данные для токена берём свежие из БД.
+router.post('/refresh', authRequired, async (req, res) => {
+  try {
+    const r = await query('SELECT * FROM users WHERE id = $1 AND active = 1', [req.user.id]);
+    const u = r.rows[0];
+    if (!u) return res.status(401).json({ error: 'unauthorized', message: 'Учётная запись отключена — войдите заново' });
+    const token = jwt.sign({
+      id: u.id, login: u.login, role: u.role, last_name: u.last_name, first_name: u.first_name,
+      object: u.object, department: u.department, position: u.position, committee_role: u.committee_role || null,
+      assistant_objects: u.assistant_objects || [], assistant_departments: u.assistant_departments || [], admin_functions: u.admin_functions || []
+    }, JWT_SECRET, { expiresIn: '12h' });
+    res.json({ token });
+  } catch (e) {
+    res.status(500).json({ error: 'server_error', details: e.message });
   }
 });
 
