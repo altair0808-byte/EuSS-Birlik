@@ -732,29 +732,41 @@ function buildEmployeeRows(members) {
 // В исходном бланке колонка «№» очень узкая (360 twips): «10.» переносилось как «1 / 0.»,
 // «Confectionery» в колонке «Цех» рвалось на две строки, а в строках сотрудников часть ячеек
 // была выровнена по центру по вертикали, часть — по верху (№ пропуска «съезжал» вниз).
-// Здесь только перераспределяем ширину между колонками (общая ширина таблицы та же)
-// и ставим всем ячейкам строки сотрудника вертикальное выравнивание по центру.
-//                №    №удост  ФИО   Пропуск  Должность  Цех   Отметка  Прим.
-const COL_WIDTHS = [520, 696,   2250, 1000,    2840,      1400, 1710,    642];   // сумма = 11058, как в шаблоне
+// Здесь перераспределяем ширину между колонками (общая ширина таблицы та же), убираем колонку
+// «№ пропуска ТШО» и ставим всем ячейкам строки сотрудника вертикальное выравнивание по центру.
+// Колонки «№ пропуска ТШО» (4-я в бланке) и «Примечание» (8-я) из протокола убраны —
+// их ширина отдана № удостоверения, ФИО, должности и цеху.
+const REMOVE_COL_INDEXES = new Set([3, 7]);   // 0-based: №, №удост., ФИО, [Пропуск], Должность, Цех, Отметка, [Прим.]
+//                 №    №удост  ФИО   Должность  Цех   Отметка
+const COL_WIDTHS = [520, 1020,  2700, 3150,      1950, 1718];   // сумма = 11058, как в шаблоне
 
-function setCellWidths(trXml) {
-  let i = 0;
-  return trXml.replace(/<w:tc>[\s\S]*?<\/w:tc>/g, (tc) => {
-    const w = COL_WIDTHS[i++];
-    if (w === undefined || /<w:gridSpan /.test(tc)) return tc;
-    return tc.replace(/<w:tcW w:w="\d+" w:type="dxa"\/>/, `<w:tcW w:w="${w}" w:type="dxa"/>`);
+function splitCells(trXml) {
+  const cells = [];
+  const re = /<w:tc>[\s\S]*?<\/w:tc>/g;
+  let m;
+  while ((m = re.exec(trXml))) cells.push({ start: m.index, end: m.index + m[0].length, xml: m[0] });
+  return cells;
+}
+
+function cellText(tc) { return (tc.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || []).map(t => t.replace(/<[^>]+>/g, '')).join('').trim(); }
+
+// строка из 8 ячеек → убрать «№ пропуска» и «Примечание», выставить ширины; строку с номерами колонок 1..8 перенумеровать 1..6
+function reshapeRow(trXml) {
+  const cells = splitCells(trXml);
+  if (cells.length !== 8) return trXml;
+  const isNumbersRow = cells.every((c, i) => cellText(c.xml) === String(i + 1));
+  const kept = cells.filter((_, i) => !REMOVE_COL_INDEXES.has(i)).map((c, i) => {
+    let x = c.xml.replace(/<w:tcW w:w="\d+" w:type="dxa"\/>/, `<w:tcW w:w="${COL_WIDTHS[i]}" w:type="dxa"/>`);
+    if (isNumbersRow) x = x.replace(/(<w:t[^>]*>)\d+(<\/w:t>)/, `$1${i + 1}$2`);
+    return x;
   });
+  return trXml.slice(0, cells[0].start) + kept.join('') + trXml.slice(cells[cells.length - 1].end);
 }
 
 function normalizeEmployeeTable(xml) {
-  // сетка таблицы
   xml = xml.replace(/<w:tblGrid>[\s\S]*?<\/w:tblGrid>/, () =>
     '<w:tblGrid>' + COL_WIDTHS.map((w) => `<w:gridCol w:w="${w}"/>`).join('') + '</w:tblGrid>');
-  // ширины ячеек во всех строках таблицы, где 8 ячеек (шапка и строки сотрудников)
-  xml = xml.replace(/<w:tbl>[\s\S]*?<\/w:tbl>/, (tbl) => tbl.replace(/<w:tr[ >][\s\S]*?<\/w:tr>/g, (tr) => {
-    const n = (tr.match(/<w:tc>/g) || []).length;
-    return n === COL_WIDTHS.length ? setCellWidths(tr) : tr;
-  }));
+  xml = xml.replace(/<w:tbl>[\s\S]*?<\/w:tbl>/, (tbl) => tbl.replace(/<w:tr[ >][\s\S]*?<\/w:tr>/g, reshapeRow));
   return xml;
 }
 
