@@ -1908,7 +1908,196 @@ function setTab(tname) {
   render();
 }
 
+// Окна «Изменить сотрудника» и «Статус» (отпуск/декрет/увольнение). Вынесены в функции,
+// чтобы открывать их на любой странице (мед. книжки, «Истекает срок», карточка) без перехода.
+function userModalHtml() {
+  return `
+      <div id="userModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
+          <h3 class="text-lg font-bold mb-4" id="userModalTitle">Пользователь</h3>
+          <form onsubmit="saveUserForm(event)" class="space-y-3">
+            <input type="hidden" id="userId">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label class="text-xs font-semibold text-slate-600">Фамилия</label><input id="uLastName" required class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Имя</label><input id="uFirstName" required class="w-full border p-2 rounded text-sm"></div>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Объект</label>
+              <div class="flex items-center gap-1">
+                <select id="uObject" onchange="onOrgSelectChange('u', 'object')" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select>
+                <button type="button" onclick="quickAddOrgValue('object', 'u')" title="Добавить новый объект в список" class="dict-add-btn shrink-0 px-2 py-2 border rounded text-sm font-bold text-slate-500 hover:text-blue-600">+</button>
+              </div>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Отдел</label>
+              <div class="flex items-center gap-1">
+                <select id="uDept" onchange="onOrgSelectChange('u', 'department')" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select>
+                <button type="button" onclick="quickAddOrgValue('department', 'u')" title="Добавить новый отдел в выбранный объект" class="dict-add-btn shrink-0 px-2 py-2 border rounded text-sm font-bold text-slate-500 hover:text-blue-600">+</button>
+              </div>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">Должность</label>
+              <div class="flex items-center gap-1">
+                <select id="uPos" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select>
+                <button type="button" onclick="quickAddOrgValue('position', 'u')" title="Добавить новую должность в выбранный отдел" class="dict-add-btn shrink-0 px-2 py-2 border rounded text-sm font-bold text-slate-500 hover:text-blue-600">+</button>
+              </div>
+              <p class="text-[11px] text-slate-400 mt-1">Сначала выберите объект — в списке отделов появятся только его отделы, а после выбора отдела — только его должности. Структура ведётся во вкладке «Настройки».</p>
+            </div>
+            <div id="staffFieldsWrapper" data-staff-only class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label class="text-xs font-semibold text-slate-600">Категория</label>
+                <select id="uCategory" class="w-full border p-2 rounded text-sm">
+                  <option value="employee">Сотрудник</option>
+                  <option value="specialist">Специалист</option>
+                  <option value="manager">Руководитель</option>
+                </select>
+                <p class="text-[11px] text-slate-400 mt-1">Специалист и Руководитель — отдельные категории. Кабинет тот же, отличаются только обязательные курсы.</p>
+              </div>
+              <div>
+                <label class="text-xs font-semibold text-slate-600">Дата начала работы в компании</label>
+                <input type="date" id="uHireDate" class="w-full border p-2 rounded text-sm">
+                <p class="text-[11px] text-slate-400 mt-1">Из неё считается стаж (в кабинете сотрудника и у QR-кода).</p>
+              </div>
+            </div>
+            <div data-staff-only class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label class="text-xs font-semibold text-slate-600">Логин (табельный номер)</label><input id="uLogin" placeholder="Можно назначить позже" class="w-full border p-2 rounded text-sm"></div>
+              <div><label class="text-xs font-semibold text-slate-600">Пароль</label><input type="password" id="uPass" placeholder="Не менять" class="w-full border p-2 rounded text-sm"></div>
+            </div>
+            <div data-staff-only>
+              <label class="text-xs font-semibold text-slate-600">№ сертификата (уникальный номер сотрудника)</label>
+              <input id="uCertNumber" placeholder="Например, 0125" class="w-full border p-2 rounded text-sm">
+              <p class="text-[11px] text-slate-400 mt-1">Можно исправить вручную в любой момент — история пройденных тестов сотрудника при этом не меняется.</p>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">№ пропуска ТШО (TCO Badge)</label>
+              <input id="uTcoBadge" placeholder="Например, 300375" class="w-full border p-2 rounded text-sm">
+              <p class="text-[11px] text-slate-400 mt-1">Подставляется в колонку «ТШО рұқсатнама / № пропуска ТШО» Word-протокола.</p>
+            </div>
+            <div>
+              <label class="text-xs font-semibold text-slate-600">ИИН</label>
+              <input id="uIin" inputmode="numeric" maxlength="12" placeholder="12 цифр" class="w-full border p-2 rounded text-sm">
+              <p class="text-[11px] text-slate-400 mt-1">Необязательно. Ровно 12 цифр. В Word/PDF протокол не выводится.</p>
+            </div>
+            <p data-staff-only class="text-xs text-slate-400 -mt-1">Логин и пароль можно не указывать сейчас, а добавить позже — просто откройте карточку сотрудника ещё раз и нажмите «Изменить». При указании логина обязательно укажите и пароль.</p>
+            <div id="roleFieldWrapper">
+              <label class="text-xs font-semibold text-slate-600">Роль</label>
+              <select id="uRole" onchange="onUserRoleFieldChange()" class="w-full border p-2 rounded text-sm">
+                <option value="employee">Сотрудник</option>
+                <option value="assistant">Ассистент</option>
+                <option value="admin">Администратор</option>
+              </select>
+            </div>
+            <div id="assistantZoneWrapper" class="hidden border rounded-lg p-3 bg-slate-50">
+              <label class="text-xs font-semibold text-slate-600">Доступная зона</label>
+              <p class="text-[11px] text-slate-400 mb-2">Если ничего не выбрано — доступа к сотрудникам нет. Иначе видны только выбранные объекты/отделы.</p>
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <div class="flex items-center justify-between mb-1"><span class="text-[11px] font-semibold text-slate-500">Объекты</span>
+                    <span class="text-[11px] whitespace-nowrap"><button type="button" onclick="zoneSelectAll('uAssistantObjects', true)" class="text-blue-600 hover:underline font-semibold">Выбрать все</button> · <button type="button" onclick="zoneSelectAll('uAssistantObjects', false)" class="text-slate-500 hover:underline">Снять</button></span></div>
+                  <div id="uAssistantObjects" class="max-h-32 overflow-y-auto border rounded bg-white p-1.5 space-y-1 text-sm"></div>
+                </div>
+                <div>
+                  <div class="flex items-center justify-between mb-1"><span class="text-[11px] font-semibold text-slate-500">Отделы</span>
+                    <span class="text-[11px] whitespace-nowrap"><button type="button" onclick="zoneSelectAll('uAssistantDepartments', true)" class="text-blue-600 hover:underline font-semibold">Выбрать все</button> · <button type="button" onclick="zoneSelectAll('uAssistantDepartments', false)" class="text-slate-500 hover:underline">Снять</button></span></div>
+                  <div id="uAssistantDepartments" class="max-h-32 overflow-y-auto border rounded bg-white p-1.5 space-y-1 text-sm"></div>
+                </div>
+              </div>
+            </div>
+            <div id="adminFunctionsWrapper" class="hidden border rounded-lg p-3 bg-blue-50/40">
+              <label id="adminFunctionsLabel" class="text-xs font-semibold text-slate-600">Функции администратора</label>
+              <p id="adminFunctionsHint" class="text-[11px] text-slate-500 mb-2">Отметьте, чем занимается этот администратор — можно выбрать несколько. Работать он сможет только с отмеченным, остальное будет скрыто и закрыто на сервере.</p>
+              <div id="uAdminFunctions" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
+            </div>
+            <div data-staff-only>
+              <label class="text-xs font-semibold text-slate-600">Роль в комиссии</label>
+              <select id="uCommitteeRole" class="w-full border p-2 rounded text-sm">
+                <option value="">— нет —</option>
+                <option value="chairman">Председатель</option>
+                <option value="biot_engineer">Инженер по БиОТ</option>
+                <option value="member">Член комиссии</option>
+              </select>
+              <p class="text-[11px] text-slate-400 mt-1">Даёт доступ к электронной подписи протоколов комиссии («Электронная подпись» в меню).</p>
+            </div>
+            <div class="flex justify-end space-x-2 pt-3 border-t">
+              <button type="button" onclick="closeUserModal()" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
+              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить</button>
+            </div>
+          </form>
+        </div>
+      </div>
+`;
+}
+function statusModalHtml() {
+  return `
+      <div id="statusModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6">
+          <h3 class="text-lg font-bold mb-1" id="statusModalTitle">Статус сотрудника</h3>
+          <p class="text-xs text-slate-500 mb-4" id="statusModalHint"></p>
+          <form onsubmit="submitStatusForm(event)" class="space-y-3">
+            <input type="hidden" id="statusUserId">
+            <input type="hidden" id="statusValue">
+            <div>
+              <label class="text-xs font-semibold text-slate-600" id="statusDateLabel">Дата</label>
+              <input type="date" id="statusDate" class="w-full border p-2 rounded text-sm">
+            </div>
+            <div id="statusDateEndWrap" class="hidden">
+              <label class="text-xs font-semibold text-slate-600" id="statusDateEndLabel">Отпуск по</label>
+              <input type="date" id="statusDateEnd" class="w-full border p-2 rounded text-sm">
+            </div>
+            <div id="statusReasonWrap" class="hidden space-y-2">
+              <div>
+                <label class="text-xs font-semibold text-slate-600">Причина отпуска</label>
+                <select id="statusReason" onchange="onStatusReasonChange()" class="w-full border p-2 rounded text-sm">
+                  <option value="">— выберите причину —</option>
+                  ${LEAVE_REASON_KEYS.map(k => `<option value="${k}">${esc(leaveReasonLabel(k))}</option>`).join('')}
+                </select>
+              </div>
+              <div id="statusNoteWrap" class="hidden">
+                <label class="text-xs font-semibold text-slate-600">Пояснение</label>
+                <input type="text" id="statusNote" maxlength="200" placeholder="Например: учебный сбор, командировка…" class="w-full border p-2 rounded text-sm">
+              </div>
+            </div>
+            <div class="flex justify-end space-x-2 pt-3 border-t">
+              <button type="button" onclick="closeStatusModal()" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
+              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Подтвердить</button>
+            </div>
+          </form>
+        </div>
+      </div>
+`;
+}
+function ensureUserModals() {
+  const needUser = !document.getElementById('userModal');
+  const needStatus = !document.getElementById('statusModal');
+  if (!needUser && !needStatus) return;
+  let holder = document.getElementById('globalUserModals');
+  if (!holder) { holder = document.createElement('div'); holder.id = 'globalUserModals'; document.body.appendChild(holder); }
+  holder.insertAdjacentHTML('beforeend', (needUser ? userModalHtml() : '') + (needStatus ? statusModalHtml() : ''));
+}
+// После сохранения изменений сотрудника: остаёмся на той же вкладке и том же месте прокрутки,
+// просто тихо обновляем данные текущей страницы.
+async function refreshAfterUserChange() {
+  const y = window.scrollY;
+  try { if (typeof _ctxUserCache !== 'undefined') _ctxUserCache.clear(); } catch (e) {}
+  try {
+    if (state.tab === 'user_profile' && state.profileUserId) await loadUserProfile(state.profileUserId);
+    else if (document.getElementById('usersTable')) await loadUsersList();
+    else {
+      if (document.getElementById('expiringList')) await loadExpiringWidget();
+      if (document.getElementById('dashCourseTabs')) {
+        await Promise.all([mbLoad(), meLoad()]);
+        renderDashCourseTabs(); renderDashCoursePanel();
+      }
+      if (state.tab === 'training') await loadTrainingList();
+    }
+  } catch (e) { /* не критично */ }
+  window.scrollTo(0, y);
+  requestAnimationFrame(() => window.scrollTo(0, y));
+  setTimeout(() => { if (Math.abs(window.scrollY - y) > 4) window.scrollTo(0, y); }, 300);
+}
+
 async function loadTabContent() {
+  { const gm = document.getElementById('globalUserModals'); if (gm) gm.remove(); }
   const container = document.getElementById('tabContent');
   if (!container) return;
 
@@ -2074,154 +2263,8 @@ async function loadTabContent() {
           </table>
         </div>
       </div>
-      <div id="userModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
-        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
-          <h3 class="text-lg font-bold mb-4" id="userModalTitle">Пользователь</h3>
-          <form onsubmit="saveUserForm(event)" class="space-y-3">
-            <input type="hidden" id="userId">
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div><label class="text-xs font-semibold text-slate-600">Фамилия</label><input id="uLastName" required class="w-full border p-2 rounded text-sm"></div>
-              <div><label class="text-xs font-semibold text-slate-600">Имя</label><input id="uFirstName" required class="w-full border p-2 rounded text-sm"></div>
-            </div>
-            <div>
-              <label class="text-xs font-semibold text-slate-600">Объект</label>
-              <div class="flex items-center gap-1">
-                <select id="uObject" onchange="onOrgSelectChange('u', 'object')" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select>
-                <button type="button" onclick="quickAddOrgValue('object', 'u')" title="Добавить новый объект в список" class="dict-add-btn shrink-0 px-2 py-2 border rounded text-sm font-bold text-slate-500 hover:text-blue-600">+</button>
-              </div>
-            </div>
-            <div>
-              <label class="text-xs font-semibold text-slate-600">Отдел</label>
-              <div class="flex items-center gap-1">
-                <select id="uDept" onchange="onOrgSelectChange('u', 'department')" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select>
-                <button type="button" onclick="quickAddOrgValue('department', 'u')" title="Добавить новый отдел в выбранный объект" class="dict-add-btn shrink-0 px-2 py-2 border rounded text-sm font-bold text-slate-500 hover:text-blue-600">+</button>
-              </div>
-            </div>
-            <div>
-              <label class="text-xs font-semibold text-slate-600">Должность</label>
-              <div class="flex items-center gap-1">
-                <select id="uPos" class="w-full border p-2 rounded text-sm"><option value="">— не выбрано —</option></select>
-                <button type="button" onclick="quickAddOrgValue('position', 'u')" title="Добавить новую должность в выбранный отдел" class="dict-add-btn shrink-0 px-2 py-2 border rounded text-sm font-bold text-slate-500 hover:text-blue-600">+</button>
-              </div>
-              <p class="text-[11px] text-slate-400 mt-1">Сначала выберите объект — в списке отделов появятся только его отделы, а после выбора отдела — только его должности. Структура ведётся во вкладке «Настройки».</p>
-            </div>
-            <div id="staffFieldsWrapper" data-staff-only class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label class="text-xs font-semibold text-slate-600">Категория</label>
-                <select id="uCategory" class="w-full border p-2 rounded text-sm">
-                  <option value="employee">Сотрудник</option>
-                  <option value="specialist">Специалист</option>
-                  <option value="manager">Руководитель</option>
-                </select>
-                <p class="text-[11px] text-slate-400 mt-1">Специалист и Руководитель — отдельные категории. Кабинет тот же, отличаются только обязательные курсы.</p>
-              </div>
-              <div>
-                <label class="text-xs font-semibold text-slate-600">Дата начала работы в компании</label>
-                <input type="date" id="uHireDate" class="w-full border p-2 rounded text-sm">
-                <p class="text-[11px] text-slate-400 mt-1">Из неё считается стаж (в кабинете сотрудника и у QR-кода).</p>
-              </div>
-            </div>
-            <div data-staff-only class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div><label class="text-xs font-semibold text-slate-600">Логин (табельный номер)</label><input id="uLogin" placeholder="Можно назначить позже" class="w-full border p-2 rounded text-sm"></div>
-              <div><label class="text-xs font-semibold text-slate-600">Пароль</label><input type="password" id="uPass" placeholder="Не менять" class="w-full border p-2 rounded text-sm"></div>
-            </div>
-            <div data-staff-only>
-              <label class="text-xs font-semibold text-slate-600">№ сертификата (уникальный номер сотрудника)</label>
-              <input id="uCertNumber" placeholder="Например, 0125" class="w-full border p-2 rounded text-sm">
-              <p class="text-[11px] text-slate-400 mt-1">Можно исправить вручную в любой момент — история пройденных тестов сотрудника при этом не меняется.</p>
-            </div>
-            <div>
-              <label class="text-xs font-semibold text-slate-600">№ пропуска ТШО (TCO Badge)</label>
-              <input id="uTcoBadge" placeholder="Например, 300375" class="w-full border p-2 rounded text-sm">
-              <p class="text-[11px] text-slate-400 mt-1">Подставляется в колонку «ТШО рұқсатнама / № пропуска ТШО» Word-протокола.</p>
-            </div>
-            <div>
-              <label class="text-xs font-semibold text-slate-600">ИИН</label>
-              <input id="uIin" inputmode="numeric" maxlength="12" placeholder="12 цифр" class="w-full border p-2 rounded text-sm">
-              <p class="text-[11px] text-slate-400 mt-1">Необязательно. Ровно 12 цифр. В Word/PDF протокол не выводится.</p>
-            </div>
-            <p data-staff-only class="text-xs text-slate-400 -mt-1">Логин и пароль можно не указывать сейчас, а добавить позже — просто откройте карточку сотрудника ещё раз и нажмите «Изменить». При указании логина обязательно укажите и пароль.</p>
-            <div id="roleFieldWrapper">
-              <label class="text-xs font-semibold text-slate-600">Роль</label>
-              <select id="uRole" onchange="onUserRoleFieldChange()" class="w-full border p-2 rounded text-sm">
-                <option value="employee">Сотрудник</option>
-                <option value="assistant">Ассистент</option>
-                <option value="admin">Администратор</option>
-              </select>
-            </div>
-            <div id="assistantZoneWrapper" class="hidden border rounded-lg p-3 bg-slate-50">
-              <label class="text-xs font-semibold text-slate-600">Доступная зона</label>
-              <p class="text-[11px] text-slate-400 mb-2">Если ничего не выбрано — доступа к сотрудникам нет. Иначе видны только выбранные объекты/отделы.</p>
-              <div class="grid grid-cols-2 gap-2">
-                <div>
-                  <div class="flex items-center justify-between mb-1"><span class="text-[11px] font-semibold text-slate-500">Объекты</span>
-                    <span class="text-[11px] whitespace-nowrap"><button type="button" onclick="zoneSelectAll('uAssistantObjects', true)" class="text-blue-600 hover:underline font-semibold">Выбрать все</button> · <button type="button" onclick="zoneSelectAll('uAssistantObjects', false)" class="text-slate-500 hover:underline">Снять</button></span></div>
-                  <div id="uAssistantObjects" class="max-h-32 overflow-y-auto border rounded bg-white p-1.5 space-y-1 text-sm"></div>
-                </div>
-                <div>
-                  <div class="flex items-center justify-between mb-1"><span class="text-[11px] font-semibold text-slate-500">Отделы</span>
-                    <span class="text-[11px] whitespace-nowrap"><button type="button" onclick="zoneSelectAll('uAssistantDepartments', true)" class="text-blue-600 hover:underline font-semibold">Выбрать все</button> · <button type="button" onclick="zoneSelectAll('uAssistantDepartments', false)" class="text-slate-500 hover:underline">Снять</button></span></div>
-                  <div id="uAssistantDepartments" class="max-h-32 overflow-y-auto border rounded bg-white p-1.5 space-y-1 text-sm"></div>
-                </div>
-              </div>
-            </div>
-            <div id="adminFunctionsWrapper" class="hidden border rounded-lg p-3 bg-blue-50/40">
-              <label id="adminFunctionsLabel" class="text-xs font-semibold text-slate-600">Функции администратора</label>
-              <p id="adminFunctionsHint" class="text-[11px] text-slate-500 mb-2">Отметьте, чем занимается этот администратор — можно выбрать несколько. Работать он сможет только с отмеченным, остальное будет скрыто и закрыто на сервере.</p>
-              <div id="uAdminFunctions" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
-            </div>
-            <div data-staff-only>
-              <label class="text-xs font-semibold text-slate-600">Роль в комиссии</label>
-              <select id="uCommitteeRole" class="w-full border p-2 rounded text-sm">
-                <option value="">— нет —</option>
-                <option value="chairman">Председатель</option>
-                <option value="biot_engineer">Инженер по БиОТ</option>
-                <option value="member">Член комиссии</option>
-              </select>
-              <p class="text-[11px] text-slate-400 mt-1">Даёт доступ к электронной подписи протоколов комиссии («Электронная подпись» в меню).</p>
-            </div>
-            <div class="flex justify-end space-x-2 pt-3 border-t">
-              <button type="button" onclick="closeUserModal()" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
-              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Сохранить</button>
-            </div>
-          </form>
-        </div>
-      </div>
-      <div id="statusModal" class="fixed inset-0 bg-slate-900/50 hidden flex items-center justify-center p-4 z-50">
-        <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6">
-          <h3 class="text-lg font-bold mb-1" id="statusModalTitle">Статус сотрудника</h3>
-          <p class="text-xs text-slate-500 mb-4" id="statusModalHint"></p>
-          <form onsubmit="submitStatusForm(event)" class="space-y-3">
-            <input type="hidden" id="statusUserId">
-            <input type="hidden" id="statusValue">
-            <div>
-              <label class="text-xs font-semibold text-slate-600" id="statusDateLabel">Дата</label>
-              <input type="date" id="statusDate" class="w-full border p-2 rounded text-sm">
-            </div>
-            <div id="statusDateEndWrap" class="hidden">
-              <label class="text-xs font-semibold text-slate-600" id="statusDateEndLabel">Отпуск по</label>
-              <input type="date" id="statusDateEnd" class="w-full border p-2 rounded text-sm">
-            </div>
-            <div id="statusReasonWrap" class="hidden space-y-2">
-              <div>
-                <label class="text-xs font-semibold text-slate-600">Причина отпуска</label>
-                <select id="statusReason" onchange="onStatusReasonChange()" class="w-full border p-2 rounded text-sm">
-                  <option value="">— выберите причину —</option>
-                  ${LEAVE_REASON_KEYS.map(k => `<option value="${k}">${esc(leaveReasonLabel(k))}</option>`).join('')}
-                </select>
-              </div>
-              <div id="statusNoteWrap" class="hidden">
-                <label class="text-xs font-semibold text-slate-600">Пояснение</label>
-                <input type="text" id="statusNote" maxlength="200" placeholder="Например: учебный сбор, командировка…" class="w-full border p-2 rounded text-sm">
-              </div>
-            </div>
-            <div class="flex justify-end space-x-2 pt-3 border-t">
-              <button type="button" onclick="closeStatusModal()" class="px-4 py-2 border rounded-lg text-sm">Отмена</button>
-              <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg text-sm">Подтвердить</button>
-            </div>
-          </form>
-        </div>
-      </div>
+      ${userModalHtml()}
+      ${statusModalHtml()}
       ${assignModalHtml()}
     `;
     if (!state.dictionariesLoaded) {
@@ -5111,16 +5154,9 @@ async function ctxLoadUser(id) {
 }
 // Модалки «Изменить» и «Статус» живут в разметке вкладки «Сотрудники»/«Архив»/карточки.
 // Если их на текущей странице нет — переходим на нужную вкладку и открываем там.
-async function ctxEditUser(id) {
-  if (document.getElementById('userModal') && (state.users || []).some(x => String(x.id) === String(id))) return editUser(id);
-  return editUserFromProfile(id);
-}
+function ctxEditUser(id) { return editUser(id); }
 function ctxStatus(id, status) {
-  _ctxUserCache.delete(id);
-  if (!document.getElementById('statusUserId')) {
-    state.tab = status === 'active' ? 'archive' : 'users';
-    render();
-  }
+  ensureUserModals();
   openStatusModal(id, status);
 }
 function ctxShowMenuAt(x, y, html) {
@@ -5541,10 +5577,7 @@ async function clearRotation(id) {
   closeRotationModal();
   refreshAfterRotationChange();
 }
-function refreshAfterRotationChange() {
-  if (state.tab === 'user_profile' && state.profileUserId) loadUserProfile(state.profileUserId);
-  else loadUsersList();
-}
+function refreshAfterRotationChange() { refreshAfterUserChange(); }
 
 // Excel: выгрузка (с учётом фильтров), бланк и массовая загрузка
 function exportRotations() {
@@ -5685,7 +5718,7 @@ async function submitStatusForm(e) {
   }
   if (btn) btn.disabled = false;
   closeStatusModal();
-  loadUsersList();
+  refreshAfterUserChange();
 }
 
 // Те же действия («Уволить» / «В декрет» / «Восстановить»), но с карточки профиля сотрудника —
@@ -5917,16 +5950,19 @@ function closeUserModal() {
   document.getElementById('userModal').classList.add('hidden');
 }
 
-function editUser(id) {
-  const u = state.users.find(x => String(x.id) === String(id));
-  if (u) openUserModal(u);
+async function editUser(id) {
+  let u = (state.tab === 'users' || state.tab === 'archive' || state.tab === 'admins')
+    ? (state.users || []).find(x => String(x.id) === String(id)) : null;
+  if (!u) { try { u = await api.getUser(id); } catch (e) { alert(e.message || t('error_generic')); return; } }
+  ensureUserModals();
+  openUserModal(u);
 }
 
 async function delUser(id) {
   if (!isSuperadminUser()) return;
   if (!confirm('Удалить пользователя?')) return;
   await api.deleteUser(id);
-  loadUsersList();
+  refreshAfterUserChange();
 }
 
 async function saveUserForm(e) {
@@ -5977,7 +6013,7 @@ async function saveUserForm(e) {
   } catch (err) {
     if (await handleDuplicateError(err, {
       close: closeUserModal,
-      resend: async () => { await api.saveUser({ ...data, confirm_not_duplicate: true }, id); closeUserModal(); loadUsersList(); }
+      resend: async () => { await api.saveUser({ ...data, confirm_not_duplicate: true }, id); closeUserModal(); refreshAfterUserChange(); }
     })) { if (btn) btn.disabled = false; return; }
     // раньше ошибка сервера терялась молча — окно оставалось открытым и «кнопка не работала»
     const map = {
@@ -6000,7 +6036,7 @@ async function saveUserForm(e) {
   }
   if (btn) btn.disabled = false;
   closeUserModal();
-  loadUsersList();
+  refreshAfterUserChange();
 }
 
 // ===================== ГРУППЫ ОБУЧЕНИЯ =====================
@@ -8929,16 +8965,7 @@ function openUserProfile(userId) {
 // Переход на вкладку "Сотрудники" и открытие модалки редактирования конкретного
 // пользователя. Сначала переключаем вкладку (это синхронно кладёт разметку модалки
 // в DOM), и только потом открываем её — иначе элементов модалки ещё не существует.
-async function editUserFromProfile(id) {
-  try {
-    const u = await api.getUser(id);
-    state.tab = (u.employment_status && u.employment_status !== 'active') ? 'archive' : 'users';
-    render();
-    openUserModal(u);
-  } catch (e) {
-    alert(t('error_generic'));
-  }
-}
+async function editUserFromProfile(id) { return editUser(id); }
 
 // Ответ сервера «такой сотрудник уже есть / очень похожий уже есть» (защита от дублей).
 // Точный дубль — сообщение + предложение открыть существующую карточку.
