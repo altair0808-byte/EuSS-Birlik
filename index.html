@@ -546,7 +546,11 @@ async function maybeRefreshToken(force) {
   if (!state.token) return;
   const left = tokenMsLeft(state.token);
   if (left <= 60 * 1000) { sessionExpired(); return; }
-  if (!force && left > 6 * 3600 * 1000) return;     // ещё больше 6 ч — продлевать рано
+  // Админы/ассистенты — постоянный доступ (токен на 365 дн.): продлеваем, когда осталось < 300 дн.
+  // (так старые 12-часовые входы сразу превращаются в постоянные). Сотрудники — когда осталось < 6 ч.
+  const isStaff = state.user && ['superadmin', 'admin', 'assistant'].includes(state.user.role);
+  const threshold = isStaff ? 300 * 24 * 3600 * 1000 : 6 * 3600 * 1000;
+  if (!force && left > threshold) return;
   if (_refreshingToken) return _refreshingToken;
   _refreshingToken = (async () => {
     try {

@@ -57,6 +57,11 @@ function loginFailed(login) {
 }
 setInterval(() => { const now = Date.now(); for (const [k, f] of failsByLogin) if ((!f.until || f.until < now) && now - f.first > LOCK_MS) failsByLogin.delete(k); }, 10 * 60 * 1000).unref();
 
+// Срок входа: администраторы, ассистенты и суперадмин — постоянный доступ (365 дней, продлевается сам
+// при каждом заходе); сотрудники — 12 ч. Смена пароля и отключение учётной записи всё равно
+// сразу закрывают все входы (проверяется в authRequired на каждый запрос).
+function tokenTtl(role) { return STAFF_ROLES.includes(role) ? '365d' : '12h'; }
+
 function authRequired(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -186,7 +191,7 @@ router.post('/login', loginLimiter, async (req, res) => {
         admin_functions: user.admin_functions || []
       },
       JWT_SECRET,
-      { expiresIn: '12h' }
+      { expiresIn: tokenTtl(user.role) }
     );
 
     res.json({
@@ -238,7 +243,7 @@ router.post('/refresh', authRequired, async (req, res) => {
       id: u.id, login: u.login, role: u.role, last_name: u.last_name, first_name: u.first_name,
       object: u.object, department: u.department, position: u.position, committee_role: u.committee_role || null,
       assistant_objects: u.assistant_objects || [], assistant_departments: u.assistant_departments || [], admin_functions: u.admin_functions || []
-    }, JWT_SECRET, { expiresIn: '12h' });
+    }, JWT_SECRET, { expiresIn: tokenTtl(u.role) });
     res.json({ token });
   } catch (e) {
     res.status(500).json({ error: 'server_error', details: e.message });
@@ -270,7 +275,7 @@ router.post('/change-password', authRequired, async (req, res) => {
       id: u.id, login: u.login, role: u.role, last_name: u.last_name, first_name: u.first_name,
       object: u.object, department: u.department, position: u.position, committee_role: u.committee_role || null,
       assistant_objects: u.assistant_objects || [], assistant_departments: u.assistant_departments || [], admin_functions: u.admin_functions || []
-    }, JWT_SECRET, { expiresIn: '12h' });
+    }, JWT_SECRET, { expiresIn: tokenTtl(u.role) });
     res.json({ ok: true, token });
   } catch (e) {
     res.status(500).json({ error: 'server_error', details: e.message });
