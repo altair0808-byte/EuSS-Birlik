@@ -280,6 +280,17 @@ async function loadProtocolSignatures(protocolId) {
   return r.rows;
 }
 
+// Закрытый протокол менять нельзя (номер, даты, состав) — только «Открыть снова».
+async function checkOpen(protocolId, res, what) {
+  const r = await query('SELECT status FROM protocols WHERE id = $1', [protocolId]);
+  if (!r.rows[0]) { res.status(404).json({ error: 'not_found' }); return false; }
+  if (r.rows[0].status !== 'open') {
+    res.status(409).json({ error: 'closed', message: `${what || 'Протокол'} закрыт — изменения запрещены. Сначала нажмите «Открыть снова».` });
+    return false;
+  }
+  return true;
+}
+
 async function checkNotLocked(protocolId, res) {
   const r = await query('SELECT locked, status FROM protocols WHERE id = $1', [protocolId]);
   if (!r.rows[0]) { res.status(404).json({ error: 'not_found' }); return false; }
@@ -650,6 +661,9 @@ router.patch('/:id', authRequired, requireRole('superadmin'), requireAdminFuncti
   if (!fields.length) return res.json({ ok: true });
   try {
     if (!(await checkNotLocked(req.params.id, res))) return;
+    // Закрытый протокол: разрешено только открыть его снова (status = 'open' без других полей)
+    const onlyReopen = status === 'open' && protocol_number === undefined && open_date === undefined && close_date === undefined;
+    if (!onlyReopen && !(await checkOpen(req.params.id, res))) return;
     if (protocol_number !== undefined || open_date !== undefined) {
       const curRes = await query(`SELECT protocol_number, to_char(open_date, 'YYYY-MM-DD') AS open_date FROM protocols WHERE id = $1`, [req.params.id]);
       const cur = curRes.rows[0];
@@ -714,6 +728,8 @@ router.post('/:id/move-members', authRequired, requireRole('admin', 'superadmin'
     if (targetId === srcId) return res.status(400).json({ error: 'same_protocol', message: 'Это тот же протокол' });
     if (!(await checkNotLocked(srcId, res))) return;
     if (!(await checkNotLocked(targetId, res))) return;
+    if (!(await checkOpen(srcId, res, 'Протокол, из которого переносите,'))) return;
+    if (!(await checkOpen(targetId, res, 'Протокол, в который переносите,'))) return;
     const tRes = await query(`SELECT id, protocol_number, to_char(open_date, 'YYYY-MM-DD') AS open_date FROM protocols WHERE id = $1`, [targetId]);
     const target = tRes.rows[0];
     if (!target) return res.status(404).json({ error: 'not_found', message: 'Протокол для переноса не найден' });

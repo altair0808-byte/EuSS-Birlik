@@ -641,6 +641,16 @@ async function finalizeAttempt(a, course, answers, focus_violations, req) {
           ? activeProtocol.open_date.toISOString().slice(0, 10)
           : String(activeProtocol.open_date);
         protocolId = activeProtocol.id;
+      } else if (!course.is_external) {
+        // Открытого протокола сейчас нет. Если номер в записи ведёт в ЗАКРЫТЫЙ (или подписанный) протокол —
+        // не «дописываем» человека туда задним числом: оставляем без протокола, его подтянет первый
+        // протокол, чей период охватывает дату теста (attachPeriodMembers).
+        const own = await query(`
+          SELECT status, locked FROM protocols
+          WHERE id = $1 OR ($1::bigint IS NULL AND protocol_number = $2 AND to_char(open_date, 'YYYY-MM-DD') = LEFT($3, 10))
+          LIMIT 1`, [protocolId || null, String(protocolNumber || ''), String(protocolDate || '')]);
+        const p = own.rows[0];
+        if (p && (p.status !== 'open' || p.locked)) { protocolId = null; protocolNumber = ''; }
       }
     }
 

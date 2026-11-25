@@ -8741,7 +8741,7 @@ function renderProtocolsView() {
           <span class="text-[11px] text-slate-400 font-semibold" title="Протокол полностью подписан комиссией — изменение, закрытие и удаление запрещены">🔒 Подписан</span>
           ${(state.user && state.user.role === 'superadmin') ? `<button onclick="revokeProtocolAction(${p.id})" class="text-red-600 hover:underline text-xs">Аннулировать</button>` : ''}
         ` : `
-          ${isSuperadminUser() ? `<button onclick="editProtocol(${p.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>` : ''}
+          ${isSuperadminUser() && p.status === 'open' ? `<button onclick="editProtocol(${p.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>` : ''}
           ${p.status === 'open'
             ? `<button onclick="closeProtocolAction(${p.id})" class="text-amber-600 hover:underline text-xs">Закрыть</button>`
             : `<button onclick="reopenProtocolAction(${p.id})" class="text-emerald-600 hover:underline text-xs">Открыть снова</button>`}
@@ -8765,7 +8765,7 @@ async function openProtocolMembersModal(id) {
     const data = await api.getProtocolMembers(id);
     const pr = data.protocol || {};
     const canMove = !isObserverUser() && state.user && ['admin', 'superadmin'].includes(state.user.role)
-      && !pr.locked && pr.status !== 'revoked' && data.members.length > 0;
+      && !pr.locked && pr.status === 'open' && data.members.length > 0;
     if (canMove && !(state.protocols || []).length) { try { state.protocols = await api.getProtocols(); } catch (e) {} }
     if (title) title.textContent = `Протокол № ${data.protocol.protocol_number} (${fmtDate(data.protocol.open_date)} — ${fmtDate(data.protocol.close_date)})`;
     const membersHtml = !data.members.length
@@ -8835,7 +8835,7 @@ async function pmAttachPeriod(id) {
 }
 // Перенос сотрудников в другой протокол (из окна «Протокол № …»)
 function pmMoveBarHtml(srcId) {
-  const list = (state.protocols || []).filter(p => String(p.id) !== String(srcId) && !p.locked && p.status !== 'revoked')
+  const list = (state.protocols || []).filter(p => String(p.id) !== String(srcId) && !p.locked && p.status === 'open')
     .sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1) || String(b.open_date).localeCompare(String(a.open_date)));
   const opts = list.map(p => `<option value="${p.id}">№ ${esc(p.protocol_number)} · ${fmtDate(p.open_date)}–${fmtDate(p.close_date)}${p.status === 'open' ? ' · ' + _L('открыт', 'ашық') : ' · ' + _L('закрыт', 'жабық')}</option>`).join('');
   return `
@@ -8843,7 +8843,7 @@ function pmMoveBarHtml(srcId) {
       <span class="text-slate-700">${_L('Выбрано', 'Таңдалды')}: <b id="pmSelCount">0</b></span>
       <span class="text-slate-500">→ ${_L('перенести в', 'ауыстыру')}</span>
       <select id="pmTarget" class="border rounded-lg px-2 py-1.5 text-sm bg-white max-w-[260px]">
-        ${opts || `<option value="">${_L('нет других протоколов', 'басқа хаттама жоқ')}</option>`}
+        ${opts || `<option value="">${_L('нет других открытых протоколов', 'басқа ашық хаттама жоқ')}</option>`}
       </select>
       <button id="pmMoveBtn" type="button" onclick="pmMoveSelected(${srcId})" disabled class="px-3 py-1.5 rounded-lg bg-blue-600 text-white font-semibold text-xs disabled:opacity-40">${_L('Перенести', 'Ауыстыру')}</button>
     </div>`;
