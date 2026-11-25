@@ -77,7 +77,7 @@ const PROTOCOL_COLS = `
   p.id, p.protocol_number, p.status, p.created_by, p.created_at,
   to_char(p.open_date, 'YYYY-MM-DD') AS open_date,
   to_char(p.close_date, 'YYYY-MM-DD') AS close_date,
-  p.locked, p.pdf_hash, p.pdf_version,
+  p.locked, p.archived, p.pdf_hash, p.pdf_version,
   to_char(p.fully_signed_at, 'YYYY-MM-DD"T"HH24:MI:SS') AS fully_signed_at,
   p.revoke_reason,
   to_char(p.revoked_at, 'YYYY-MM-DD"T"HH24:MI:SS') AS revoked_at
@@ -292,8 +292,12 @@ async function checkOpen(protocolId, res, what) {
 }
 
 async function checkNotLocked(protocolId, res) {
-  const r = await query('SELECT locked, status FROM protocols WHERE id = $1', [protocolId]);
+  const r = await query('SELECT locked, archived, status FROM protocols WHERE id = $1', [protocolId]);
   if (!r.rows[0]) { res.status(404).json({ error: 'not_found' }); return false; }
+  if (r.rows[0].archived && r.rows[0].status !== 'revoked') {
+    res.status(409).json({ error: 'archived', message: 'Протокол закрыт окончательно — изменения запрещены (можно только скачать)' });
+    return false;
+  }
   if (r.rows[0].status === 'revoked') {
     res.status(409).json({ error: 'revoked', message: 'Протокол аннулирован — изменения запрещены' });
     return false;
@@ -311,8 +315,12 @@ async function checkNotLocked(protocolId, res) {
 // в любом состоянии locked — это лишь чистка истории, статус REVOKED у выданных по
 // нему удостоверений уже зафиксирован и переживёт удаление строки протокола.
 async function checkDeletable(protocolId, res) {
-  const r = await query('SELECT locked, status FROM protocols WHERE id = $1', [protocolId]);
+  const r = await query('SELECT locked, archived, status FROM protocols WHERE id = $1', [protocolId]);
   if (!r.rows[0]) { res.status(404).json({ error: 'not_found' }); return false; }
+  if (r.rows[0].archived && r.rows[0].status !== 'revoked') {
+    res.status(409).json({ error: 'archived', message: 'Протокол закрыт окончательно — удалить нельзя' });
+    return false;
+  }
   if (r.rows[0].locked && r.rows[0].status !== 'revoked') {
     res.status(409).json({ error: 'locked', message: 'Протокол полностью подписан всеми членами комиссии — сначала аннулируйте его, затем можно удалить' });
     return false;
@@ -394,7 +402,7 @@ router.get('/:id/signatures', authRequired, requireRole('admin', 'assistant', 's
         signed: !!s,
         signed_by: s ? { name: `${s.last_name || ''} ${s.first_name || ''}`.trim(), position: s.position } : null,
         signed_at: s ? s.signed_at : null,
-        can_sign: !p.locked && !s && me.committee_role === role
+        can_sign: !p.locked && !p.archived && !s && me.committee_role === role
       };
     });
 
@@ -435,9 +443,12 @@ router.post('/:id/sign', authRequired, requireRole('admin', 'assistant', 'supera
       return res.status(401).json({ error: 'invalid_password', message: 'Неверный пароль' });
     }
 
-    const pRes = await query('SELECT id, locked FROM protocols WHERE id = $1', [req.params.id]);
+    const pRes = await query('SELECT id, locked, archived FROM protocols WHERE id = $1', [req.params.id]);
     const p = pRes.rows[0];
     if (!p) return res.status(404).json({ error: 'not_found', message: 'Протокол не найден' });
+    if (p.archived) {
+      return res.status(409).json({ error: 'archived', message: 'Протокол закрыт окончательно — подписание недоступно' });
+    }
     if (p.locked) {
       return res.status(409).json({ error: 'already_locked', message: 'Протокол уже полностью подписан и закрыт для изменений' });
     }
@@ -757,6 +768,18 @@ router.post('/:id/move-members', authRequired, requireRole('superadmin'), requir
   }
 });
 
+// Закрыть окончательно (архив) — только суперадмин. Обратно не открывается.
+router.post('/:id/archive', authRequired, requireRole('superadmin'), requireAdminFunction('biot'), async (req, res) => {
+  try {
+    if (!(await checkNotLocked(req.params.id, res))) return;
+    const r = await query(`UPDATE protocols SET archived = TRUE, archived_at = NOW(), status = 'closed' WHERE id = $1 RETURNING id, status, archived`, [req.params.id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'not_found' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
 // Снова открыть протокол
 router.post('/:id/reopen', authRequired, requireRole('superadmin'), requireAdminFunction('biot'), async (req, res) => {
   try {
@@ -796,7 +819,7 @@ router.delete('/:id', authRequired, requireRole('superadmin'), requireAdminFunct
 async function findActiveProtocol(dateStr) {
   const result = await query(`
     SELECT ${PROTOCOL_COLS} FROM protocols p
-    WHERE p.status = 'open' AND NOT p.locked AND $1::date BETWEEN p.open_date AND p.close_date
+    WHERE p.status = 'open' AND NOT p.locked AND NOT p.archived AND $1::date BETWEEN p.open_date AND p.close_date
     ORDER BY p.open_date DESC
     LIMIT 1
   `, [dateStr]);
@@ -811,7 +834,7 @@ async function findOpenProtocolByNumber(number) {
   const r = await query(`
     SELECT id, protocol_number, to_char(open_date, 'YYYY-MM-DD') AS open_date, to_char(close_date, 'YYYY-MM-DD') AS close_date
     FROM protocols
-    WHERE status = 'open' AND NOT locked AND protocol_number = $1
+    WHERE status = 'open' AND NOT locked AND NOT archived AND protocol_number = $1
       AND close_date >= (NOW() AT TIME ZONE 'Asia/Atyrau')::date
     ORDER BY open_date DESC LIMIT 1
   `, [n]);
@@ -824,7 +847,7 @@ async function findOpenProtocolByNumber(number) {
 // ручные/исторические записи, записи в полностью подписанных/аннулированных протоколах.
 async function attachPeriodMembers(protocolId) {
   const r = await query(`
-    WITH p AS (SELECT * FROM protocols WHERE id = $1 AND status = 'open' AND NOT locked),
+    WITH p AS (SELECT * FROM protocols WHERE id = $1 AND status = 'open' AND NOT locked AND NOT archived),
     cand AS (
       SELECT a.id FROM assignments a, p
       WHERE a.status IN ('passed', 'failed')
@@ -838,7 +861,7 @@ async function attachPeriodMembers(protocolId) {
           WHERE q.id <> p.id
             AND (q.id = a.protocol_id OR (a.protocol_id IS NULL AND q.protocol_number = a.protocol_number
                                           AND LEFT(a.protocol_date, 10) = to_char(q.open_date, 'YYYY-MM-DD')))
-            AND (q.locked OR q.status = 'revoked'
+            AND (q.locked OR q.archived OR q.status = 'revoked'
                  OR LEFT(a.test_date, 10)::date BETWEEN q.open_date AND q.close_date)
         )
     )

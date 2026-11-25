@@ -8737,6 +8737,8 @@ function renderProtocolsView() {
         <button onclick="downloadProtocolPdf(${p.id})" class="text-purple-600 hover:underline text-xs font-semibold">Скачать PDF</button>
         ${isObserverUser() ? '' : p.status === 'revoked' ? `
           ${(state.user && state.user.role === 'superadmin') ? `<button onclick="deleteProtocolAction(${p.id})" class="text-red-600 hover:underline text-xs">Удалить</button>` : ''}
+        ` : p.archived ? `
+          <span class="text-[11px] text-slate-500 font-semibold" title="Закрыт окончательно: изменение, перенос сотрудников, повторное открытие и удаление запрещены. Можно только скачать.">🔒 ${_L('Закрыт окончательно', 'Түпкілікті жабылды')}</span>
         ` : p.locked ? `
           <span class="text-[11px] text-slate-400 font-semibold" title="Протокол полностью подписан комиссией — изменение, закрытие и удаление запрещены">🔒 Подписан</span>
           ${(state.user && state.user.role === 'superadmin') ? `<button onclick="revokeProtocolAction(${p.id})" class="text-red-600 hover:underline text-xs">Аннулировать</button>` : ''}
@@ -8744,7 +8746,8 @@ function renderProtocolsView() {
           ${isSuperadminUser() && p.status === 'open' ? `<button onclick="editProtocol(${p.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>` : ''}
           ${p.status === 'open'
             ? `<button onclick="closeProtocolAction(${p.id})" class="text-amber-600 hover:underline text-xs">Закрыть</button>`
-            : isSuperadminUser() ? `<button onclick="reopenProtocolAction(${p.id})" class="text-emerald-600 hover:underline text-xs">Открыть снова</button>` : ''}
+            : isSuperadminUser() ? `<button onclick="reopenProtocolAction(${p.id})" class="text-emerald-600 hover:underline text-xs">Открыть снова</button>
+               <button onclick="archiveProtocolAction(${p.id})" title="${_L('Больше нельзя будет открыть, менять состав и удалить — только скачать', 'Тек жүктеуге болады')}" class="text-slate-600 hover:underline text-xs">🔒 ${_L('Закрыть окончательно', 'Түпкілікті жабу')}</button>` : ''}
           ${(state.user && state.user.role === 'superadmin') ? `<button onclick="revokeProtocolAction(${p.id})" class="text-red-600 hover:underline text-xs">Аннулировать</button>` : ''}
           ${isSuperadminUser() ? `<button onclick="deleteProtocolAction(${p.id})" class="text-red-600 hover:underline text-xs">Удалить</button>` : ''}
         `}
@@ -8765,7 +8768,7 @@ async function openProtocolMembersModal(id) {
     const data = await api.getProtocolMembers(id);
     const pr = data.protocol || {};
     const canMove = isSuperadminUser()
-      && !pr.locked && pr.status === 'open' && data.members.length > 0;
+      && !pr.locked && !pr.archived && pr.status === 'open' && data.members.length > 0;
     if (canMove && !(state.protocols || []).length) { try { state.protocols = await api.getProtocols(); } catch (e) {} }
     if (title) title.textContent = `Протокол № ${data.protocol.protocol_number} (${fmtDate(data.protocol.open_date)} — ${fmtDate(data.protocol.close_date)})`;
     const membersHtml = !data.members.length
@@ -8835,7 +8838,7 @@ async function pmAttachPeriod(id) {
 }
 // Перенос сотрудников в другой протокол (из окна «Протокол № …»)
 function pmMoveBarHtml(srcId) {
-  const list = (state.protocols || []).filter(p => String(p.id) !== String(srcId) && !p.locked && p.status === 'open')
+  const list = (state.protocols || []).filter(p => String(p.id) !== String(srcId) && !p.locked && !p.archived && p.status === 'open')
     .sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1) || String(b.open_date).localeCompare(String(a.open_date)));
   const opts = list.map(p => `<option value="${p.id}">№ ${esc(p.protocol_number)} · ${fmtDate(p.open_date)}–${fmtDate(p.close_date)}${p.status === 'open' ? ' · ' + _L('открыт', 'ашық') : ' · ' + _L('закрыт', 'жабық')}</option>`).join('');
   return `
@@ -9093,6 +9096,12 @@ async function saveProtocolForm(e) {
   }
 }
 
+async function archiveProtocolAction(id) {
+  if (!confirm(_L('Закрыть протокол окончательно?\nПосле этого его нельзя будет открыть снова, изменить, перенести сотрудников или удалить — только скачать.',
+                  'Хаттаманы түпкілікті жабу керек пе?'))) return;
+  try { await api.req('/api/protocols/' + id + '/archive', { method: 'POST' }); loadProtocolsList(); }
+  catch (e) { alert(e.message || t('error_generic')); }
+}
 async function closeProtocolAction(id) {
   if (!confirm('Закрыть протокол? Новые сотрудники, сдавшие тест позже, больше не будут автоматически получать этот номер.')) return;
   await api.closeProtocol(id);

@@ -526,6 +526,10 @@ async function initDb() {
     -- редактирование блокируется, а итоговый PDF с подписями сохраняется тут же (signed_pdf_data),
     -- чтобы при повторном скачивании отдавался ровно тот же файл и та же контрольная сумма (pdf_hash).
     ALTER TABLE protocols ADD COLUMN IF NOT EXISTS locked BOOLEAN NOT NULL DEFAULT FALSE;
+    -- «Закрыт окончательно» (архив): как подписанный — без изменений состава, номера, дат, переоткрытия и удаления,
+    -- но без подписей. Ставит суперадмин; разово — все протоколы до № 31 за 2026 г. и все за прошлые годы.
+    ALTER TABLE protocols ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE protocols ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
     ALTER TABLE protocols ADD COLUMN IF NOT EXISTS signed_docx_data TEXT;
     ALTER TABLE protocols ADD COLUMN IF NOT EXISTS fully_signed_at TIMESTAMPTZ;
     ALTER TABLE protocols ADD COLUMN IF NOT EXISTS pdf_hash TEXT;
@@ -835,6 +839,23 @@ async function initDb() {
   } catch (e) {
     console.error('Ошибка выдачи card_color:', e.message);
   }
+
+  // Разовое окончательное закрытие старых протоколов (по просьбе: «все до № 31 включительно»).
+  // Флаг в settings, чтобы не повторять: если потом суперадмин что-то изменит — миграция это не перетрёт.
+  try {
+    await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS protocols_archived_upto31 BOOLEAN NOT NULL DEFAULT FALSE`);
+    const done = await pool.query('SELECT protocols_archived_upto31 AS d FROM settings WHERE id = 1');
+    if (done.rows[0] && !done.rows[0].d) {
+      const r = await pool.query(`
+        UPDATE protocols SET archived = TRUE, archived_at = NOW(), status = CASE WHEN status = 'revoked' THEN status ELSE 'closed' END
+        WHERE NOT archived AND (
+          EXTRACT(YEAR FROM open_date)::int < 2026
+          OR (EXTRACT(YEAR FROM open_date)::int = 2026 AND protocol_number ~ '^[0-9]+$' AND protocol_number::int <= 31)
+        )`);
+      await pool.query('UPDATE settings SET protocols_archived_upto31 = TRUE WHERE id = 1');
+      console.log(`[migrate] Окончательно закрыто протоколов (до № 31): ${r.rowCount}`);
+    }
+  } catch (e) { console.error('[migrate] archive protocols:', e.message); }
 
   // Разовая раздача public_uid сотрудникам, созданным до этого обновления.
   try {
