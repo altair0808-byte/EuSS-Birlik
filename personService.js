@@ -114,7 +114,7 @@ async function buildPerson(userRow) {
   };
 }
 
-const USER_COLS = `id, last_name, first_name, position, department, object, login, public_uid,
+const USER_COLS = `id, last_name, first_name, position, department, object, login, public_uid, employment_status,
   to_char(hire_date, 'YYYY-MM-DD') AS hire_date`;
 
 // Для авторизованных роутов: только сотрудник (role = 'employee').
@@ -147,6 +147,7 @@ function toPublicPayload(person, employer) {
     department: u.department || u.object || '',
     employer: employer || person.employer || '',
     hire_date: u.hire_date || null, // дата начала работы в компании (для стажа возле QR)
+    employment: u.employment_status === 'fired' ? 'fired' : u.employment_status === 'maternity' ? 'leave' : 'active',
     overall_status: person.overall_status,
     courses: person.cards.map((c) => ({
       title_ru: c.title_ru || '',
@@ -163,9 +164,36 @@ function toPublicPayload(person, employer) {
   };
 }
 
+// Для страницы по QR: санкнижка, ежегодный медосмотр и обязательные обучения, которые ещё не пройдены.
+// Каждая часть необязательна — ошибка в одной не ломает страницу.
+async function loadExtras(userId) {
+  const out = { medbook: null, medexam: null, missing: [] };
+  try {
+    const e = await require('./lib/medbook').loadEntryForUser(userId);
+    if (e) out.medbook = { status: e.status, valid_until: e.expires || null, date: e.start_date || null, period_months: e.period_months || null };
+  } catch (e) { console.error('QR medbook:', e.message); }
+  try {
+    const e = await require('./routes/medexams').loadMedexamForUser(userId);
+    if (e) out.medexam = { status: e.status, valid_until: e.expires || null, date: e.exam_date || null };
+  } catch (e) { console.error('QR medexam:', e.message); }
+  try {
+    const { mandatoryForSql } = require('./routes/courses');
+    const r = await query(`
+      SELECT c.title_ru, c.title_kz FROM courses c, users u
+      WHERE u.id = $1 AND c.is_mandatory AND ${siteKindSql('c')} AND ${mandatoryForSql('c', 'u')}
+        AND NOT EXISTS (SELECT 1 FROM assignments a WHERE a.user_id = u.id AND a.course_id = c.id AND a.status = 'passed')
+      ORDER BY c.title_ru`, [userId]);
+    out.missing = r.rows.map((x) => ({ title_ru: x.title_ru || '', title_kz: x.title_kz || '' }));
+  } catch (e) { console.error('QR missing courses:', e.message); }
+  return out;
+}
+
 async function getPublicProfile(publicUid) {
   const person = await getPersonByPublicUid(publicUid);
-  return person ? toPublicPayload(person, person.employer) : null;
+  if (!person) return null;
+  const payload = toPublicPayload(person, person.employer);
+  Object.assign(payload, await loadExtras(person.user.id));
+  return payload;
 }
 
 module.exports = {
@@ -174,5 +202,6 @@ module.exports = {
   getPersonForCard,
   getPersonByPublicUid,
   toPublicPayload,
-  getPublicProfile
+  getPublicProfile,
+  loadExtras
 };

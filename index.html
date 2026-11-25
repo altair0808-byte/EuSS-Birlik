@@ -793,7 +793,7 @@ async function downloadAuthed(url, filename, forceDownload) {
   const closePre = () => { try { if (pre && !pre.closed) pre.close(); } catch (e) {} };
   try {
     const res = await fetch(url, { headers: state.token ? { 'Authorization': 'Bearer ' + state.token } : {} });
-    if (res.status === 401) { closePre(); logout(); return; }
+    if (res.status === 401) { closePre(); sessionExpired(); return; }
     if (!res.ok) {
       closePre();
       const err = await res.json().catch(() => ({ error: 'Ошибка сервера' }));
@@ -2284,6 +2284,7 @@ async function loadTabContent() {
         <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
           <h2 class="text-lg font-bold text-slate-900">${isArchiveTab ? _L('Архив', 'Мұрағат') : isAdminsTab ? _L('Администраторы и ассистенты', 'Әкімшілер мен ассистенттер') : _L('Сотрудники', 'Қызметкерлер')}</h2>
           <div class="flex flex-wrap gap-2 toolbar-scroll">
+            ${isAdminsTab || isArchiveTab ? '' : `<button type="button" onclick="qrDownloadFromList()" title="${_L('PDF с QR-кодами: выбранные галочками или все в текущем списке (с учётом поиска и фильтров). По QR — обучения, санкнижка, медосмотр.', 'QR-кодтар PDF')}" class="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg">📱 QR-коды</button>`}
             ${isAdminsTab || isArchiveTab ? '' : `<input type="file" id="importFile" accept=".xlsx" class="hidden" onchange="handleImportFile(this)">
             <input type="file" id="rotImportFile" accept=".xlsx" class="hidden" onchange="handleRotationImport(this)">
             <div class="relative">
@@ -5189,6 +5190,36 @@ document.addEventListener('click', e => {
 });
 window.addEventListener('scroll', closeUserRowMenu, true);
 
+// ── QR-коды сотрудников (PDF, 8 карточек на лист A4) ──────────────────────────
+async function qrDownload(ids) {
+  ids = [...new Set((ids || []).map(Number).filter(Boolean))];
+  if (!ids.length) { alert(_L('Нет сотрудников для QR', 'QR үшін қызметкер жоқ')); return; }
+  try {
+    const res = await fetch('/api/id-cards/qr-sheet', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + state.token },
+      body: JSON.stringify({ user_ids: ids })
+    });
+    if (res.status === 401) { sessionExpired(); return; }
+    if (!res.ok) { const j = await res.json().catch(() => ({})); alert(j.message || j.details || t('error_generic')); return; }
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = ids.length === 1 ? 'qr-sotrudnik.pdf' : `qr-sotrudniki-${ids.length}.pdf`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+  } catch (e) { alert(e.message || t('error_generic')); }
+}
+function qrDownloadFromList() {
+  const sel = (typeof bulkSelectedUserIds !== 'undefined') ? [...bulkSelectedUserIds] : [];
+  if (sel.length) return qrDownload(sel);
+  const list = (state.users || []).filter(u => u.role === 'employee' || !u.role);
+  if (!list.length) { alert(_L('В списке нет сотрудников', 'Тізімде қызметкер жоқ')); return; }
+  if (!confirm(_L(`Скачать QR-коды для ${list.length} сотрудник(ов) из текущего списка?\n(Можно отметить галочками только нужных или отфильтровать список по отделу.)`,
+                  `Ағымдағы тізімнен ${list.length} қызметкерге QR-кодтар жүктеу керек пе?`))) return;
+  qrDownload(list.map(u => u.id));
+}
+
 // ── Быстрые действия по правому клику на сотруднике ──────────────────────────
 // Работает везде, где в строке есть ссылка на карточку сотрудника (openUserProfile):
 // список сотрудников и архив, мед. книжки, медосмотр, «Истекает срок», обучение.
@@ -5262,6 +5293,7 @@ document.addEventListener('contextmenu', async ev => {
   const archived = u.employment_status && u.employment_status !== 'active';
   let html = `<div class="px-3 pt-1.5 pb-2 border-b mb-1"><div class="font-semibold text-slate-900 truncate">${esc(u.last_name || '')} ${esc(u.first_name || '')}</div><div class="text-[11px] text-slate-500 truncate">${esc(posLabel(u.position) || '—')}</div></div>`;
   html += item('👤 ' + _L('Открыть карточку', 'Карточканы ашу'), `openUserProfile(${id})`);
+  if (!archived) html += item('📱 ' + _L('QR-код (PDF)', 'QR-код (PDF)'), `qrDownload([${id}])`);
   if (!isObserverUser() || state.user.role === 'assistant') {
     if (archived) {
       html += item('↩️ ' + _L('Вернуть в штат', 'Штатқа қайтару'), `ctxStatus(${id}, 'active')`, 'text-emerald-700');
@@ -8085,9 +8117,17 @@ async function _openAssignModalImpl(presetUserId, presetUserIds, presetCourseId)
     activeHint.textContent = '';
     try {
       const active = await api.getActiveProtocols();
+      activeHint.className = 'text-[11px] text-emerald-700 font-semibold -mt-1';
       if (active.length) {
         const p = active[0];
+        document.getElementById('asProtNum').value = p.protocol_number;
+        if (p.open_date) document.getElementById('asProtDate').value = String(p.open_date).slice(0, 10);
         activeHint.textContent = `Сейчас открыт протокол № ${p.protocol_number} (до ${fmtDate(p.close_date)}) — если сотрудник сдаст тест сегодня, ему автоматически будет присвоен именно этот номер.`;
+      } else {
+        document.getElementById('asProtNum').value = '';
+        activeHint.textContent = _L('⚠ Нет открытого протокола. Записать на обучение с протоколом нельзя — сначала откройте протокол во вкладке «Протоколы».',
+                                    '⚠ Ашық хаттама жоқ. Алдымен «Хаттамалар» бөлімінде хаттама ашыңыз.');
+        activeHint.className = 'text-[11px] text-red-600 font-semibold -mt-1';
       }
     } catch (e) {}
   }
@@ -8768,6 +8808,11 @@ async function openProtocolMembersModal(id) {
         <button type="button" onclick="downloadProtocolDocx(${id})" class="text-indigo-600 hover:underline text-xs font-semibold">Скачать Word</button>
         <button type="button" onclick="downloadProtocolPdf(${id})" class="text-purple-600 hover:underline text-xs font-semibold">Скачать PDF</button>
       </div>
+      ${(!isObserverUser() && ['admin', 'superadmin'].includes(state.user.role) && pr.status === 'open' && !pr.locked) ? `
+      <div class="flex flex-wrap items-center gap-2 mb-3 text-xs text-slate-600">
+        <button type="button" onclick="pmAttachPeriod(${id})" class="px-3 py-1.5 rounded-lg border border-emerald-300 text-emerald-700 hover:bg-emerald-50 font-semibold">↻ ${_L('Подтянуть сдававших за период', 'Кезеңде тапсырғандарды қосу')} ${fmtDate(pr.open_date)}–${fmtDate(pr.close_date)}</button>
+        <span class="text-slate-400">${_L('Нужные даты не охвачены? Измените дату открытия протокола — сдававшие добавятся сами.', 'Күндер қамтылмаса — хаттаманың ашылу күнін өзгертіңіз.')}</span>
+      </div>` : ''}
       <div id="protoSignBlock" class="mb-4"></div>
       ${data.members.length ? `<div class="text-sm text-slate-600 mb-2">${_L('Сотрудников в протоколе', 'Хаттамадағы қызметкерлер')}: <b>${new Set(data.members.map(m => m.user_id)).size}</b>${new Set(data.members.map(m => m.user_id)).size !== data.members.length ? ` · ${_L('записей', 'жазба')}: ${data.members.length}` : ''}</div>` : ''}
       ${canMove ? pmMoveBarHtml(id) : ''}
@@ -8780,6 +8825,14 @@ async function openProtocolMembersModal(id) {
   }
 }
 
+async function pmAttachPeriod(id) {
+  try {
+    const r = await api.req('/api/protocols/' + id + '/attach-period', { method: 'POST' });
+    alert(r.attached ? _L(`Добавлено в протокол: ${r.attached}`, `Қосылды: ${r.attached}`) : _L('Все, кто сдавал тест в этот период, уже в протоколе.', 'Барлығы хаттамада бар.'));
+    await openProtocolMembersModal(id);
+    if (document.getElementById('protocolsTable')) loadProtocolsList();
+  } catch (e) { alert(e.message || t('error_generic')); }
+}
 // Перенос сотрудников в другой протокол (из окна «Протокол № …»)
 function pmMoveBarHtml(srcId) {
   const list = (state.protocols || []).filter(p => String(p.id) !== String(srcId) && !p.locked && p.status !== 'revoked')
@@ -9029,8 +9082,8 @@ async function saveProtocolForm(e) {
     close_date: document.getElementById('protoCloseDate').value
   };
   try {
-    if (id) await api.updateProtocol(id, data);
-    else await api.openProtocol(data);
+    const r = id ? await api.updateProtocol(id, data) : await api.openProtocol(data);
+    if (r && r.attached) setTimeout(() => alert(_L(`В протокол автоматически добавлены сдававшие в его период: ${r.attached}`, `Хаттамаға автоматты түрде қосылды: ${r.attached}`)), 100);
     document.getElementById('protocolModal').classList.add('hidden');
     // Переходим на вкладку года, в котором открыт/изменён протокол
     state.protocolYear = parseInt(String(data.open_date).slice(0, 4), 10) || state.protocolYear;
@@ -9047,8 +9100,9 @@ async function closeProtocolAction(id) {
 }
 
 async function reopenProtocolAction(id) {
-  await api.reopenProtocol(id);
+  const r = await api.reopenProtocol(id);
   loadProtocolsList();
+  if (r && r.attached) alert(_L(`В протокол автоматически добавлены сдававшие в его период: ${r.attached}`, `Хаттамаға автоматты түрде қосылды: ${r.attached}`));
 }
 
 async function revokeProtocolAction(id) {

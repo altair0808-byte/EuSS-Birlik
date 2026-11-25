@@ -56,6 +56,15 @@
   .grid .lb i { display: block; font-style: normal; color: #94a3b8; font-size: 10px; }
   .grid .vl { font-size: 14px; font-weight: 700; margin-top: 1px; word-break: break-word; }
 
+  .med { background: #fff; border-radius: 14px; box-shadow: 0 4px 14px rgba(15,59,108,0.07); margin-bottom: 10px; border-left: 8px solid #0d9488; padding: 12px 14px; }
+  .med .top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .med .ttl { font-size: 15px; font-weight: 800; }
+  .med .ttl small { display: block; font-size: 12px; font-weight: 500; color: #64748b; }
+  .med .row { margin-top: 6px; font-size: 13px; color: #334155; }
+  .miss { background: #fff; border-radius: 14px; border-left: 8px solid #dc2626; padding: 10px 14px; margin-bottom: 8px; box-shadow: 0 4px 14px rgba(15,59,108,0.07); font-weight: 700; font-size: 14px; }
+  .miss small { display: block; font-weight: 500; color: #64748b; font-size: 12px; }
+  .emp { margin-top: 12px; border-radius: 12px; padding: 10px 14px; font-weight: 800; font-size: 14px; background: #fdecec; color: #b91c1c; border: 1.5px solid #f0a5a5; }
+  .emp.leave { background: #f3e8ff; color: #6d28d9; border-color: #d8b4fe; }
   .msg { text-align: center; color: #64748b; padding: 40px 10px; }
   .msg.err { background: #fff; border-radius: 16px; box-shadow: 0 10px 30px rgba(15,59,108,0.10); }
   .msg .big { font-size: 16px; font-weight: 800; color: #475569; margin-bottom: 6px; }
@@ -145,6 +154,8 @@
       + kv('Подразделение / Бөлім / Department', d.department)
       + kv('Работодатель / Жұмыс беруші / Employer', d.employer)
       + (d.hire_date && tenureShort(d.hire_date) ? kv('Стаж в компании / Өтілі / Tenure', tenureShort(d.hire_date) + ' (' + fmtDate(d.hire_date) + ')') : '')
+      + (d.employment === 'fired' ? '<div class="emp">НЕ РАБОТАЕТ В КОМПАНИИ<br><small>Жұмыс істемейді · No longer employed</small></div>'
+         : d.employment === 'leave' ? '<div class="emp leave">В ОТПУСКЕ / ДЕКРЕТЕ<br><small>Демалыста · On leave</small></div>' : '')
       + '<div class="banner st-' + ov + '"><div class="ic">' + ICON[ICON_BY[ov]] + '</div><div>'
       + '<div class="t1">' + ovT.ru + '</div><div class="t2">' + ovT.kz + '<br>' + ovT.en + '</div></div></div>'
       + '</div>';
@@ -176,6 +187,33 @@
               : '')
         + '</div></div>';
     });
+
+    var missing = Array.isArray(d.missing) ? d.missing : [];
+    if (missing.length) {
+      html += '<div class="sec">Обязательные, не пройдены / Өтілмеген міндетті <span>/ Required, not passed · ' + missing.length + '</span></div>';
+      missing.forEach(function (m) {
+        var t = m.title_ru || m.title_kz || '—';
+        html += '<div class="miss">' + esc(t) + (m.title_kz && m.title_kz !== t ? '<small>' + esc(m.title_kz) + '</small>' : '') + '</div>';
+      });
+    }
+
+    var MED = {
+      valid:   { cls: 'VALID',   ru: 'ДЕЙСТВУЕТ',   kz: 'ЖАРАМДЫ' },
+      soon:    { cls: 'PARTIAL', ru: 'СКОРО ИСТЕКАЕТ', kz: 'ЖАҚЫНДА АЯҚТАЛАДЫ' },
+      overdue: { cls: 'REVOKED', ru: 'ПРОСРОЧЕНО',  kz: 'МЕРЗІМІ ӨТТІ' },
+      no_date: { cls: 'NONE',    ru: 'НЕТ ДАННЫХ',  kz: 'ДЕРЕК ЖОҚ' }
+    };
+    function medCard(title, kz, m) {
+      var st = MED[m.status] || MED.no_date;
+      return '<div class="med st-' + st.cls + '"><div class="top"><div class="ttl">' + title + '<small>' + kz + '</small></div>'
+        + '<span class="pill" title="' + esc(st.kz) + '">' + st.ru + '</span></div>'
+        + '<div class="row">Пройден / Өтті: <b>' + fmtDate(m.date) + '</b> · Действует до / Жарамды: <b>' + fmtDate(m.valid_until) + '</b></div></div>';
+    }
+    if (d.medbook || d.medexam) {
+      html += '<div class="sec">Медицина / Медицина <span>/ Medical</span></div>';
+      if (d.medbook) html += medCard('Санитарная книжка', 'Санитарлық кітапша · Health book', d.medbook);
+      if (d.medexam) html += medCard('Ежегодный медосмотр', 'Жыл сайынғы медициналық тексеру · Annual medical', d.medexam);
+    }
 
     content.className = '';
     content.innerHTML = html;
