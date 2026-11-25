@@ -800,6 +800,26 @@ function protocolFileName(dateStr, number) {
 // в массиве (ещё не подписали), остаются в бланке пустыми линиями — как в исходном шаблоне.
 // companyStamp — необязательный data:image/png;base64,... с прозрачным фоном; печать
 // появляется только если председатель есть среди signatures И передан companyStamp.
+// Приказ, на основании которого работает комиссия («2026 жылғы / года «05» марта № 0023 бұйрықтың негізінде…»).
+// Выбирается по дате открытия протокола: с 01.08.2026 — новый приказ. Новые приказы добавлять сверху списка.
+const ORDERS = [
+  { from: '2026-08-01', day: '01', month: 'август', number: '0089' },
+  { from: '0000-01-01', day: '05', month: 'марта', number: '0023' } // как в шаблоне
+];
+function orderForDate(openDate) {
+  const d = String(openDate || '').slice(0, 10);
+  return ORDERS.find((o) => d >= o.from) || ORDERS[ORDERS.length - 1];
+}
+function applyOrderLine(xml, openDate) {
+  const o = orderForDate(openDate);
+  const base = ORDERS[ORDERS.length - 1];
+  if (o === base) return xml;
+  return xml
+    .replace(/(<w:t[^>]*>) «05» (<\/w:t>)/, (m, a, b) => `${a} «${o.day}» ${b}`)
+    .replace(/(<w:t[^>]*>)марта(<\/w:t>)/, (m, a, b) => `${a}${xmlEscape(o.month)}${b}`)
+    .replace(/(<w:t[^>]*>) № 0023(<\/w:t>)/, (m, a, b) => `${a} № ${o.number}${b}`);
+}
+
 async function buildProtocolDocx({ protocolNumber, openDate, members, signatures, companyStamp }) {
   const zip = await JSZip.loadAsync(fs.readFileSync(TEMPLATE_PATH));
   let xml = await zip.file('word/document.xml').async('string');
@@ -810,6 +830,7 @@ async function buildProtocolDocx({ protocolNumber, openDate, members, signatures
     .replace('{{DAY}}', () => xmlEscape(d.day))
     .replace('{{MONTH}}', () => xmlEscape(MONTHS_RU[d.monthIndex]))
     .replace('{{NUMBER}}', () => xmlEscape(cleanText(protocolNumber)));
+  xml = applyOrderLine(xml, openDate);
 
   // строка-образец таблицы → по строке на сотрудника
   const rowRe = /<w:tr[ >](?:(?!<w:tr[ >]).)*?\{\{FIO\}\}.*?<\/w:tr>/s;
@@ -842,4 +863,4 @@ async function buildProtocolDocx({ protocolNumber, openDate, members, signatures
   return { buffer, fileName: protocolFileName(openDate, protocolNumber), count: employees.length };
 }
 
-module.exports = { buildProtocolDocx, buildEmployeeRows, protocolFileName, toCyrillic, fullNameCyr, MONTHS_RU };
+module.exports = { buildProtocolDocx, applyOrderLine, orderForDate, buildEmployeeRows, protocolFileName, toCyrillic, fullNameCyr, MONTHS_RU };
