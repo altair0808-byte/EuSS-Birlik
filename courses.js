@@ -164,21 +164,25 @@ router.get('/stats/summary', authRequired, requireRole('admin', 'assistant', 'su
         -- уже истёк — они показываются отдельно в «Просрочено» (см. overdue ниже), а не одновременно
         -- в обеих графах.
         (SELECT COUNT(DISTINCT a.user_id)::int FROM assignments a JOIN users u ON u.id = a.user_id
-           WHERE u.role = 'employee' AND a.course_id = c.id AND a.status = 'passed' AND ${ORG_SQL}
-            AND NOT (NULLIF(a.next_test_date, '') IS NOT NULL AND NULLIF(a.next_test_date, '')::timestamptz < NOW())
+           WHERE u.role = 'employee' AND u.active = 1 AND a.course_id = c.id AND a.status = 'passed' AND ${ORG_SQL}
+            AND NOT (NULLIF(a.next_test_date, '') IS NOT NULL AND LEFT(NULLIF(a.next_test_date, ''), 10)::date < (NOW() AT TIME ZONE 'Asia/Atyrau')::date)
             AND NOT EXISTS (
               SELECT 1 FROM assignments n
               WHERE n.user_id = a.user_id AND n.course_id = a.course_id AND n.status = 'passed'
                 AND (COALESCE(n.test_date, '') > COALESCE(a.test_date, '')
                      OR (COALESCE(n.test_date, '') = COALESCE(a.test_date, '') AND n.id > a.id))
             )) AS trained_employees,
-        (SELECT COUNT(*)::int FROM assignments a JOIN users u ON u.id = a.user_id
-           WHERE u.role = 'employee' AND a.course_id = c.id AND a.status IN ('pending','in_progress') AND ${ORG_SQL}) AS pending,
-        (SELECT COUNT(*)::int FROM assignments a JOIN users u ON u.id = a.user_id
-           WHERE u.role = 'employee' AND a.course_id = c.id AND a.status = 'failed' AND ${ORG_SQL}) AS failed,
-        (SELECT COUNT(*)::int FROM assignments a JOIN users u ON u.id = a.user_id
+        -- «Ожидают» и «Не сдали» — уникальные РАБОТАЮЩИЕ сотрудники (как в карточках вверху главной)
+        (SELECT COUNT(DISTINCT a.user_id)::int FROM assignments a JOIN users u ON u.id = a.user_id
+           WHERE u.role = 'employee' AND u.active = 1 AND a.course_id = c.id AND a.status IN ('pending','in_progress') AND ${ORG_SQL}) AS pending,
+        (SELECT COUNT(DISTINCT a.user_id)::int FROM assignments a JOIN users u ON u.id = a.user_id
+           WHERE u.role = 'employee' AND u.active = 1 AND a.course_id = c.id AND a.status = 'failed' AND ${ORG_SQL}) AS failed,
+        (SELECT COUNT(DISTINCT a.user_id)::int FROM assignments a JOIN users u ON u.id = a.user_id
            WHERE u.role = 'employee' AND a.course_id = c.id AND a.status = 'passed' AND ${ORG_SQL}
-            AND NULLIF(a.next_test_date, '') IS NOT NULL AND NULLIF(a.next_test_date, '')::timestamptz < NOW()
+            AND NULLIF(a.next_test_date, '') IS NOT NULL AND LEFT(NULLIF(a.next_test_date, ''), 10)::date < (NOW() AT TIME ZONE 'Asia/Atyrau')::date
+            -- просрочка считается только у работающих и только там, где курс ему обязателен
+            -- (руководитель / специалист, для которых курс не обязателен, «просроченным» не считается)
+            AND u.active = 1 AND (NOT c.is_mandatory OR ${mandatoryForSql('c', 'u')})
             -- только актуальная запись: если сотрудник уже пересдал курс, старая просроченная не считается
             AND NOT EXISTS (
               SELECT 1 FROM assignments n
@@ -695,4 +699,5 @@ router.delete('/:id/variants/:variant', authRequired, requireRole('admin', 'supe
   }
 });
 
+router.mandatoryForSql = mandatoryForSql;
 module.exports = router;

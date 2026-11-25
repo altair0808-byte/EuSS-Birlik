@@ -109,6 +109,23 @@ router.get('/overview', authRequired, STAFF, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'db_error', details: e.message }); }
 });
 
+// GET /api/medbooks/export.xlsx — все данные по санкнижкам (+ ежегодный медосмотр, если есть доступ)
+// в Excel; учитывает фильтр объекта/отдела/категории и зону ассистента
+router.get('/export.xlsx', authRequired, STAFF, async (req, res) => {
+  try {
+    const reqObjs = splitMulti(req.query.object), reqDeps = splitMulti(req.query.department);
+    const scope = scopedFilter(req.user, reqObjs, reqDeps);
+    const outOfZone = scope.noAccess || (req.user.role === 'assistant' && ((reqObjs.length && !scope.objects.length) || (reqDeps.length && !scope.departments.length)));
+    const cat = ['manager', 'specialist', 'employee'].includes(req.query.category) ? req.query.category : '';
+    const parts = { medbook: outOfZone ? [] : await mb.loadEntries({ objects: scope.objects, departments: scope.departments, category: cat }) };
+    if (require('../lib/adminFunctions').hasFunction(req.user, 'medexam')) {
+      parts.medexam = outOfZone ? [] : await require('./medexams').loadMedexamEntries(scope, cat);
+    }
+    const filterText = [reqObjs.join(', '), reqDeps.join(', ')].filter(Boolean).join(' / ');
+    await require('../lib/medExport').sendMedWorkbook(res, parts, filterText, 'medknizhki');
+  } catch (e) { if (!res.headersSent) res.status(500).json({ error: 'db_error', details: e.message }); }
+});
+
 // ---------- один сотрудник ----------
 async function sendUser(res, userId) {
   const e = await mb.loadEntryForUser(userId);
@@ -136,26 +153,32 @@ router.put('/user/:id', authRequired, STAFF, async (req, res) => {
     )).rows[0];
     if (!u || u.role !== 'employee') return res.status(404).json({ error: 'not_found', message: 'Сотрудник не найден' });
     if (!inScope(req.user, u)) return res.status(403).json({ error: 'forbidden_scope', message: 'Сотрудник вне вашей зоны' });
-    const start = String((req.body && req.body.start_date) || '');
-    if (!mb.isYmd(start)) return res.status(400).json({ error: 'bad_date', message: 'Укажите дату начала книжки' });
-    const today = mb.todayYmd();
-    if (start > today) {
-      return res.status(400).json({ error: 'future_date', message: 'Дата начала не может быть в будущем' });
-    }
     const posPeriod = (await query('SELECT period_months FROM medbook_positions WHERE key = $1', [keyOf(u.object, u.department, u.position)])).rows[0];
     const required = !!posPeriod;
     const period = required ? Number(posPeriod.period_months) : validPeriod(req.body && req.body.period_months);
     if (!period) return res.status(400).json({ error: 'bad_period', message: 'Выберите период: 6 или 12 месяцев' });
+    // Можно внести либо дату медосмотра (start_date), либо срок «допуск до» (expires_date) — как в журнале
+    const today = mb.todayYmd();
+    const expiresIn = String((req.body && req.body.expires_date) || '');
+    let start = String((req.body && req.body.start_date) || '');
+    let fixedExpiry = null;
+    if (mb.isYmd(expiresIn)) { fixedExpiry = expiresIn; start = mb.addMonths(expiresIn, -period); }
+    if (!mb.isYmd(start)) return res.status(400).json({ error: 'bad_date', message: 'Укажите дату медосмотра или срок «допуск до»' });
+    if (start > today) {
+      return res.status(400).json({ error: 'future_date', message: fixedExpiry
+        ? `Допуск до ${fixedExpiry} при периоде ${period} мес. значит, что медосмотр ещё не пройден — проверьте дату`
+        : 'Дата медосмотра не может быть в будущем' });
+    }
     // Примечание: если поле не передано — оставляем то, что уже сохранено
     const noteGiven = Object.prototype.hasOwnProperty.call(req.body || {}, 'note');
     const note = noteGiven ? cleanNote(req.body.note) : null;
     await query(
-      `INSERT INTO medbook_records (user_id, start_date, period_months, manual, updated_by, updated_at, note)
-       VALUES ($1, $2, $3, $4, $5, NOW(), $6)
+      `INSERT INTO medbook_records (user_id, start_date, period_months, manual, updated_by, updated_at, note, expires_date)
+       VALUES ($1, $2, $3, $4, $5, NOW(), $6, $8)
        ON CONFLICT (user_id) DO UPDATE SET start_date = EXCLUDED.start_date, period_months = EXCLUDED.period_months,
-         manual = EXCLUDED.manual, updated_by = EXCLUDED.updated_by, updated_at = NOW(),
+         manual = EXCLUDED.manual, updated_by = EXCLUDED.updated_by, updated_at = NOW(), expires_date = EXCLUDED.expires_date,
          note = CASE WHEN $7 THEN EXCLUDED.note ELSE medbook_records.note END`,
-      [u.id, start, period, !required, req.user.id, note, noteGiven]
+      [u.id, start, period, !required, req.user.id, note, noteGiven, fixedExpiry]
     );
     await logAction(req, 'medbook_saved', {
       entityType: 'user', entityId: u.id, entityName: `${u.last_name} ${u.first_name}`.trim(),
@@ -225,12 +248,14 @@ function parseImportDate(v) {
   return iso;
 }
 
+const { narrowNamesakes, namesakesHint, NAMESAKE_ERROR } = require('../lib/namesakes');
 const IMPORT_HEADERS = {
   'фамилия': 'last_name', 'имя': 'first_name', 'фио': 'fio', 'ф.и.о.': 'fio', 'ф.и.о': 'fio', 'иин': 'iin',
   'допуск до': 'expires', 'действует до': 'expires', 'срок допуска': 'expires', 'сроки допуска': 'expires', 'срок действия': 'expires', 'годна до': 'expires',
   'дата начала': 'start', 'начало': 'start', 'дата медосмотра': 'start',
   'период': 'period', 'период (мес.)': 'period', 'период (мес)': 'period', 'периодичность': 'period', 'периодичность (мес.)': 'period',
-  'примечание': 'note', 'примечания': 'note'
+  'примечание': 'note', 'примечания': 'note',
+  ...require('../lib/namesakes').NAMESAKE_HEADERS
 };
 
 router.get('/import-template.xlsx', authRequired, STAFF, async (req, res) => {
@@ -312,7 +337,7 @@ router.post('/import', authRequired, STAFF, upload.single('file'), async (req, r
 
     // Все сотрудники один раз — для быстрого поиска
     const users = (await query(
-      `SELECT id, last_name, first_name, iin, object, department, position, role, employment_status, active
+      `SELECT id, last_name, first_name, iin, tco_badge, object, department, position, role, employment_status, active
          FROM users WHERE role = 'employee'`
     )).rows;
     const byIin = new Map(), byName = new Map(), byLoose = new Map(), bySkel = new Map();
@@ -363,7 +388,8 @@ router.post('/import', authRequired, STAFF, upload.single('file'), async (req, r
         if (!found.length && last && first) found = pick(byLoose.get(looseFio(`${last} ${first}`)));
         if (!found.length && last && first) found = pick(bySkel.get(skeletonFio(`${last} ${first}`)));
         if (!found.length) { notFound.push({ row: rowNum, name: label, iin, position: txt(row, 'pos') }); continue; }
-        if (found.length > 1) { errors.push(`Строка ${rowNum}: найдено несколько сотрудников «${label}» — укажите ИИН`); continue; }
+        if (found.length > 1) found = narrowNamesakes(found, { badge: txt(row, 'badge'), dept: txt(row, 'dept'), pos: txt(row, 'pos') });
+        if (found.length > 1) { errors.push(`Строка ${rowNum}: «${label}» — ${NAMESAKE_ERROR}. Совпали: ${namesakesHint(found)}`); continue; }
         const u = found[0];
         if (!inScope(req.user, u)) { errors.push(`Строка ${rowNum}: «${label}» вне вашей зоны доступа`); continue; }
         if (seen.has(u.id)) { errors.push(`Строка ${rowNum}: «${label}» уже был выше в файле — взята первая строка`); continue; }
@@ -384,19 +410,23 @@ router.post('/import', authRequired, STAFF, upload.single('file'), async (req, r
         }
         const required = periods.has(key);
         const period = required ? periods.get(key) : rowPeriod;
+        // «Допуск до» из журнала сохраняем как есть — это и есть срок. Дата прохождения = срок минус период
+        // (полугодовой: допуск до 17.01.2027 → прошёл 17.07.2026; годовой → 17.01.2026).
+        // Если в файле есть «Допуск до» — он и есть срок (как в журнале), даже если дата начала тоже дана
+        const fixedExpiry = expires || null;
         if (!start) start = mb.addMonths(expires, -period);
         if (start > today) {
-          errors.push(`Строка ${rowNum}: «${label}» — допуск до ${expires} больше чем на ${period} мес. вперёд, проверьте дату`);
+          errors.push(`Строка ${rowNum}: «${label}» — допуск до ${expires}, а период ${period} мес.: получается, медосмотр ещё не пройден. Проверьте дату или период должности`);
           continue;
         }
         const noteGiven = 'note' in col;
         await query(
-          `INSERT INTO medbook_records (user_id, start_date, period_months, manual, updated_by, updated_at, note)
-           VALUES ($1, $2, $3, $4, $5, NOW(), $6)
+          `INSERT INTO medbook_records (user_id, start_date, period_months, manual, updated_by, updated_at, note, expires_date)
+           VALUES ($1, $2, $3, $4, $5, NOW(), $6, $8)
            ON CONFLICT (user_id) DO UPDATE SET start_date = EXCLUDED.start_date, period_months = EXCLUDED.period_months,
-             manual = EXCLUDED.manual, updated_by = EXCLUDED.updated_by, updated_at = NOW(),
+             manual = EXCLUDED.manual, updated_by = EXCLUDED.updated_by, updated_at = NOW(), expires_date = EXCLUDED.expires_date,
              note = CASE WHEN $7 THEN EXCLUDED.note ELSE medbook_records.note END`,
-          [u.id, start, period, !required, req.user.id, noteGiven ? cleanNote(txt(row, 'note')) : null, noteGiven]
+          [u.id, start, period, !required, req.user.id, noteGiven ? cleanNote(txt(row, 'note')) : null, noteGiven, fixedExpiry]
         );
         updated++;
       } catch (rowErr) {
@@ -435,5 +465,8 @@ router.post('/import', authRequired, STAFF, upload.single('file'), async (req, r
     res.status(500).json({ error: 'import_failed', message: 'Не удалось выполнить загрузку: ' + e.message });
   }
 });
+
+// Общие помощники для routes/medexams.js (ежегодный медосмотр): поиск сотрудника по ФИО, даты, зона ассистента
+router.helpers = { skeletonFio, looseFio, parseImportDate, cleanNote, inScope };
 
 module.exports = router;

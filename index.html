@@ -8723,6 +8723,10 @@ async function openProtocolMembersModal(id) {
   modal.classList.remove('hidden');
   try {
     const data = await api.getProtocolMembers(id);
+    const pr = data.protocol || {};
+    const canMove = !isObserverUser() && state.user && ['admin', 'superadmin'].includes(state.user.role)
+      && !pr.locked && pr.status !== 'revoked' && data.members.length > 0;
+    if (canMove && !(state.protocols || []).length) { try { state.protocols = await api.getProtocols(); } catch (e) {} }
     if (title) title.textContent = `Протокол № ${data.protocol.protocol_number} (${fmtDate(data.protocol.open_date)} — ${fmtDate(data.protocol.close_date)})`;
     const membersHtml = !data.members.length
       ? `<div class="text-slate-400 text-sm">В этом протоколе пока нет сотрудников.</div>`
@@ -8731,7 +8735,9 @@ async function openProtocolMembersModal(id) {
         <table class="min-w-full divide-y divide-slate-200 text-sm">
           <thead class="bg-slate-50">
             <tr>
+              ${canMove ? `<th class="pl-3 pr-1 py-2"><input type="checkbox" onchange="pmToggleAll(this.checked)" title="${_L('Выбрать всех', 'Барлығын таңдау')}" class="rounded text-blue-600"></th>` : ''}
               <th class="px-3 py-2 text-left font-semibold text-slate-600">ФИО</th>
+              <th class="px-3 py-2 text-left font-semibold text-slate-600">${_L('Дата теста', 'Тест күні')}</th>
               <th class="px-3 py-2 text-left font-semibold text-slate-600">Курс</th>
               <th class="px-3 py-2 text-left font-semibold text-slate-600">Результат</th>
               <th class="px-3 py-2 text-left font-semibold text-slate-600">№ сертификата</th>
@@ -8740,9 +8746,11 @@ async function openProtocolMembersModal(id) {
           <tbody class="divide-y divide-slate-100">
             ${data.members.map(m => `
               <tr class="hover:bg-slate-50">
+                ${canMove ? `<td class="pl-3 pr-1 py-2"><input type="checkbox" class="pm-chk rounded text-blue-600" value="${m.assignment_id}" onchange="pmUpdateBar()"></td>` : ''}
                 <td class="px-3 py-2 font-medium text-slate-900">
                   <button onclick="document.getElementById('protocolMembersModal').classList.add('hidden');openUserProfile(${m.user_id})" class="hover:text-blue-600 hover:underline text-left">${esc(m.last_name)} ${esc(m.first_name)}</button>
                 </td>
+                <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">${m.test_date ? fmtDate(m.test_date) : '—'}</td>
                 <td class="px-3 py-2 text-slate-600">${esc(CURRENT_LANG === 'kz' ? m.title_kz : m.title_ru)}</td>
                 <td class="px-3 py-2">
                   <span class="text-xs font-semibold px-2 py-0.5 rounded ${m.status === 'passed' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}">${m.status === 'passed' ? 'Сдал' : 'Не сдал'}</span>
@@ -8762,11 +8770,55 @@ async function openProtocolMembersModal(id) {
       </div>
       <div id="protoSignBlock" class="mb-4"></div>
       ${data.members.length ? `<div class="text-sm text-slate-600 mb-2">${_L('Сотрудников в протоколе', 'Хаттамадағы қызметкерлер')}: <b>${new Set(data.members.map(m => m.user_id)).size}</b>${new Set(data.members.map(m => m.user_id)).size !== data.members.length ? ` · ${_L('записей', 'жазба')}: ${data.members.length}` : ''}</div>` : ''}
+      ${canMove ? pmMoveBarHtml(id) : ''}
       ${membersHtml}
     `;
+    if (canMove) pmUpdateBar();
     loadProtocolSignBlock(id);
   } catch (e) {
     body.innerHTML = `<div class="text-red-600 text-sm">${t('error_generic')}${e && e.message ? ': ' + esc(e.message) : ''}</div>`;
+  }
+}
+
+// Перенос сотрудников в другой протокол (из окна «Протокол № …»)
+function pmMoveBarHtml(srcId) {
+  const list = (state.protocols || []).filter(p => String(p.id) !== String(srcId) && !p.locked && p.status !== 'revoked')
+    .sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1) || String(b.open_date).localeCompare(String(a.open_date)));
+  const opts = list.map(p => `<option value="${p.id}">№ ${esc(p.protocol_number)} · ${fmtDate(p.open_date)}–${fmtDate(p.close_date)}${p.status === 'open' ? ' · ' + _L('открыт', 'ашық') : ' · ' + _L('закрыт', 'жабық')}</option>`).join('');
+  return `
+    <div id="pmMoveBar" class="flex flex-wrap items-center gap-2 mb-3 p-2.5 rounded-lg border border-blue-200 bg-blue-50/60 text-sm">
+      <span class="text-slate-700">${_L('Выбрано', 'Таңдалды')}: <b id="pmSelCount">0</b></span>
+      <span class="text-slate-500">→ ${_L('перенести в', 'ауыстыру')}</span>
+      <select id="pmTarget" class="border rounded-lg px-2 py-1.5 text-sm bg-white max-w-[260px]">
+        ${opts || `<option value="">${_L('нет других протоколов', 'басқа хаттама жоқ')}</option>`}
+      </select>
+      <button id="pmMoveBtn" type="button" onclick="pmMoveSelected(${srcId})" disabled class="px-3 py-1.5 rounded-lg bg-blue-600 text-white font-semibold text-xs disabled:opacity-40">${_L('Перенести', 'Ауыстыру')}</button>
+    </div>`;
+}
+function pmToggleAll(on) { document.querySelectorAll('#protocolMembersBody .pm-chk').forEach(c => { c.checked = on; }); pmUpdateBar(); }
+function pmUpdateBar() {
+  const n = document.querySelectorAll('#protocolMembersBody .pm-chk:checked').length;
+  const c = document.getElementById('pmSelCount'); if (c) c.textContent = n;
+  const b = document.getElementById('pmMoveBtn'); const t = document.getElementById('pmTarget');
+  if (b) b.disabled = !n || !t || !t.value;
+}
+async function pmMoveSelected(srcId) {
+  const ids = [...document.querySelectorAll('#protocolMembersBody .pm-chk:checked')].map(c => Number(c.value));
+  const sel = document.getElementById('pmTarget');
+  if (!ids.length || !sel || !sel.value) return;
+  const label = sel.options[sel.selectedIndex].text;
+  if (!confirm(_L(`Перенести ${ids.length} запис(ь/и) в протокол ${label}?\nСертификаты и удостоверения тоже перейдут в новый протокол.`,
+                  `${ids.length} жазбаны ${label} хаттамасына ауыстыру керек пе?`))) return;
+  const btn = document.getElementById('pmMoveBtn'); if (btn) btn.disabled = true;
+  try {
+    const r = await api.req('/api/protocols/' + srcId + '/move-members', { method: 'POST', body: { assignment_ids: ids, target_id: Number(sel.value) } });
+    alert(_L(`Перенесено: ${r.moved} → протокол № ${r.target_number}`, `Ауыстырылды: ${r.moved} → № ${r.target_number}`));
+    const y = window.scrollY;
+    await openProtocolMembersModal(srcId);
+    if (typeof loadProtocolsList === 'function' && document.getElementById('protocolsTable')) { await loadProtocolsList(); window.scrollTo(0, y); }
+  } catch (e) {
+    alert(e.message || t('error_generic'));
+    if (btn) btn.disabled = false;
   }
 }
 

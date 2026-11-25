@@ -285,9 +285,18 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), requireCo
     const skippedIds = uniqueUserIds.filter(id => !validIds.has(id));
 
     const createdIds = [];
+    const createdUserIds = [];
+    const alreadyAssignedIds = [];
     const pendingCertAssignmentIds = [];
+    // Уже записан на этот курс (тест назначен / начат, но не сдан) — повторно не записываем
+    const pendRes = historical ? { rows: [] } : await client.query(
+      `SELECT DISTINCT user_id FROM assignments WHERE user_id = ANY($1::bigint[]) AND course_id = $2 AND status IN ('pending', 'in_progress')`,
+      [uniqueUserIds, course_id]);
+    const alreadyPending = new Set(pendRes.rows.map(r => Number(r.user_id)));
     for (const userId of uniqueUserIds) {
       if (!validIds.has(userId)) continue;
+      if (alreadyPending.has(userId)) { alreadyAssignedIds.push(userId); continue; }
+      createdUserIds.push(userId);
       if (historical) {
         // Каждому сотруднику отдельный номер сертификата (getNextCertNumber читает
         // максимум из БД на каждый вызов — работает корректно и в цикле).
@@ -341,7 +350,7 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), requireCo
     if (!historical && !external && createdIds.length) {
       push.notifyCourseAssigned([...validIds], course_id).catch(() => {});
     }
-    res.json({ created: createdIds.length, ids: createdIds, skipped: skippedIds.length });
+    res.json({ created: createdIds.length, ids: createdIds, skipped: skippedIds.length, user_ids: createdUserIds, already_assigned: alreadyAssignedIds.length, already_assigned_ids: alreadyAssignedIds });
   } catch (e) {
     await client.query('ROLLBACK');
     res.status(500).json({ error: 'db_error', details: e.message });
@@ -376,7 +385,9 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), a
     const { status, user_id, course_id, object, department, q, date_from, date_to, active_only, category } = req.query;
     let sql = `
       SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position, u.public_uid, u.staff_category,
-             c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.no_expiry, c.pass_score_percent, c.is_external
+             c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.no_expiry, c.pass_score_percent, c.is_external,
+             -- курс обязателен этому сотруднику (или курс вообще не обязательный) — для «Просрочено» на главной
+             (NOT c.is_mandatory OR ${require('./courses').mandatoryForSql('c', 'u')}) AS course_required
       FROM assignments a
       JOIN users u ON u.id = a.user_id
       JOIN courses c ON c.id = a.course_id
@@ -433,9 +444,15 @@ router.get('/expiring', authRequired, requireRole('admin', 'assistant', 'superad
     if (departments.length) { params.push(departments); orgSql += ` AND u.department = ANY($${params.length}::text[])`; }
     const cats = splitMulti(category).filter(c => ['manager', 'specialist', 'employee'].includes(c));
     if (cats.length) { params.push(cats); orgSql += ` AND COALESCE(u.staff_category, 'employee') = ANY($${params.length}::text[])`; }
+    // Вахта сотрудника (на вахте / дома, даты текущей смены) — те же правила, что во вкладке «Сотрудники».
+    // Колонки rotation_* / overtime_* есть только в users, поэтому без префикса u. неоднозначности нет.
+    const ROTATION_SELECT = require('./users').ROTATION_SELECT || 'NULL AS rotation_status';
     const result = await query(`
       SELECT a.*, u.last_name, u.first_name, u.object, u.department, u.position, u.login, u.staff_category,
-             c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.is_external
+             c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.is_external,
+             (SELECT p.status FROM assignments p WHERE p.user_id = a.user_id AND p.course_id = a.course_id
+                AND p.status IN ('pending', 'in_progress') ORDER BY p.id DESC LIMIT 1) AS pending_status,
+             ${ROTATION_SELECT}
       FROM assignments a
       JOIN users u ON u.id = a.user_id
       JOIN courses c ON c.id = a.course_id
@@ -446,6 +463,10 @@ router.get('/expiring', authRequired, requireRole('admin', 'assistant', 'superad
         AND c.no_expiry = FALSE
         AND ${kindSqlFilter(req.user, 'c')}
         AND a.next_test_date::timestamptz <= NOW() + ($1 || ' days')::interval
+        -- обязательный курс — только тем, кому он обязателен (по категории / матрице должностей):
+        -- иначе руководитель, однажды прошедший курс «для сотрудников», висит в «Просрочено»,
+        -- а его сменщик-руководитель без записи нигде не считается
+        AND (NOT c.is_mandatory OR ${require('./courses').mandatoryForSql('c', 'u')})
         AND NOT EXISTS (
           SELECT 1 FROM assignments n
           WHERE n.user_id = a.user_id AND n.course_id = a.course_id AND n.status = 'passed'
@@ -455,7 +476,33 @@ router.get('/expiring', authRequired, requireRole('admin', 'assistant', 'superad
         ${orgSql}
       ORDER BY a.next_test_date::timestamptz ASC
     `, params);
-    res.json(result.rows);
+    let rows = result.rows;
+    // ?untrained=1 — добавить тех, кому курс ОБЯЗАТЕЛЕН, но успешной записи по нему нет вообще
+    // (новые сотрудники и т.п.) — то же правило, что у «Не прошли обязательное обучение» на главной.
+    if (String(req.query.untrained || '') === '1') {
+      const u2 = await query(`
+        SELECT NULL::int AS id, u.id AS user_id, c.id AS course_id, NULL AS next_test_date, NULL AS test_date,
+               'untrained' AS row_kind,
+               (SELECT p.status FROM assignments p WHERE p.user_id = u.id AND p.course_id = c.id
+                  AND p.status IN ('pending', 'in_progress') ORDER BY p.id DESC LIMIT 1) AS pending_status,
+               u.last_name, u.first_name, u.object, u.department, u.position, u.login, u.staff_category,
+               c.title_ru, c.title_kz, c.category_ru, c.category_kz, c.is_external,
+               ${ROTATION_SELECT}
+        FROM users u
+        CROSS JOIN courses c
+        WHERE u.role = 'employee'
+          AND u.active = 1
+          AND c.is_mandatory
+          AND ${kindSqlFilter(req.user, 'c')}
+          AND ${require('./courses').mandatoryForSql('c', 'u')}
+          AND NOT EXISTS (SELECT 1 FROM assignments a WHERE a.user_id = u.id AND a.course_id = c.id AND a.status = 'passed')
+          AND $1::text IS NOT NULL
+          ${orgSql}
+        ORDER BY u.last_name, u.first_name
+      `, params);
+      rows = rows.concat(u2.rows);
+    }
+    res.json(rows);
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }
@@ -498,66 +545,38 @@ router.get('/certificates', authRequired, requireRole('admin', 'assistant', 'sup
   }
 });
 
-// Start test
-router.post('/:id/start', authRequired, async (req, res) => {
-  try {
-    const aRes = await query('SELECT * FROM assignments WHERE id = $1', [req.params.id]);
-    const a = aRes.rows[0];
-    if (!a) return res.status(404).json({ error: 'not_found' });
-    if (req.user.role === 'employee' && a.user_id !== req.user.id) {
-      return res.status(403).json({ error: 'forbidden' });
-    }
-    if (a.status === 'passed') return res.status(400).json({ error: 'already_passed' });
-    if (a.attempts_used > 0 && !a.retake_allowed) {
-      return res.status(400).json({ error: 'retake_not_allowed' });
-    }
+// Сколько секунд осталось у начатой попытки (null — попытка без отметки времени старта, старые записи)
+function attemptRemainingSec(a, course) {
+  if (!a.started_at) return null;
+  const limitSec = Math.max(1, Number(course.time_limit_minutes) || 20) * 60;
+  return Math.floor((new Date(a.started_at).getTime() + limitSec * 1000 - Date.now()) / 1000);
+}
 
-    // Курс может хранить тесты в виде нескольких вариантов (билетов) — 10 билетов по 10 вопросов.
-    // При каждой попытке случайным образом выбирается один заполненный билет.
-    const variantsRes = await query(
-      'SELECT DISTINCT variant_number FROM questions WHERE course_id = $1 ORDER BY variant_number',
-      [a.course_id]
-    );
-    const variants = variantsRes.rows.map(r => r.variant_number);
-    const chosenVariant = variants.length ? variants[Math.floor(Math.random() * variants.length)] : null;
-
-    await query(
-      `UPDATE assignments SET status='in_progress', attempts_used = attempts_used + 1, retake_allowed = 0, assigned_variant = $2 WHERE id = $1`,
-      [req.params.id, chosenVariant]
-    );
-
-    const questionsRes = chosenVariant
-      ? await query(
-          'SELECT id, course_id, question_ru, question_kz, options_ru, options_kz FROM questions WHERE course_id = $1 AND variant_number = $2 ORDER BY sort_order, id LIMIT 10',
-          [a.course_id, chosenVariant]
-        )
-      : await query(
-          'SELECT id, course_id, question_ru, question_kz, options_ru, options_kz FROM questions WHERE course_id = $1 ORDER BY RANDOM() LIMIT 10',
-          [a.course_id]
-        );
-    res.json({ ok: true, questions: questionsRes.rows, variant: chosenVariant });
-  } catch (e) {
-    res.status(500).json({ error: 'db_error', details: e.message });
+async function questionsForAttempt(a) {
+  if (Array.isArray(a.question_ids) && a.question_ids.length) {
+    const r = await query(
+      'SELECT id, course_id, question_ru, question_kz, options_ru, options_kz FROM questions WHERE id = ANY($1::bigint[])',
+      [a.question_ids]);
+    const byId = new Map(r.rows.map(q => [String(q.id), q]));
+    return a.question_ids.map(id => byId.get(String(id))).filter(Boolean);   // в том же порядке, что при старте
   }
-});
+  const r = a.assigned_variant
+    ? await query('SELECT id, course_id, question_ru, question_kz, options_ru, options_kz FROM questions WHERE course_id = $1 AND variant_number = $2 ORDER BY sort_order, id LIMIT 10', [a.course_id, a.assigned_variant])
+    : await query('SELECT id, course_id, question_ru, question_kz, options_ru, options_kz FROM questions WHERE course_id = $1 ORDER BY sort_order, id LIMIT 10', [a.course_id]);
+  return r.rows;
+}
 
-// Submit test
-router.post('/:id/submit', authRequired, async (req, res) => {
-  try {
-    const aRes = await query('SELECT * FROM assignments WHERE id = $1', [req.params.id]);
-    const a = aRes.rows[0];
-    if (!a) return res.status(404).json({ error: 'not_found' });
-
-    const cRes = await query('SELECT * FROM courses WHERE id = $1', [a.course_id]);
-    const course = cRes.rows[0];
+// Подсчёт результата и запись попытки (общая часть для «Завершить тест» и автозавершения по истечении времени)
+async function finalizeAttempt(a, course, answers, focus_violations, req) {
     // Считаем результат только по вопросам того билета (варианта), который был выдан при старте попытки.
     // Для старых попыток без привязки к варианту (assigned_variant пуст) используем все вопросы курса, как раньше.
-    const qRes = a.assigned_variant
-  ? await query('SELECT * FROM questions WHERE course_id = $1 AND variant_number = $2', [a.course_id, a.assigned_variant])
-  : await query('SELECT * FROM questions WHERE course_id = $1', [a.course_id]);
+    const qRes = (Array.isArray(a.question_ids) && a.question_ids.length)
+      ? await query('SELECT * FROM questions WHERE id = ANY($1::bigint[])', [a.question_ids])
+      : a.assigned_variant
+        ? await query('SELECT * FROM questions WHERE course_id = $1 AND variant_number = $2', [a.course_id, a.assigned_variant])
+        : await query('SELECT * FROM questions WHERE course_id = $1', [a.course_id]);
     const questions = qRes.rows;
 
-    const { answers, focus_violations } = req.body;
     let correctCount = 0;
     for (const q of questions) {
       if (answers && answers[q.id] === q.correct_index) correctCount++;
@@ -621,7 +640,105 @@ router.post('/:id/submit', authRequired, async (req, res) => {
       driveSync.enqueueIdCard(a.id, req);
     }
 
-    res.json({ passed, scorePercent, certificate_number: certNum, protocol_number: protocolNumber });
+    require('../lib/staffNotify').notifyTestResult(a, passed, scorePercent);
+    return { passed, scorePercent, certificate_number: certNum, protocol_number: protocolNumber };
+}
+
+// Start test — новая попытка или ПРОДОЛЖЕНИЕ начатой (если сотрудник вышел, а время ещё не кончилось)
+router.post('/:id/start', authRequired, async (req, res) => {
+  try {
+    const aRes = await query('SELECT * FROM assignments WHERE id = $1', [req.params.id]);
+    const a = aRes.rows[0];
+    if (!a) return res.status(404).json({ error: 'not_found' });
+    if (req.user.role === 'employee' && a.user_id !== req.user.id) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+    if (a.status === 'passed') return res.status(400).json({ error: 'already_passed' });
+    const course = (await query('SELECT * FROM courses WHERE id = $1', [a.course_id])).rows[0] || {};
+
+    // Начатая попытка: время ещё есть — продолжаем с теми же вопросами и сохранёнными ответами;
+    // время вышло — засчитываем то, что успел ответить (как при «Время вышло» в самом тесте)
+    if (a.status === 'in_progress' && a.started_at) {
+      const left = attemptRemainingSec(a, course);
+      if (left > 0) {
+        const questions = await questionsForAttempt(a);
+        return res.json({
+          ok: true, resume: true, questions, variant: a.assigned_variant,
+          answers: a.progress_answers || {}, violations: a.progress_violations || 0,
+          remaining_seconds: left, time_limit_minutes: course.time_limit_minutes
+        });
+      }
+      const r = await finalizeAttempt(a, course, a.progress_answers || {}, a.progress_violations || 0, req);
+      return res.status(409).json({ error: 'time_expired', message: 'Время на тест истекло — засчитаны сохранённые ответы', ...r });
+    }
+
+    if (a.attempts_used > 0 && !a.retake_allowed) {
+      return res.status(400).json({ error: 'retake_not_allowed' });
+    }
+
+    // Курс может хранить тесты в виде нескольких вариантов (билетов) — 10 билетов по 10 вопросов.
+    // При каждой попытке случайным образом выбирается один заполненный билет.
+    const variantsRes = await query(
+      'SELECT DISTINCT variant_number FROM questions WHERE course_id = $1 ORDER BY variant_number',
+      [a.course_id]
+    );
+    const variants = variantsRes.rows.map(r => r.variant_number);
+    const chosenVariant = variants.length ? variants[Math.floor(Math.random() * variants.length)] : null;
+
+    const questionsRes = chosenVariant
+      ? await query(
+          'SELECT id, course_id, question_ru, question_kz, options_ru, options_kz FROM questions WHERE course_id = $1 AND variant_number = $2 ORDER BY sort_order, id LIMIT 10',
+          [a.course_id, chosenVariant]
+        )
+      : await query(
+          'SELECT id, course_id, question_ru, question_kz, options_ru, options_kz FROM questions WHERE course_id = $1 ORDER BY RANDOM() LIMIT 10',
+          [a.course_id]
+        );
+
+    await query(
+      `UPDATE assignments SET status='in_progress', attempts_used = attempts_used + 1, retake_allowed = 0, assigned_variant = $2,
+              started_at = NOW(), question_ids = $3::bigint[], progress_answers = '{}'::jsonb, progress_violations = 0
+        WHERE id = $1`,
+      [req.params.id, chosenVariant, questionsRes.rows.map(q => q.id)]
+    );
+    const limitMin = Math.max(1, Number(course.time_limit_minutes) || 20);
+    res.json({ ok: true, questions: questionsRes.rows, variant: chosenVariant, remaining_seconds: limitMin * 60, time_limit_minutes: limitMin });
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
+// Сохранение ответов по ходу теста — чтобы после выхода (закрыл вкладку, разрядился телефон) можно было продолжить
+router.post('/:id/progress', authRequired, async (req, res) => {
+  try {
+    const a = (await query('SELECT id, user_id, status FROM assignments WHERE id = $1', [req.params.id])).rows[0];
+    if (!a) return res.status(404).json({ error: 'not_found' });
+    if (a.user_id !== req.user.id && !['admin', 'superadmin'].includes(req.user.role)) return res.status(403).json({ error: 'forbidden' });
+    if (a.status !== 'in_progress') return res.json({ ok: false, status: a.status });
+    const answers = (req.body && typeof req.body.answers === 'object' && req.body.answers) || {};
+    const viol = Math.max(0, parseInt(req.body && req.body.focus_violations, 10) || 0);
+    await query(`UPDATE assignments SET progress_answers = $2::jsonb, progress_violations = $3 WHERE id = $1 AND status = 'in_progress'`,
+      [a.id, JSON.stringify(answers), viol]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
+// Submit test
+router.post('/:id/submit', authRequired, async (req, res) => {
+  try {
+    const aRes = await query('SELECT * FROM assignments WHERE id = $1', [req.params.id]);
+    const a = aRes.rows[0];
+    if (!a) return res.status(404).json({ error: 'not_found' });
+    if (req.user.role === 'employee' && a.user_id !== req.user.id) return res.status(403).json({ error: 'forbidden' });
+    if (a.status !== 'in_progress') return res.status(400).json({ error: 'not_in_progress', message: 'Тест уже завершён' });
+
+    const cRes = await query('SELECT * FROM courses WHERE id = $1', [a.course_id]);
+    const course = cRes.rows[0];
+    const { answers, focus_violations } = req.body;
+    const r = await finalizeAttempt(a, course, answers, focus_violations, req);
+    res.json({ passed: r.passed, scorePercent: r.scorePercent, certificate_number: r.certificate_number, protocol_number: r.protocol_number });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }

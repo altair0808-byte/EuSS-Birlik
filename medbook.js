@@ -33,6 +33,13 @@ function addMonths(ymd, n) {
   return `${ty}-${String(tm + 1).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
 }
 
+// Статус по готовому сроку «действует до» (из журнала)
+function statusByExpiry(expires, today) {
+  const daysLeft = Math.round((ymdToUtc(expires) - ymdToUtc(today)) / 86400000);
+  const status = daysLeft < 0 ? 'overdue' : daysLeft <= SOON_DAYS ? 'soon' : 'valid';
+  return { status, expires, days_left: daysLeft };
+}
+
 function calcStatus(startDate, periodMonths, today) {
   if (!startDate || !periodMonths) return { status: 'no_date', expires: null, days_left: null };
   const expires = addMonths(startDate, periodMonths);
@@ -54,7 +61,9 @@ function buildEntry(u, periods, today) {
   const hasRecord = !!u.mb_id;
   if (!posPeriod && !hasRecord) return null;
   const period = posPeriod || Number(u.mb_period) || 12;
-  const st = calcStatus(u.mb_start || null, period, today);
+  // Срок из журнала («допуск до») главнее: дата прохождения = срок минус период должности
+  const st = u.mb_expires ? statusByExpiry(u.mb_expires, today) : calcStatus(u.mb_start || null, period, today);
+  const start = u.mb_start || (u.mb_expires ? addMonths(u.mb_expires, -period) : null);
   return {
     user_id: Number(u.id),
     last_name: u.last_name, first_name: u.first_name,
@@ -63,7 +72,8 @@ function buildEntry(u, periods, today) {
     required: !!posPeriod,          // нужна по должности
     manual: !posPeriod,             // добавлена вручную, вне должности
     period_months: period,
-    start_date: u.mb_start || null,
+    start_date: start,
+    expires_fixed: !!u.mb_expires,  // срок взят из журнала
     note: u.mb_note || '',
     ...st
   };
@@ -71,7 +81,7 @@ function buildEntry(u, periods, today) {
 
 const SELECT_USERS = `
   SELECT u.id, u.last_name, u.first_name, u.object, u.department, u.position, u.staff_category,
-         r.id AS mb_id, to_char(r.start_date, 'YYYY-MM-DD') AS mb_start, r.period_months AS mb_period, r.note AS mb_note
+         r.id AS mb_id, to_char(r.start_date, 'YYYY-MM-DD') AS mb_start, r.period_months AS mb_period, r.note AS mb_note, to_char(r.expires_date, 'YYYY-MM-DD') AS mb_expires
     FROM users u
     LEFT JOIN medbook_records r ON r.user_id = u.id
    WHERE u.role = 'employee' AND u.active = 1 AND COALESCE(u.employment_status, 'active') = 'active'`;

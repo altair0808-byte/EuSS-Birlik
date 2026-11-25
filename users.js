@@ -23,15 +23,16 @@ const { buildRotationCalendarPdf } = require('../rotationCalendarPdf');
 // есть в системе под другим написанием: порядок Ф/И, регистр, русский/английский/казахский,
 // ё/е, лишнее отчество, опечатка в 1–2 символа. Объект/отдел/должность не учитываются —
 // человек мог перейти в другой отдел. Если у обоих указан ИИН, он решает: одинаковый ИИН —
-// это один человек, разный ИИН — разные люди (однофамильцы).
+// это один человек, разный ИИН — разные люди (однофамильцы). Так же работает № пропуска ТШО.
+// Полное совпадение ФИО без ИИН/пропуска админ может подтвердить как тёзку (confirm_not_duplicate).
 // Возвращает null или { ...сотрудник, level: 'strong' | 'possible', reason }.
 //   strong   — почти наверняка тот же человек (создание блокируется);
 //   possible — очень похож (админ может подтвердить, что это другой человек).
 // excludeId — id сотрудника, которого не нужно считать дублем самого себя (при редактировании).
-async function findDuplicateEmployee(lastName, firstName, excludeId, iin) {
+async function findDuplicateEmployee(lastName, firstName, excludeId, iin, badge) {
   if (!computeFioFields(lastName, firstName).normalized) return null;
   const params = [];
-  let sql = `SELECT id, last_name, first_name, object, department, position, active, employment_status, iin
+  let sql = `SELECT id, last_name, first_name, object, department, position, active, employment_status, iin, tco_badge
              FROM users WHERE role = 'employee'`;
   if (excludeId) { params.push(excludeId); sql += ` AND id != $${params.length}`; }
   const rows = (await query(sql, params)).rows;
@@ -42,6 +43,13 @@ async function findDuplicateEmployee(lastName, firstName, excludeId, iin) {
     if (myIin && row.iin) {
       if (row.iin === myIin) return { ...row, level: 'strong', reason: 'iin' };
       continue; // разные ИИН — разные люди, даже если ФИО похожи
+    }
+    // № пропуска ТШО у каждого свой: одинаковый — тот же человек, разный — тёзки (разные люди)
+    const myBadge = String(badge || '').replace(/\s+/g, '');
+    const rowBadge = String(row.tco_badge || '').replace(/\s+/g, '');
+    if (myBadge && rowBadge) {
+      if (myBadge === rowBadge) return { ...row, level: 'strong', reason: 'badge' };
+      continue;
     }
     const level = compareFio(cand, row);
     // при нескольких совпадениях показываем в сообщении действующего сотрудника, а не архивного
@@ -65,12 +73,19 @@ function describeDuplicate(dup) {
 function rejectDuplicate(req, res, dup) {
   if (!dup) return false;
   const existing = { id: dup.id, last_name: dup.last_name, first_name: dup.first_name, object: dup.object, department: dup.department, position: dup.position, employment_status: dup.employment_status };
+  const canConfirm = req.user.role === 'admin' || req.user.role === 'superadmin';
+  // Полное совпадение только по ФИО (без ИИН / пропуска) — это может быть тёзка: админ подтверждает
+  if (dup.level === 'strong' && dup.reason === 'name' && canConfirm) {
+    if (req.body && req.body.confirm_not_duplicate === true) return false;
+    res.status(409).json({ error: 'duplicate_employee', level: 'strong', reason: 'name', can_confirm: true, namesake: true,
+      message: `Сотрудник с таким же ФИО уже есть: ${describeDuplicate(dup)}${dup.tco_badge ? ', № пропуска ' + dup.tco_badge : ''}.`, existing_user: existing });
+    return true;
+  }
   if (dup.level === 'strong') {
-    const why = dup.reason === 'iin' ? 'Сотрудник с таким ИИН уже есть в системе' : 'Такой сотрудник уже есть в системе (то же ФИО: порядок слов, регистр, язык написания и отдел не важны)';
+    const why = dup.reason === 'iin' ? 'Сотрудник с таким ИИН уже есть в системе' : dup.reason === 'badge' ? 'Сотрудник с таким № пропуска уже есть в системе' : 'Такой сотрудник уже есть в системе (то же ФИО: порядок слов, регистр, язык написания и отдел не важны)';
     res.status(409).json({ error: 'duplicate_employee', level: 'strong', message: `${why}: ${describeDuplicate(dup)}. Используйте существующую карточку${dup.employment_status !== 'active' ? ' (во вкладке «Архив» её можно восстановить)' : ''}.`, existing_user: existing });
     return true;
   }
-  const canConfirm = req.user.role === 'admin' || req.user.role === 'superadmin';
   if (canConfirm && req.body && req.body.confirm_not_duplicate === true) return false;
   res.status(409).json({ error: 'possible_duplicate', level: 'possible', can_confirm: canConfirm, message: `Очень похожий сотрудник уже есть: ${describeDuplicate(dup)}.${canConfirm ? '' : ' Если это действительно другой человек — обратитесь к администратору.'}`, existing_user: existing });
   return true;
@@ -98,7 +113,10 @@ function normalizeDateOnly(v) {
 // Вахта хранится в users: rotation_arrival (заезд), rotation_days (срок: 14 / 21 / 28 или любой),
 // rotation_departure (отъезд = заезд + срок, можно поправить вручную). Статус «на вахте / дома»
 // в БД не хранится — считается на лету по сегодняшней дате (Атырау, UTC+5): с дня заезда по день
-// отъезда включительно сотрудник «на вахте», до заезда и после отъезда — «дома».
+// отъезда сотрудник «на вахте», до заезда и после отъезда — «дома». Пересменка в 12:00: в день отъезда
+// «на вахте» до 12:00, в день заезда — с 12:00 (ROT_CHANGE_HOUR ниже).
+const { narrowNamesakes, namesakesHint, NAMESAKE_ERROR } = require('../lib/namesakes');
+const { fuzzyHas } = require('../lib/fuzzy');
 const ROT_TODAY_SQL = `(NOW() AT TIME ZONE 'Asia/Atyrau')::date`;
 // Вахта повторяется по циклу: (заезд … отъезд включительно) → дома N дней → снова заезд … (как в PDF-календаре,
 // rotationCalendarPdf.js: buildShifts). N = rotation_rest_days, а если не задано — срок вахты (14/14, 28/28).
@@ -106,17 +124,26 @@ const ROT_TODAY_SQL = `(NOW() AT TIME ZONE 'Asia/Atyrau')::date`;
 // Раньше статус считался только по одной сохранённой вахте — после отъезда сотрудник навсегда оставался
 // «дома», даже когда по графику уже снова заехал.
 const ROT_REST_SQL = `COALESCE(rotation_rest_days, rotation_days, 0)`;
-const ROT_CYCLE_SQL = `(rotation_departure - rotation_arrival + 1 + ${ROT_REST_SQL})`;
+// Цикл = (отъезд − заезд) + дома. День отъезда — день пересменки: 14/14 с отъездом 1-го → заезд 15-го →
+// отъезд 29-го (цикл 28 дн.). Раньше к циклу прибавлялся лишний день (+1), и каждая следующая вахта
+// съезжала на сутки позже (заезд 16-го вместо 15-го и т.д.).
+const ROT_CYCLE_SQL = `(rotation_departure - rotation_arrival + ${ROT_REST_SQL})`;
 // Сдвиг (в днях) от сохранённой вахты к текущей / ближайшей будущей: 0, пока сохранённая вахта не закончилась,
 // иначе — целое число циклов, чтобы отъезд этой смены был не раньше сегодняшнего дня.
+// Пересменка в ROT_CHANGE_HOUR (12:00 по Атырау): в день отъезда сотрудник на вахте до 12:00, в день
+// заезда — с 12:00. «Сменная дата» = (сейчас − 12 ч)::date: на вахте, если заезд ≤ сменная дата < отъезд.
+const ROT_CHANGE_HOUR = 12;
+const ROT_SHIFT_DATE_SQL = `((NOW() AT TIME ZONE 'Asia/Atyrau') - interval '${ROT_CHANGE_HOUR} hours')::date`;
+// Сдвиг (в днях) от сохранённой вахты к текущей / ближайшей будущей: 0, пока сохранённая вахта не закончилась
+// (до 12:00 дня отъезда), иначе — целое число циклов, чтобы следующая вахта ещё не закончилась.
 const ROT_OFFSET_SQL = `(CASE WHEN rotation_arrival IS NOT NULL AND rotation_departure IS NOT NULL AND ${ROT_REST_SQL} > 0
-                              AND ${ROT_TODAY_SQL} > rotation_departure
-                         THEN ((${ROT_TODAY_SQL} - rotation_departure + ${ROT_CYCLE_SQL} - 1) / ${ROT_CYCLE_SQL}) * ${ROT_CYCLE_SQL}
+                              AND ${ROT_SHIFT_DATE_SQL} >= rotation_departure
+                         THEN ((${ROT_SHIFT_DATE_SQL} - rotation_departure) / ${ROT_CYCLE_SQL} + 1) * ${ROT_CYCLE_SQL}
                          ELSE 0 END)`;
 const ROT_CUR_ARR_SQL = `(rotation_arrival + ${ROT_OFFSET_SQL})`;
 const ROT_CUR_DEP_SQL = `(rotation_departure + ${ROT_OFFSET_SQL})`;
 // Вахта по графику (заезд … отъезд) и овертайм (с … по) — два независимых признака «на работе».
-const ROT_BASE_SQL = `(rotation_arrival IS NOT NULL AND ${ROT_CUR_ARR_SQL} <= ${ROT_TODAY_SQL} AND (rotation_departure IS NULL OR ${ROT_CUR_DEP_SQL} >= ${ROT_TODAY_SQL}))`;
+const ROT_BASE_SQL = `(rotation_arrival IS NOT NULL AND ${ROT_CUR_ARR_SQL} <= ${ROT_SHIFT_DATE_SQL} AND (rotation_departure IS NULL OR ${ROT_CUR_DEP_SQL} > ${ROT_SHIFT_DATE_SQL}))`;
 const OT_ON_SQL = `(overtime_from IS NOT NULL AND overtime_to IS NOT NULL AND overtime_from <= ${ROT_TODAY_SQL} AND overtime_to >= ${ROT_TODAY_SQL})`;
 // «На вахте» = на вахте по графику ИЛИ в овертайме
 const ROT_ON_SQL = `(${ROT_BASE_SQL} OR ${OT_ON_SQL})`;
@@ -134,7 +161,7 @@ const ROTATION_SELECT = `to_char(${ROT_CUR_ARR_SQL}, 'YYYY-MM-DD') AS rotation_a
                       to_char(overtime_from, 'YYYY-MM-DD') AS overtime_from,
                       to_char(overtime_to, 'YYYY-MM-DD') AS overtime_to,
                       ${OT_ON_SQL} AS overtime_active,
-                      CASE WHEN ${ROT_CUR_ARR_SQL} > ${ROT_TODAY_SQL} THEN ${ROT_CUR_ARR_SQL} - ${ROT_TODAY_SQL} END AS rotation_days_to_arrival`;
+                      CASE WHEN ${ROT_CUR_ARR_SQL} > ${ROT_SHIFT_DATE_SQL} THEN ${ROT_CUR_ARR_SQL} - ${ROT_TODAY_SQL} END AS rotation_days_to_arrival`;
 
 function addDaysIso(iso, n) {
   const d = new Date(iso + 'T00:00:00Z');
@@ -280,14 +307,13 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), a
       // (п.9 запроса): "Утяшев", "Altair", "Utyashev", "Алтаир" должны находить
       // одного и того же сотрудника — сравниваем и с обычными полями, и с
       // full_name_translit (латинская транслитерация ФИО).
-      params.push(`%${q}%`);
-      sql += ` AND (last_name ILIKE $${params.length} OR first_name ILIKE $${params.length}
-                     OR login ILIKE $${params.length} OR full_name_translit ILIKE $${params.length}
-                     OR full_name_normalized ILIKE $${params.length})`;
+      // + «похожий» поиск (lib/fuzzy.js): Мәжіров = Мажиров = Mazhirov — фильтруем после запроса
     }
     sql += ' ORDER BY last_name, first_name';
     const result = await query(sql, params);
-    res.json(result.rows);
+    const rows = q ? result.rows.filter(u => fuzzyHas(
+      `${u.last_name || ''} ${u.first_name || ''} | ${u.first_name || ''} ${u.last_name || ''} | ${u.login || ''} | ${u.tco_badge || ''} | ${u.full_name_translit || ''}`, q)) : result.rows;
+    res.json(rows);
   } catch (e) {
     console.error('Error fetching users:', e);
     res.status(500).json({ error: 'db_error', details: e.message });
@@ -427,7 +453,7 @@ router.post('/import', authRequired, requireRole('admin', 'superadmin'), upload.
         // регистра/пробелов, "УТЯШЕВ АЛТАИР" = "Утяшев Алтаир") уже есть в системе,
         // новая запись не создаётся — используется существующий сотрудник, и к нему
         // же, если указано, привязывается историческая запись об обучении из строки.
-        const dup = await findDuplicateEmployee(last_name, first_name);
+        const dup = await findDuplicateEmployee(last_name, first_name, null, null, get('tco_badge'));
         let userId;
         if (dup && dup.level === 'possible') {
           // Очень похожее ФИО (опечатка / другое написание): автоматически не создаём и не привязываем —
@@ -641,13 +667,10 @@ async function fetchRotationRows(req) {
   if (rotFilter === 'on_shift') sql += ` AND ${ROT_ON_SQL}`;
   else if (rotFilter === 'home') sql += ` AND rotation_arrival IS NOT NULL AND NOT ${ROT_ON_SQL}`;
   else if (rotFilter === 'unset') sql += ` AND rotation_arrival IS NULL AND NOT ${OT_ON_SQL}`;
-  if (req.query.q) {
-    params.push(`%${req.query.q}%`);
-    sql += ` AND (last_name ILIKE $${params.length} OR first_name ILIKE $${params.length}
-                  OR full_name_translit ILIKE $${params.length} OR full_name_normalized ILIKE $${params.length})`;
-  }
   sql += ' ORDER BY object, department, last_name, first_name';
-  return (await query(sql, params)).rows;
+  const rows = (await query(sql, params)).rows;
+  const q = String(req.query.q || '').trim();
+  return q ? rows.filter(u => fuzzyHas(`${u.last_name || ''} ${u.first_name || ''} | ${u.first_name || ''} ${u.last_name || ''}`, q)) : rows;
 }
 
 const ROT_STATUS_TEXT = { on_shift: '👷 На вахте', home: '🏠 Дома' };
@@ -809,7 +832,8 @@ router.post('/rotations/import', authRequired, requireRole('admin', 'assistant',
     'отъезд': 'departure', 'дата отъезда': 'departure', 'выезд': 'departure',
     'дома (дней)': 'rest', 'дома между вахтами (дней)': 'rest', 'дома между вахтами': 'rest', 'дома': 'rest', 'отдых (дней)': 'rest',
     'овертайм с': 'ot_from', 'овертайм от': 'ot_from', 'овертайм начало': 'ot_from',
-    'овертайм по': 'ot_to', 'овертайм до': 'ot_to', 'овертайм конец': 'ot_to'
+    'овертайм по': 'ot_to', 'овертайм до': 'ot_to', 'овертайм конец': 'ot_to',
+    ...require('../lib/namesakes').NAMESAKE_HEADERS
   };
   let sheetRows;
   try {
@@ -837,6 +861,7 @@ router.post('/rotations/import', authRequired, requireRole('admin', 'assistant',
 
     let updated = 0, emptyRows = 0;
     const errors = [];
+    let skelIndex = null; // индекс «скелетов» ФИО для поиска (строится один раз при первой необходимости)
     for (let r = 1; r < sheetRows.length; r++) {
       const row = sheetRows[r];
       const rowNum = r + 1;
@@ -859,12 +884,25 @@ router.post('/rotations/import', authRequired, requireRole('admin', 'assistant',
           const norm = computeFioFields(last_name, first_name).normalized;
           if (norm) found = (await query(`SELECT * FROM users WHERE role = 'employee' AND full_name_normalized = $1`, [norm])).rows;
         }
+        // Не нашли — ищем по «скелету» ФИО: латиница ↔ кириллица, перепутанные Фамилия/Имя, Гулнара = Гульнара
+        if (!found.length && last_name && first_name) {
+          const { skeletonFio } = require('./medbooks').helpers;
+          if (!skelIndex) {
+            skelIndex = new Map();
+            (await query(`SELECT * FROM users WHERE role = 'employee'`)).rows.forEach(u => {
+              const k1 = skeletonFio(`${u.last_name} ${u.first_name}`), k2 = skeletonFio(`${u.first_name} ${u.last_name}`);
+              [k1, k2].forEach(k => { if (!k) return; if (!skelIndex.has(k)) skelIndex.set(k, []); if (!skelIndex.get(k).includes(u)) skelIndex.get(k).push(u); });
+            });
+          }
+          found = (skelIndex.get(skeletonFio(`${last_name} ${first_name}`)) || []).slice();
+        }
         if (found.length > 1) {
           const act = found.filter(u => u.employment_status === 'active');
           if (act.length === 1) found = act;
         }
         if (!found.length) { errors.push(`Строка ${rowNum}: сотрудник «${label}» не найден в системе`); continue; }
-        if (found.length > 1) { errors.push(`Строка ${rowNum}: найдено несколько сотрудников «${label}» — укажите ИИН`); continue; }
+        if (found.length > 1) found = narrowNamesakes(found, { badge: txt(row, 'badge'), dept: txt(row, 'dept'), pos: txt(row, 'pos') });
+        if (found.length > 1) { errors.push(`Строка ${rowNum}: «${label}» — ${NAMESAKE_ERROR}. Совпали: ${namesakesHint(found)}`); continue; }
         const target = found[0];
         if (!isInAssistantScope(req.user, target)) { errors.push(`Строка ${rowNum}: «${label}» вне вашей зоны доступа`); continue; }
 
@@ -1340,7 +1378,7 @@ router.post('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), 
     // Регистр и лишние пробелы в ФИО не считаются — если такой сотрудник уже есть,
     // новая запись не создаётся, а вызывающая сторона получает данные существующего.
     if (targetRole === 'employee') {
-      const dup = await findDuplicateEmployee(last_name, first_name, null, iinVal);
+      const dup = await findDuplicateEmployee(last_name, first_name, null, iinVal, tco_badge);
       if (rejectDuplicate(req, res, dup)) return;
     }
 
@@ -1499,7 +1537,8 @@ router.put('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
         || String(newFirst).trim() !== String(target.first_name || '').trim();
       if (target.role === 'employee' && nameChanged) {
         const iinForCheck = iin !== undefined ? (String(iin || '').trim() || null) : target.iin;
-        const dup = await findDuplicateEmployee(newLast, newFirst, id, iinForCheck);
+        const badgeForCheck = tco_badge !== undefined ? tco_badge : target.tco_badge;
+        const dup = await findDuplicateEmployee(newLast, newFirst, id, iinForCheck, badgeForCheck);
         if (rejectDuplicate(req, res, dup)) return;
       }
 
@@ -1665,4 +1704,5 @@ router.delete('/:id', authRequired, requireRole('superadmin'), async (req, res) 
   }
 });
 
+router.ROTATION_SELECT = ROTATION_SELECT;
 module.exports = router;

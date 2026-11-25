@@ -178,7 +178,10 @@ router.get('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), r
         WHERE u.role = 'employee' AND ${MEMBER_JOIN}
           AND (cardinality($1::text[]) = 0 OR u.object = ANY($1::text[]))
           AND (cardinality($2::text[]) = 0 OR u.department = ANY($2::text[]))
-      ) AS assignments_count
+      ) AS assignments_count, (
+        SELECT COUNT(DISTINCT a.user_id)::int FROM assignments a JOIN users u ON u.id = a.user_id
+        WHERE u.role = 'employee' AND ${MEMBER_JOIN}
+      ) AS assignments_total
       FROM protocols p
       ORDER BY p.open_date DESC, p.id DESC
     `, [objects, departments]);
@@ -254,7 +257,7 @@ async function loadProtocolWithMembers(id) {
   const mRes = await query(`
     SELECT a.user_id, a.status, a.test_date,
            u.last_name, u.first_name, u.position, u.object, u.department,
-           u.permanent_certificate_number, u.tco_badge
+           u.permanent_certificate_number, u.tco_badge, u.login
     FROM protocols p
     JOIN assignments a ON ${MEMBER_JOIN}
     JOIN users u ON u.id = a.user_id AND u.role = 'employee'
@@ -675,6 +678,46 @@ router.post('/:id/close', authRequired, requireRole('admin', 'superadmin'), requ
     const result = await query(`UPDATE protocols SET status = 'closed' WHERE id = $1 RETURNING id, status`, [req.params.id]);
     if (!result.rows[0]) return res.status(404).json({ error: 'not_found' });
     res.json(result.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
+// Перенести выбранных сотрудников (записи о прохождении) из этого протокола в другой.
+// Нужно, когда люди сдали тест в «не тот» протокол (например, он ещё не был открыт, а номер
+// подставился при записи на обучение). Переносятся сами записи, сертификаты и удостоверения.
+// Оба протокола не должны быть подписаны полностью или аннулированы.
+router.post('/:id/move-members', authRequired, requireRole('admin', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
+  try {
+    const srcId = Number(req.params.id);
+    const targetId = Number(req.body && req.body.target_id);
+    const ids = [...new Set(((req.body && req.body.assignment_ids) || []).map(Number).filter(Boolean))];
+    if (!targetId || !ids.length) return res.status(400).json({ error: 'bad_request', message: 'Выберите сотрудников и протокол, куда перенести' });
+    if (targetId === srcId) return res.status(400).json({ error: 'same_protocol', message: 'Это тот же протокол' });
+    if (!(await checkNotLocked(srcId, res))) return;
+    if (!(await checkNotLocked(targetId, res))) return;
+    const tRes = await query(`SELECT id, protocol_number, to_char(open_date, 'YYYY-MM-DD') AS open_date FROM protocols WHERE id = $1`, [targetId]);
+    const target = tRes.rows[0];
+    if (!target) return res.status(404).json({ error: 'not_found', message: 'Протокол для переноса не найден' });
+    // Только записи, которые действительно входят в исходный протокол
+    const vRes = await query(`
+      SELECT a.id FROM protocols p JOIN assignments a ON ${MEMBER_JOIN}
+      WHERE p.id = $1 AND a.id = ANY($2::bigint[])
+    `, [srcId, ids]);
+    const valid = vRes.rows.map(r => Number(r.id));
+    if (!valid.length) return res.status(400).json({ error: 'not_members', message: 'Выбранные записи не входят в этот протокол' });
+    await query(`UPDATE assignments SET protocol_id = $1, protocol_number = $2, protocol_date = $3 WHERE id = ANY($4::bigint[])`,
+      [target.id, target.protocol_number, target.open_date, valid]);
+    await query(`UPDATE certificates SET protocol_id = $1, updated_at = NOW() WHERE assignment_id = ANY($2::bigint[])`, [target.id, valid]);
+    await query(`UPDATE id_cards SET protocol_id = $1, updated_at = NOW() WHERE assignment_id = ANY($2::bigint[])`, [target.id, valid]);
+    try {
+      const sRes = await query('SELECT protocol_number FROM protocols WHERE id = $1', [srcId]);
+      await require('../lib/audit').logAction(req, 'protocol_members_moved', {
+        entityType: 'protocol', entityId: target.id, entityName: `№ ${target.protocol_number}`,
+        details: { from_protocol: sRes.rows[0] && sRes.rows[0].protocol_number, to_protocol: target.protocol_number, count: valid.length, assignment_ids: valid }
+      });
+    } catch (e) { /* журнал не обязателен */ }
+    res.json({ ok: true, moved: valid.length, target_number: target.protocol_number });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }
