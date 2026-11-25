@@ -168,6 +168,101 @@ router.get('/verify/:uid', async (req, res) => {
 });
 
 // По id назначения — как «Скачать сертификат», только удостоверение
+// POST /api/id-cards/qr-sheet  { user_ids: [...] } — PDF A4 с QR-карточками сотрудников (8 на лист, с линиями
+// для резки). QR ведёт на /p/<public_uid>: там всегда актуальные обучения, санкнижка, медосмотр и
+// не пройденные обязательные курсы. Доступно админам, ассистентам (руководителям отделов — только своя зона).
+router.post('/qr-sheet', authRequired, async (req, res) => {
+  try {
+    if (!['superadmin', 'admin', 'assistant'].includes(req.user.role)) return res.status(403).json({ error: 'forbidden' });
+    const ids = [...new Set(((req.body && req.body.user_ids) || []).map(Number).filter(Boolean))].slice(0, 2000);
+    if (!ids.length) return res.status(400).json({ error: 'no_users', message: 'Выберите сотрудников' });
+    const r = await query(`
+      SELECT id, last_name, first_name, position, department, object, public_uid, login
+      FROM users WHERE id = ANY($1::bigint[]) AND role = 'employee' AND public_uid IS NOT NULL
+      ORDER BY department NULLS LAST, last_name, first_name`, [ids]);
+    let rows = r.rows;
+    if (req.user.role === 'assistant') {
+      const zo = Array.isArray(req.user.assistant_objects) ? req.user.assistant_objects : [];
+      const zd = Array.isArray(req.user.assistant_departments) ? req.user.assistant_departments : [];
+      rows = (!zo.length && !zd.length) ? [] : rows.filter(u => (!zo.length || zo.includes(u.object)) && (!zd.length || zd.includes(u.department)));
+    }
+    if (!rows.length) return res.status(404).json({ error: 'not_found', message: 'Нет сотрудников для QR (вне зоны доступа или не найдены)' });
+    const employer = ((await query('SELECT company_name FROM settings WHERE id = 1')).rows[0] || {}).company_name || '';
+
+    const PDFDocument = require('pdfkit');
+    const FONT_REG = path.join(__dirname, '..', 'assets', 'fonts', 'DejaVuSans.ttf');
+    const FONT_BOLD = path.join(__dirname, '..', 'assets', 'fonts', 'DejaVuSans-Bold.ttf');
+    const doc = new PDFDocument({ size: 'A4', margin: 0, info: { Title: 'QR-коды сотрудников' } });
+    const reg = fs.existsSync(FONT_REG) ? (doc.registerFont('R', FONT_REG), 'R') : 'Helvetica';
+    const bold = fs.existsSync(FONT_BOLD) ? (doc.registerFont('B', FONT_BOLD), 'B') : 'Helvetica-Bold';
+    const chunks = [];
+    doc.on('data', c => chunks.push(c));
+    const done = new Promise(ok => doc.on('end', ok));
+
+    const PW = 595.28, PH = 841.89, M = 22, COLS = 2, ROWS = 4;
+    const CW = (PW - 2 * M) / COLS, CH = (PH - 2 * M) / ROWS;
+    const QR = 118;
+    for (let i = 0; i < rows.length; i++) {
+      const u = rows[i];
+      const slot = i % (COLS * ROWS);
+      if (i > 0 && slot === 0) doc.addPage();
+      if (slot === 0) {
+        // линии для резки
+        doc.save().lineWidth(0.4).strokeColor('#b6c2cf').dash(3, { space: 3 });
+        for (let c = 0; c <= COLS; c++) doc.moveTo(M + c * CW, M).lineTo(M + c * CW, PH - M).stroke();
+        for (let rr = 0; rr <= ROWS; rr++) doc.moveTo(M, M + rr * CH).lineTo(PW - M, M + rr * CH).stroke();
+        doc.restore().undash();
+      }
+      const x = M + (slot % COLS) * CW, y = M + Math.floor(slot / COLS) * CH;
+      const pad = 12;
+      // шапка
+      doc.save().rect(x + 0.5, y + 0.5, CW - 1, 22).fill('#0f3b6c').restore();
+      doc.font(bold).fontSize(8).fillColor('#ffffff')
+        .text((employer || 'Обучение по БиОТ').toUpperCase(), x + pad, y + 7, { width: CW - 2 * pad, height: 10, ellipsis: true, lineBreak: false });
+      // QR
+      const url = buildPersonUrl(req, u.public_uid);
+      const png = await QRCode.toBuffer(url, { type: 'png', margin: 0, width: 400, errorCorrectionLevel: 'M' });
+      const qx = x + CW - pad - QR, qy = y + 32;
+      doc.image(png, qx, qy, { width: QR, height: QR });
+      // текст слева
+      const tw = CW - 3 * pad - QR;
+      let ty = y + 34;
+      doc.font(bold).fontSize(12.5).fillColor('#0f172a');
+      const name = `${u.last_name || ''} ${u.first_name || ''}`.trim();
+      doc.text(name, x + pad, ty, { width: tw, height: 32, ellipsis: true });
+      ty = Math.min(doc.y, y + 34 + 32) + 4;
+      const line = (label, val) => {
+        if (!val) return;
+        doc.font(reg).fontSize(6.5).fillColor('#64748b').text(label, x + pad, ty, { width: tw, lineBreak: false });
+        ty += 8;
+        doc.font(bold).fontSize(8.5).fillColor('#1e293b').text(val, x + pad, ty, { width: tw, height: 20, ellipsis: true });
+        ty = Math.min(doc.y, ty + 20) + 3;
+      };
+      line('Должность / Лауазымы', u.position);
+      line('Отдел / Бөлім', u.department || u.object);
+      line('Логин / № удостоверения', u.login);
+      // подпись под QR
+      doc.font(bold).fontSize(7).fillColor('#0f3b6c')
+        .text('Сканируйте: обучения, санкнижка, медосмотр', x + pad, y + CH - 30, { width: CW - 2 * pad, align: 'center', lineBreak: false });
+      doc.font(reg).fontSize(6.3).fillColor('#64748b')
+        .text('Сканерлеңіз: оқытулар, санкітапша, медтексеру · Scan: trainings, medical', x + pad, y + CH - 19, { width: CW - 2 * pad, align: 'center', lineBreak: false });
+    }
+    doc.end();
+    await done;
+    const buf = Buffer.concat(chunks);
+    try {
+      await require('../lib/audit').logAction(req, 'qr_sheet_downloaded', { entityType: 'user', entityName: `${rows.length} сотр.`, details: { count: rows.length } });
+    } catch (e) { /* журнал не обязателен */ }
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="qr-sotrudniki-${new Date().toISOString().slice(0, 10)}.pdf"`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(buf);
+  } catch (e) {
+    console.error('qr-sheet:', e);
+    if (!res.headersSent) res.status(500).json({ error: 'server_error', details: e.message });
+  }
+});
+
 router.get('/:id', authRequired, async (req, res) => {
   const assignmentId = req.params.id;
   try {

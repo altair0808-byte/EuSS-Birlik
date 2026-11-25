@@ -626,7 +626,9 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), requireAdminF
       RETURNING id, protocol_number, status, created_by, created_at,
         to_char(open_date, 'YYYY-MM-DD') AS open_date, to_char(close_date, 'YYYY-MM-DD') AS close_date
     `, [protocol_number, open_date, close_date, req.user.id]);
-    res.json(result.rows[0]);
+    let attached = 0;
+    try { attached = await attachPeriodMembers(result.rows[0].id); } catch (e) { console.error('attachPeriodMembers:', e.message); }
+    res.json({ ...result.rows[0], attached });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }
@@ -665,7 +667,23 @@ router.patch('/:id', authRequired, requireRole('superadmin'), requireAdminFuncti
         to_char(open_date, 'YYYY-MM-DD') AS open_date, to_char(close_date, 'YYYY-MM-DD') AS close_date
     `, params);
     if (!result.rows[0]) return res.status(404).json({ error: 'not_found' });
-    res.json(result.rows[0]);
+    let attached = 0;
+    try { attached = await attachPeriodMembers(result.rows[0].id); } catch (e) { console.error('attachPeriodMembers:', e.message); }
+    res.json({ ...result.rows[0], attached });
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
+// Подтянуть в протокол сдававших в его период (кнопка в окне протокола; то же делается само
+// при создании, изменении дат и повторном открытии).
+router.post('/:id/attach-period', authRequired, requireRole('admin', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
+  try {
+    if (!(await checkNotLocked(req.params.id, res))) return;
+    const st = await query('SELECT status FROM protocols WHERE id = $1', [req.params.id]);
+    if (st.rows[0].status !== 'open') return res.status(400).json({ error: 'not_open', message: 'Протокол закрыт — сначала откройте его снова' });
+    const attached = await attachPeriodMembers(req.params.id);
+    res.json({ ok: true, attached });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }
@@ -683,13 +701,55 @@ router.post('/:id/close', authRequired, requireRole('admin', 'superadmin'), requ
   }
 });
 
+// Перенести выбранных сотрудников (записи о прохождении) из этого протокола в другой.
+// Нужно, когда люди сдали тест в «не тот» протокол (например, он ещё не был открыт, а номер
+// подставился при записи на обучение). Переносятся сами записи, сертификаты и удостоверения.
+// Оба протокола не должны быть подписаны полностью или аннулированы.
+router.post('/:id/move-members', authRequired, requireRole('admin', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
+  try {
+    const srcId = Number(req.params.id);
+    const targetId = Number(req.body && req.body.target_id);
+    const ids = [...new Set(((req.body && req.body.assignment_ids) || []).map(Number).filter(Boolean))];
+    if (!targetId || !ids.length) return res.status(400).json({ error: 'bad_request', message: 'Выберите сотрудников и протокол, куда перенести' });
+    if (targetId === srcId) return res.status(400).json({ error: 'same_protocol', message: 'Это тот же протокол' });
+    if (!(await checkNotLocked(srcId, res))) return;
+    if (!(await checkNotLocked(targetId, res))) return;
+    const tRes = await query(`SELECT id, protocol_number, to_char(open_date, 'YYYY-MM-DD') AS open_date FROM protocols WHERE id = $1`, [targetId]);
+    const target = tRes.rows[0];
+    if (!target) return res.status(404).json({ error: 'not_found', message: 'Протокол для переноса не найден' });
+    // Только записи, которые действительно входят в исходный протокол
+    const vRes = await query(`
+      SELECT a.id FROM protocols p JOIN assignments a ON ${MEMBER_JOIN}
+      WHERE p.id = $1 AND a.id = ANY($2::bigint[])
+    `, [srcId, ids]);
+    const valid = vRes.rows.map(r => Number(r.id));
+    if (!valid.length) return res.status(400).json({ error: 'not_members', message: 'Выбранные записи не входят в этот протокол' });
+    await query(`UPDATE assignments SET protocol_id = $1, protocol_number = $2, protocol_date = $3 WHERE id = ANY($4::bigint[])`,
+      [target.id, target.protocol_number, target.open_date, valid]);
+    await query(`UPDATE certificates SET protocol_id = $1, updated_at = NOW() WHERE assignment_id = ANY($2::bigint[])`, [target.id, valid]);
+    await query(`UPDATE id_cards SET protocol_id = $1, updated_at = NOW() WHERE assignment_id = ANY($2::bigint[])`, [target.id, valid]);
+    try {
+      const sRes = await query('SELECT protocol_number FROM protocols WHERE id = $1', [srcId]);
+      await require('../lib/audit').logAction(req, 'protocol_members_moved', {
+        entityType: 'protocol', entityId: target.id, entityName: `№ ${target.protocol_number}`,
+        details: { from_protocol: sRes.rows[0] && sRes.rows[0].protocol_number, to_protocol: target.protocol_number, count: valid.length, assignment_ids: valid }
+      });
+    } catch (e) { /* журнал не обязателен */ }
+    res.json({ ok: true, moved: valid.length, target_number: target.protocol_number });
+  } catch (e) {
+    res.status(500).json({ error: 'db_error', details: e.message });
+  }
+});
+
 // Снова открыть протокол
 router.post('/:id/reopen', authRequired, requireRole('admin', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
   try {
     if (!(await checkNotLocked(req.params.id, res))) return;
     const result = await query(`UPDATE protocols SET status = 'open' WHERE id = $1 RETURNING id, status`, [req.params.id]);
     if (!result.rows[0]) return res.status(404).json({ error: 'not_found' });
-    res.json(result.rows[0]);
+    let attached = 0;
+    try { attached = await attachPeriodMembers(result.rows[0].id); } catch (e) { console.error('attachPeriodMembers:', e.message); }
+    res.json({ ...result.rows[0], attached });
   } catch (e) {
     res.status(500).json({ error: 'db_error', details: e.message });
   }
@@ -727,6 +787,61 @@ async function findActiveProtocol(dateStr) {
   return result.rows[0] || null;
 }
 
+// Открытый протокол по номеру (для записи на обучение): статус «открыт», не подписан полностью,
+// дата закрытия ещё не прошла (по Атырау). Если номеров несколько (разные годы) — самый свежий.
+async function findOpenProtocolByNumber(number) {
+  const n = String(number || '').trim();
+  if (!n) return null;
+  const r = await query(`
+    SELECT id, protocol_number, to_char(open_date, 'YYYY-MM-DD') AS open_date, to_char(close_date, 'YYYY-MM-DD') AS close_date
+    FROM protocols
+    WHERE status = 'open' AND NOT locked AND protocol_number = $1
+      AND close_date >= (NOW() AT TIME ZONE 'Asia/Atyrau')::date
+    ORDER BY open_date DESC LIMIT 1
+  `, [n]);
+  return r.rows[0] || null;
+}
+
+// Подтянуть в протокол всех, кто сдавал/не сдал тест НА САЙТЕ в период его действия (open_date..close_date),
+// но оказался без протокола или в протоколе, чей период эту дату не охватывает (например, протокол
+// открыли позже, чем люди сдали, или подставился «не тот» номер). Не трогаем: внешние курсы,
+// ручные/исторические записи, записи в полностью подписанных/аннулированных протоколах.
+async function attachPeriodMembers(protocolId) {
+  const r = await query(`
+    WITH p AS (SELECT * FROM protocols WHERE id = $1 AND status = 'open' AND NOT locked),
+    cand AS (
+      SELECT a.id FROM assignments a, p
+      WHERE a.status IN ('passed', 'failed')
+        AND (a.started_at IS NOT NULL OR a.user_answers IS NOT NULL)
+        AND a.test_date::text ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+        AND LEFT(a.test_date, 10)::date BETWEEN p.open_date AND p.close_date
+        AND NOT EXISTS (SELECT 1 FROM courses xc WHERE xc.id = a.course_id AND xc.is_external)
+        AND (a.protocol_id IS DISTINCT FROM p.id)
+        AND NOT EXISTS (
+          SELECT 1 FROM protocols q
+          WHERE q.id <> p.id
+            AND (q.id = a.protocol_id OR (a.protocol_id IS NULL AND q.protocol_number = a.protocol_number
+                                          AND LEFT(a.protocol_date, 10) = to_char(q.open_date, 'YYYY-MM-DD')))
+            AND (q.locked OR q.status = 'revoked'
+                 OR LEFT(a.test_date, 10)::date BETWEEN q.open_date AND q.close_date)
+        )
+    )
+    UPDATE assignments a
+       SET protocol_id = p.id, protocol_number = p.protocol_number, protocol_date = to_char(p.open_date, 'YYYY-MM-DD')
+      FROM p
+     WHERE a.id IN (SELECT id FROM cand)
+    RETURNING a.id
+  `, [protocolId]);
+  const ids = r.rows.map(x => Number(x.id));
+  if (ids.length) {
+    await query(`UPDATE certificates SET protocol_id = $1, updated_at = NOW() WHERE assignment_id = ANY($2::bigint[])`, [protocolId, ids]);
+    await query(`UPDATE id_cards SET protocol_id = $1, updated_at = NOW() WHERE assignment_id = ANY($2::bigint[])`, [protocolId, ids]);
+  }
+  return ids.length;
+}
+
 module.exports = router;
 module.exports.findActiveProtocol = findActiveProtocol;
+module.exports.findOpenProtocolByNumber = findOpenProtocolByNumber;
+module.exports.attachPeriodMembers = attachPeriodMembers;
 module.exports.nextProtocolNumber = nextProtocolNumber;

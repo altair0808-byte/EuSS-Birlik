@@ -298,4 +298,9 @@ router.post('/import', authRequired, STAFF, upload.single('file'), async (req, r
 });
 
 router.loadMedexamEntries = loadMedexamEntries;
+// Медосмотр одного сотрудника (для публичной страницы по QR): { status, expires, exam_date } или null
+router.loadMedexamForUser = async function (userId) {
+  const u = (await query(SELECT.replace("WHERE u.role = 'employee' AND u.active = 1 AND COALESCE(u.employment_status, 'active') = 'active'", "WHERE u.id = $1 AND u.role = 'employee'"), [userId])).rows[0];
+  return u ? entryOf(u, mb.todayYmd()) : null;
+};
 module.exports = router;

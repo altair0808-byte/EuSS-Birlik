@@ -6,7 +6,7 @@ const { authRequired, requireRole } = require('./auth');
 const { requireAdminFunction, requireCourseFunction, requireAssignmentFunction, kindSqlFilter, siteKindSql } = require('../lib/adminFunctions');
 const { logAction } = require('../lib/audit');
 const { makeUploader } = require('../upload');
-const { findActiveProtocol, nextProtocolNumber } = require('./protocols');
+const { findActiveProtocol, nextProtocolNumber, findOpenProtocolByNumber } = require('./protocols');
 const { splitMulti, scopedFilter } = require('../lib/multiFilter');
 // ЭТАП 1 (удостоверения БиОТ): как только назначение получает статус 'passed' — при
 // сдаче теста ниже, либо при внесении исторической записи — автоматически заводим
@@ -195,6 +195,19 @@ router.post('/', authRequired, requireRole('admin', 'superadmin'), requireCourse
   if (historical && !test_date) {
     return res.status(400).json({ error: 'missing_fields', message: 'Для исторической записи укажите дату прохождения' });
   }
+  // Запись на обучение (не историческая, наш курс с протоколом) — только в ОТКРЫТЫЙ протокол.
+  // Номер/дату берём из самого протокола, чтобы не было «записи в номер, которого ещё нет».
+  if (!historical && !external) {
+    try {
+      const op = await findOpenProtocolByNumber(protocol_number);
+      if (!op) {
+        return res.status(400).json({ error: 'protocol_not_open',
+          message: `Протокол № ${protocol_number || '—'} не открыт. Сначала откройте протокол во вкладке «Протоколы» (или выберите номер открытого протокола).` });
+      }
+      protocol_number = op.protocol_number;
+      protocol_date = op.open_date;
+    } catch (e) { return res.status(500).json({ error: 'db_error', details: e.message }); }
+  }
 
   try {
     // Курсы назначаются только сотрудникам — администраторы в обучении и статистике не участвуют
@@ -263,6 +276,19 @@ router.post('/bulk', authRequired, requireRole('admin', 'superadmin'), requireCo
   }
   if (historical && !test_date) {
     return res.status(400).json({ error: 'missing_fields', message: 'Для исторической записи укажите дату прохождения' });
+  }
+  // Запись на обучение (не историческая, наш курс с протоколом) — только в ОТКРЫТЫЙ протокол.
+  // Номер/дату берём из самого протокола, чтобы не было «записи в номер, которого ещё нет».
+  if (!historical && !external) {
+    try {
+      const op = await findOpenProtocolByNumber(protocol_number);
+      if (!op) {
+        return res.status(400).json({ error: 'protocol_not_open',
+          message: `Протокол № ${protocol_number || '—'} не открыт. Сначала откройте протокол во вкладке «Протоколы» (или выберите номер открытого протокола).` });
+      }
+      protocol_number = op.protocol_number;
+      protocol_date = op.open_date;
+    } catch (e) { return res.status(500).json({ error: 'db_error', details: e.message }); }
   }
 
   // На всякий случай убираем дубликаты id, которые мог прислать фронт
