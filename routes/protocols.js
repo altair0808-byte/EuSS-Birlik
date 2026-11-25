@@ -533,6 +533,46 @@ router.post('/:id/sign', authRequired, requireRole('admin', 'assistant', 'supera
   }
 });
 
+// Пересобрать файлы уже подписанного протокола (Word + PDF) по текущему шаблону — с теми же подписями
+// и печатью. Нужно, когда меняется бланк (например, строка приказа). Только суперадмин.
+// Меняется контрольная сумма PDF (pdf_hash), версия увеличивается (pdf_version); старая сумма пишется в журнал.
+// Если PDF собрать не удалось — ничего не перезаписываем.
+router.post('/:id/rebuild-signed', authRequired, requireRole('superadmin'), requireAdminFunction('biot'), async (req, res) => {
+  try {
+    const cur = (await query('SELECT id, locked, status, pdf_hash, pdf_version FROM protocols WHERE id = $1', [req.params.id])).rows[0];
+    if (!cur) return res.status(404).json({ error: 'not_found' });
+    if (!cur.locked) return res.status(400).json({ error: 'not_signed', message: 'Протокол ещё не подписан полностью — он и так собирается заново при каждом скачивании' });
+    if (cur.status === 'revoked') return res.status(409).json({ error: 'revoked', message: 'Протокол аннулирован' });
+    const data = await loadProtocolWithMembers(cur.id);
+    const sigs = await loadProtocolSignatures(cur.id);
+    const settingsRes = await query('SELECT company_name FROM settings WHERE id = 1');
+    const companyStamp = await loadCompanyStamp();
+    const docxBuffer = (await buildProtocolDocx({
+      protocolNumber: data.protocol.protocol_number, openDate: data.protocol.open_date,
+      members: data.members, signatures: sigs, companyStamp
+    })).buffer;
+    const pdfBuffer = await buildProtocolPdf({
+      protocol: data.protocol, members: data.members, signatures: sigs,
+      companyName: (settingsRes.rows[0] || {}).company_name, companyStamp, docxBuffer
+    });
+    if (!pdfBuffer) return res.status(500).json({ error: 'pdf_failed', message: 'Не удалось собрать PDF — файлы не изменены' });
+    const hash = crypto.createHash('sha256').update(pdfBuffer).digest('hex');
+    await query(`UPDATE protocols SET pdf_hash = $1, signed_pdf_data = $2, signed_docx_data = $3, pdf_version = COALESCE(pdf_version, 1) + 1 WHERE id = $4`,
+      [hash, pdfBuffer.toString('base64'), docxBuffer.toString('base64'), cur.id]);
+    try {
+      await require('../lib/audit').logAction(req, 'protocol_rebuilt', {
+        entityType: 'protocol', entityId: cur.id, entityName: `№ ${data.protocol.protocol_number}`,
+        details: { old_hash: cur.pdf_hash, new_hash: hash, version: (cur.pdf_version || 1) + 1 }
+      });
+    } catch (e) { /* журнал не обязателен */ }
+    try { driveSync.enqueueProtocol(cur.id); } catch (e) { /* запасное хранилище не обязательно */ }
+    res.json({ ok: true, pdf_hash: hash, pdf_version: (cur.pdf_version || 1) + 1 });
+  } catch (e) {
+    console.error('rebuild-signed:', e);
+    res.status(500).json({ error: 'rebuild_error', message: 'Не удалось пересобрать: ' + e.message });
+  }
+});
+
 // ЭТАП 2. Аннулировать протокол (§ «Автоматическое аннулирование» ТЗ): «Протокол
 // аннулирован → удостоверение автоматически получает статус REVOKED». Разрешено
 // суперадминистратору в любом состоянии протокола (открыт/закрыт/подписан) — это
