@@ -8741,6 +8741,7 @@ function renderProtocolsView() {
           <span class="text-[11px] text-slate-500 font-semibold" title="Закрыт окончательно: изменение, перенос сотрудников, повторное открытие и удаление запрещены. Можно только скачать.">🔒 ${_L('Закрыт окончательно', 'Түпкілікті жабылды')}</span>
         ` : p.locked ? `
           <span class="text-[11px] text-slate-400 font-semibold" title="Протокол полностью подписан комиссией — изменение, закрытие и удаление запрещены">🔒 Подписан</span>
+          ${isSuperadminUser() ? `<button onclick="rebuildSignedProtocol(${p.id})" title="${_L('Собрать Word и PDF заново по текущему бланку (с теми же подписями). Контрольная сумма PDF изменится.', 'Қайта жинау')}" class="text-indigo-600 hover:underline text-xs">↻ ${_L('Пересобрать файл', 'Қайта жинау')}</button>` : ''}
           ${(state.user && state.user.role === 'superadmin') ? `<button onclick="revokeProtocolAction(${p.id})" class="text-red-600 hover:underline text-xs">Аннулировать</button>` : ''}
         ` : `
           ${isSuperadminUser() && p.status === 'open' ? `<button onclick="editProtocol(${p.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>` : ''}
@@ -9096,6 +9097,16 @@ async function saveProtocolForm(e) {
   }
 }
 
+async function rebuildSignedProtocol(id) {
+  const num = ((state.protocols || []).find(x => String(x.id) === String(id)) || {}).protocol_number || '';
+  if (!confirm(_L(`Пересобрать подписанный протокол № ${num} по текущему бланку?\nПодписи и печать сохранятся, но изменится контрольная сумма PDF (старая версия будет отличаться от новой).`,
+                  `№ ${num} хаттаманы қайта жинау керек пе?`))) return;
+  try {
+    const r = await api.req('/api/protocols/' + id + '/rebuild-signed', { method: 'POST' });
+    alert(_L(`Готово. Версия файла: ${r.pdf_version}. Скачайте протокол заново.`, `Дайын. Нұсқа: ${r.pdf_version}.`));
+    loadProtocolsList();
+  } catch (e) { alert(e.message || t('error_generic')); }
+}
 async function archiveProtocolAction(id) {
   if (!confirm(_L('Закрыть протокол окончательно?\nПосле этого его нельзя будет открыть снова, изменить, перенести сотрудников или удалить — только скачать.',
                   'Хаттаманы түпкілікті жабу керек пе?'))) return;
