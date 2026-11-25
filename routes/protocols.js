@@ -691,7 +691,7 @@ router.patch('/:id', authRequired, requireRole('superadmin'), requireAdminFuncti
 
 // Подтянуть в протокол сдававших в его период (кнопка в окне протокола; то же делается само
 // при создании, изменении дат и повторном открытии).
-router.post('/:id/attach-period', authRequired, requireRole('admin', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
+router.post('/:id/attach-period', authRequired, requireRole('superadmin'), requireAdminFunction('biot'), async (req, res) => {
   try {
     if (!(await checkNotLocked(req.params.id, res))) return;
     const st = await query('SELECT status FROM protocols WHERE id = $1', [req.params.id]);
@@ -719,7 +719,7 @@ router.post('/:id/close', authRequired, requireRole('admin', 'superadmin'), requ
 // Нужно, когда люди сдали тест в «не тот» протокол (например, он ещё не был открыт, а номер
 // подставился при записи на обучение). Переносятся сами записи, сертификаты и удостоверения.
 // Оба протокола не должны быть подписаны полностью или аннулированы.
-router.post('/:id/move-members', authRequired, requireRole('admin', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
+router.post('/:id/move-members', authRequired, requireRole('superadmin'), requireAdminFunction('biot'), async (req, res) => {
   try {
     const srcId = Number(req.params.id);
     const targetId = Number(req.body && req.body.target_id);
@@ -758,7 +758,7 @@ router.post('/:id/move-members', authRequired, requireRole('admin', 'superadmin'
 });
 
 // Снова открыть протокол
-router.post('/:id/reopen', authRequired, requireRole('admin', 'superadmin'), requireAdminFunction('biot'), async (req, res) => {
+router.post('/:id/reopen', authRequired, requireRole('superadmin'), requireAdminFunction('biot'), async (req, res) => {
   try {
     if (!(await checkNotLocked(req.params.id, res))) return;
     const result = await query(`UPDATE protocols SET status = 'open' WHERE id = $1 RETURNING id, status`, [req.params.id]);

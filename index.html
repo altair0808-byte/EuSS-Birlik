@@ -8744,7 +8744,7 @@ function renderProtocolsView() {
           ${isSuperadminUser() && p.status === 'open' ? `<button onclick="editProtocol(${p.id})" class="text-blue-600 hover:underline text-xs">Изменить</button>` : ''}
           ${p.status === 'open'
             ? `<button onclick="closeProtocolAction(${p.id})" class="text-amber-600 hover:underline text-xs">Закрыть</button>`
-            : `<button onclick="reopenProtocolAction(${p.id})" class="text-emerald-600 hover:underline text-xs">Открыть снова</button>`}
+            : isSuperadminUser() ? `<button onclick="reopenProtocolAction(${p.id})" class="text-emerald-600 hover:underline text-xs">Открыть снова</button>` : ''}
           ${(state.user && state.user.role === 'superadmin') ? `<button onclick="revokeProtocolAction(${p.id})" class="text-red-600 hover:underline text-xs">Аннулировать</button>` : ''}
           ${isSuperadminUser() ? `<button onclick="deleteProtocolAction(${p.id})" class="text-red-600 hover:underline text-xs">Удалить</button>` : ''}
         `}
@@ -8764,7 +8764,7 @@ async function openProtocolMembersModal(id) {
   try {
     const data = await api.getProtocolMembers(id);
     const pr = data.protocol || {};
-    const canMove = !isObserverUser() && state.user && ['admin', 'superadmin'].includes(state.user.role)
+    const canMove = isSuperadminUser()
       && !pr.locked && pr.status === 'open' && data.members.length > 0;
     if (canMove && !(state.protocols || []).length) { try { state.protocols = await api.getProtocols(); } catch (e) {} }
     if (title) title.textContent = `Протокол № ${data.protocol.protocol_number} (${fmtDate(data.protocol.open_date)} — ${fmtDate(data.protocol.close_date)})`;
@@ -8808,7 +8808,7 @@ async function openProtocolMembersModal(id) {
         <button type="button" onclick="downloadProtocolDocx(${id})" class="text-indigo-600 hover:underline text-xs font-semibold">Скачать Word</button>
         <button type="button" onclick="downloadProtocolPdf(${id})" class="text-purple-600 hover:underline text-xs font-semibold">Скачать PDF</button>
       </div>
-      ${(!isObserverUser() && ['admin', 'superadmin'].includes(state.user.role) && pr.status === 'open' && !pr.locked) ? `
+      ${(isSuperadminUser() && pr.status === 'open' && !pr.locked) ? `
       <div class="flex flex-wrap items-center gap-2 mb-3 text-xs text-slate-600">
         <button type="button" onclick="pmAttachPeriod(${id})" class="px-3 py-1.5 rounded-lg border border-emerald-300 text-emerald-700 hover:bg-emerald-50 font-semibold">↻ ${_L('Подтянуть сдававших за период', 'Кезеңде тапсырғандарды қосу')} ${fmtDate(pr.open_date)}–${fmtDate(pr.close_date)}</button>
         <span class="text-slate-400">${_L('Нужные даты не охвачены? Измените дату открытия протокола — сдававшие добавятся сами.', 'Күндер қамтылмаса — хаттаманың ашылу күнін өзгертіңіз.')}</span>
