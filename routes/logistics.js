@@ -6,6 +6,7 @@
 // Списки «кто заезжает / выезжает в дату» берутся из графика вахты (users.rotation_*).
 const express = require('express');
 const ExcelJS = require('exceljs');
+const path = require('path');
 const { query } = require('../db');
 const { authRequired } = require('./auth');
 const { hasLogiFunction, requireLogi } = require('../lib/adminFunctions');
@@ -82,8 +83,8 @@ router.put('/settings', authRequired, async (req, res) => {
   try {
     if (b.settings) {
       const s = b.settings;
-      await query(`UPDATE logi_settings SET travel_cause = $1, company = $2, direct_tco = $3, request_department = $4, request_cc = $5, request_email = $6 WHERE id = 1`,
-        [clean(s.travel_cause) || 'Crew change', clean(s.company) || 'EUSS', clean(s.direct_tco) || 'Yes', clean(s.request_department), clean(s.request_cc), clean(s.request_email)]);
+      await query(`UPDATE logi_settings SET travel_cause = $1, company = $2, direct_tco = $3, request_department = $4, request_cc = $5, request_email = $6, request_phone = $7 WHERE id = 1`,
+        [clean(s.travel_cause) || 'Crew change', clean(s.company) || 'EUSS', clean(s.direct_tco) || 'Yes', clean(s.request_department), clean(s.request_cc), clean(s.request_email), clean(s.request_phone, 40)]);
     }
     if (Array.isArray(b.routes)) {
       const pts = b.routes.map((r, i) => ({ point: clean(r.point, 80), in_time: clean(r.in_time, 10) || '06:00', out_time: clean(r.out_time, 10) || '12:00', sort: i + 1 })).filter((r) => r.point);
@@ -293,75 +294,81 @@ router.get('/transport/:id/export.xlsx', authRequired, requireLogi('transport', 
       return pts.map((p) => ({ point: p, list: data.passengers.filter((x) => x.direction === dir && x.point === p) })).filter((g) => g.list.length);
     };
 
+    // Бланк — точная копия присланной формы (templates/transport_request.xlsx): шапка как есть,
+    // строки 8–11 — образец блока маршрута (Маршрут / Время / # ФИО Пропуск / строка пассажира).
     const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet('Table');
-    ws.columns = [{ width: 4.7 }, { width: 46.6 }, { width: 22 }, { width: 1.3 }, { width: 4.4 }, { width: 37.1 }, { width: 22 }];
-    const thin = { style: 'thin' };
-    const box = { top: thin, left: thin, bottom: thin, right: thin };
-    const grey = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
-    const set = (addr, v, o = {}) => {
-      const c = ws.getCell(addr);
-      c.value = v;
-      c.font = { name: 'Calibri', size: 11, bold: !!o.bold };
-      c.alignment = { vertical: 'middle', wrapText: true, horizontal: o.center ? 'center' : 'left' };
-      if (o.fill) c.fill = grey;
-      if (o.border !== false) c.border = box;
-      if (o.fmt) c.numFmt = o.fmt;
-      return c;
-    };
-    const dt = (iso) => { const [y, m, d] = String(iso).split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)); };
+    await wb.xlsx.readFile(path.join(__dirname, '..', 'templates', 'transport_request.xlsx'));
+    const ws = wb.worksheets[0];
+    const clone = (o) => JSON.parse(JSON.stringify(o || {}));
+    const proto = {};
+    for (const side of ['L', 'R']) {
+      const C = side === 'L' ? ['A', 'B', 'C'] : ['E', 'F', 'G'];
+      proto[side] = {
+        route: [clone(ws.getCell(C[0] + 8).style), clone(ws.getCell(C[2] + 8).style)],
+        time: [clone(ws.getCell(C[0] + 9).style), clone(ws.getCell(C[2] + 9).style)],
+        head: C.map((c) => clone(ws.getCell(c + 10).style)),
+        row: C.map((c) => clone(ws.getCell(c + 11).style)),
+        headText: C.map((c) => ws.getCell(c + 10).value),
+        routeText: ws.getCell(C[0] + 8).value, timeText: ws.getCell(C[0] + 9).value
+      };
+    }
+    const dStyle = clone(ws.getCell('D10').style);
+    for (const m of ['A8:B8', 'A9:B9', 'E8:F8', 'E9:F9']) { try { ws.unMergeCells(m); } catch (e) { /* нет */ } }
+    for (let r = 8; r <= 11; r++) for (const c of ['A', 'B', 'C', 'D', 'E', 'F', 'G']) { const cell = ws.getCell(c + r); cell.value = null; cell.style = {}; }
 
-    ws.mergeCells('A2:D2'); ws.mergeCells('E2:G2');
-    set('A2', 'Инициатор должен направить Заявку на предоставление транспорта не позднее, чем за 48 часа до планируемого времени отправления транспортного средства на адрес - crewchangecoor@esskaz.com', { border: false });
-    set('E2', 'Initiator shoud email a transportation request 48 hours prior to the scheduled departure of vehicle to - crewchangecoor@esskaz.com', { border: false });
-    ws.getRow(2).height = 49;
-    const head = [
-      ['Дата подачи заявки / Request Date', dt(new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10)), 'Дата отправления / Departure Date', dt(rq.d)],
-      ['ФИО инициатора / Initiator Name ', `${initiator.last_name || ''} ${initiator.first_name || ''}`.trim(), 'Тел# инициатора / Initiator Tel#', initiator.phone || ''],
-      ['Департамент / Department', S.request_department || '', 'ЦЗ / CC', S.request_cc || ''],
-      ['Цель поездки / Travel Cause', S.travel_cause || 'Crew change', 'Эл-почта инициатора / Initiator e-mail', S.request_email || initiator.email || '']
-    ];
-    head.forEach((h, i) => {
-      const r = 3 + i;
-      ws.mergeCells(`A${r}:B${r}`); ws.mergeCells(`C${r}:D${r}`); ws.mergeCells(`E${r}:F${r}`);
-      set(`A${r}`, h[0], { bold: true, fill: true });
-      set(`C${r}`, h[1], { fmt: h[1] instanceof Date ? 'dd.mm.yyyy' : undefined });
-      set(`E${r}`, h[2], { bold: true, fill: true });
-      set(`G${r}`, h[3], { fmt: h[3] instanceof Date ? 'dd.mm.yyyy' : undefined });
-    });
+    const dt = (iso) => { const [yy, mm, dd] = String(iso).split('-').map(Number); return new Date(Date.UTC(yy, mm - 1, dd)); };
+    const tm = (hhmm) => { const m = String(hhmm || '').match(/^(\d{1,2}):(\d{2})/); return m ? (Number(m[1]) * 60 + Number(m[2])) / 1440 : (hhmm || null); };
+    const todayIso = new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10);
+    ws.getCell('C3').value = dt(todayIso);
+    ws.getCell('G3').value = dt(rq.d);
+    ws.getCell('C4').value = require('../lib/fio').transliterate(`${initiator.last_name || ''} ${String(initiator.first_name || '').trim().split(/\s+/)[0] || ''}`.trim());
+    ws.getCell('G4').value = S.request_phone || '';
+    ws.getCell('C5').value = S.request_department || '';
+    ws.getCell('G5').value = S.request_cc || '';
+    ws.getCell('C6').value = S.travel_cause || 'Crew change';
+    ws.getCell('G6').value = S.request_email || '';
 
-    // блоки маршрутов: колонка A..C (in) и E..G (out), идут вниз независимо
+    // Каждый маршрут из настроек — блок, как в бланке; пустые строки с номерами оставляем (не меньше 2)
     const drawSide = (dir, startRow) => {
-      const L = dir === 'in' ? ['A', 'B', 'C'] : ['E', 'F', 'G'];
+      const side = dir === 'in' ? 'L' : 'R';
+      const C = side === 'L' ? ['A', 'B', 'C'] : ['E', 'F', 'G'];
+      const P = proto[side];
       let r = startRow;
-      for (const g of groups(dir)) {
-        const rt = routeOf(g.point), bus = busOf(dir, g.point);
-        const title = dir === 'in' ? `${g.point} - Birlik` : `Birlik - ${g.point}`;
-        ws.mergeCells(`${L[0]}${r}:${L[1]}${r}`);
-        set(`${L[0]}${r}`, 'Маршрут следования / Route', { bold: true, fill: true });
-        set(`${L[2]}${r}`, title + (bus.bus_number ? `  ·  Bus № ${bus.bus_number}` : ''), { bold: true });
+      const pts = [...new Set([...st.routes.map((x) => x.point), ...data.passengers.filter((x) => x.direction === dir).map((x) => x.point)])];
+      for (const pt of pts) {
+        const list = data.passengers.filter((x) => x.direction === dir && x.point === pt);
+        const rt = routeOf(pt), bus = busOf(dir, pt);
+        const title = (dir === 'in' ? `${pt}- Birlik ` : `Birlik - ${pt}`) + (bus.bus_number ? `  (Bus № ${bus.bus_number})` : '');
+        ws.mergeCells(`${C[0]}${r}:${C[1]}${r}`);
+        ws.getCell(C[0] + r).value = P.routeText; ws.getCell(C[0] + r).style = clone(P.route[0]);
+        ws.getCell(C[2] + r).value = title; ws.getCell(C[2] + r).style = clone(P.route[1]);
         r++;
-        ws.mergeCells(`${L[0]}${r}:${L[1]}${r}`);
-        set(`${L[0]}${r}`, 'Время отправления / Departure Time', { bold: true, fill: true });
-        set(`${L[2]}${r}`, bus.dep_time || (dir === 'in' ? rt.in_time : rt.out_time) || '', { bold: true });
+        ws.mergeCells(`${C[0]}${r}:${C[1]}${r}`);
+        ws.getCell(C[0] + r).value = P.timeText; ws.getCell(C[0] + r).style = clone(P.time[0]);
+        ws.getCell(C[2] + r).value = tm(bus.dep_time || (dir === 'in' ? rt.in_time : rt.out_time)); ws.getCell(C[2] + r).style = clone(P.time[1]);
         r++;
-        set(`${L[0]}${r}`, ' #', { bold: true, fill: true, center: true });
-        set(`${L[1]}${r}`, 'ФИО пассажира / Passenger’s Name ', { bold: true, fill: true });
-        set(`${L[2]}${r}`, '#Пропуск / #Badge', { bold: true, fill: true });
+        C.forEach((c, i) => { ws.getCell(c + r).value = P.headText[i]; ws.getCell(c + r).style = clone(P.head[i]); });
         r++;
-        g.list.forEach((p, i) => {
-          set(`${L[0]}${r}`, i + 1, { center: true });
-          set(`${L[1]}${r}`, `${p.last_name} ${p.first_name}`.trim());
-          const badge = String(p.tco_badge || '').trim();
-          set(`${L[2]}${r}`, badge ? (/^\d+$/.test(badge) ? Number(badge) : badge) : 'new', { center: false });
+        const n = Math.max(list.length, 2);
+        for (let i = 0; i < n; i++) {
+          const p = list[i];
+          C.forEach((c, j) => { ws.getCell(c + r).style = clone(P.row[j]); });
+          ws.getCell(C[0] + r).value = i + 1;
+          if (p) {
+            ws.getCell(C[1] + r).value = `${p.last_name} ${p.first_name}`.trim();
+            const badge = String(p.tco_badge || '').trim();
+            ws.getCell(C[2] + r).value = badge ? (/^\d+$/.test(badge) ? Number(badge) : badge) : 'new ';
+          }
           r++;
-        });
+        }
       }
       return r;
     };
     const endIn = drawSide('in', 8);
     const endOut = drawSide('out', 8);
-    if (endIn === 8 && endOut === 8) { set('A8', 'Нет пассажиров', { border: false }); }
+    const last = Math.max(endIn, endOut) - 1;
+    for (let r = 8; r <= last; r++) ws.getCell('D' + r).style = clone(dStyle);
+    try { ws.mergeCells(`D8:D${last}`); } catch (e) { /* одна строка */ }
     Object.assign(ws.pageSetup, { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 });
 
     const [y, m, d] = rq.d.split('-');
@@ -412,7 +419,7 @@ router.post('/housing', authRequired, requireLogi('housing'), async (req, res) =
       const r = await query(`INSERT INTO housing_requests (user_id, check_in, check_out, room_type, cost_center, gender, nationality, b2b, comment, contact, created_by)
                              VALUES ($1,$2::date,$3::date,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (user_id, check_in) DO NOTHING RETURNING id`,
         [uid, ci, co, it.room_type === 'single' || it.room_type === 'double' ? it.room_type : rtOf(u.position), clean(it.cost_center) || ccOf(u.department),
-         (u.gender || guessGender(u.last_name, u.first_name)) === 'female' ? 'Female' : (u.gender || guessGender(u.last_name, u.first_name)) === 'male' ? 'Male' : '', u.nationality || 'Kazakhstan', clean(it.b2b, 120), clean(it.comment, 300), u.phone || '', req.user.id]);
+         (u.gender || guessGender(u.last_name, u.first_name)) === 'female' ? 'Female' : (u.gender || guessGender(u.last_name, u.first_name)) === 'male' ? 'Male' : '', u.nationality || 'Kazakhstan', clean(it.b2b, 120), clean(it.comment, 300), clean(it.contact, 120), req.user.id]);
       if (r.rows[0]) added++; else skipped.push(`${u.last_name} ${u.first_name}`);
     }
     res.json({ ok: true, added, skipped });
@@ -452,42 +459,25 @@ router.post('/housing/export.xlsx', authRequired, requireLogi('housing'), async 
     if (!ids.length) return res.status(400).json({ error: 'bad_request', message: 'Выберите строки' });
     const r = await query(`${HOUSING_SELECT} WHERE h.id = ANY($1::bigint[]) ORDER BY h.check_in, u.last_name`, [ids]);
     const S = (await loadSettings()).settings;
+    // Бланк — точная копия присланной формы (templates/accommodation.xlsx): шапка 1–3, строка 4 — образец строки
     const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet('Accommodation form');
-    const widths = [12.6, 10.6, 13.3, 24.6, 19, 30.6, 18.3, 16.9, 9, 24.1, 17.1, 19.3, 23, 42.3, 10, 14.3, 30];
-    ws.columns = widths.map((w) => ({ width: w }));
-    ws.mergeCells('A1:M1'); ws.mergeCells('A2:M2');
-    ws.getCell('A1').value = 'Заявка на предоставление Услуг по проживанию, питанию и медицинскому освидетельствованию';
-    ws.getCell('A2').value = 'Reservation Request for accommodation, catering services and medical assessments';
-    ['A1', 'A2'].forEach((a) => { ws.getCell(a).font = { name: 'Calibri', size: 14, bold: true }; ws.getCell(a).alignment = { horizontal: 'center' }; });
-    const heads = ['Компания/Company name ', 'Центр затрат/Cost centr', 'Прямой подрядчик TCO или нет/ Direct TCO contractor or not', 'Имя Фамилия/Name, Surname ',
-      'Номер пропуска/ Badge number ', 'Должность/Position ', 'Запрашиваемый тип комнаты/Requested room type    ', 'Пол/Gender', 'Номер комнаты/Room number',
-      'Дата/время заезда/Check-in date & time', 'Дата/время выезда/Check-out date & time', 'Сменщик/B2b', 'Гражданство/Nationality', 'Комментарии/Comments',
-      'Комментарии от Бирлик/Comments from Birlik', 'Алкотест/ Alcohol test', 'Контактные данные/Contact details'];
-    const thin = { style: 'thin' };
-    const box = { top: thin, left: thin, bottom: thin, right: thin };
-    const hr = ws.getRow(3);
-    heads.forEach((h, i) => {
-      const c = hr.getCell(i + 1);
-      c.value = h; c.font = { name: 'Calibri', size: 11, bold: true };
-      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
-      c.alignment = { wrapText: true, vertical: 'middle', horizontal: 'center' }; c.border = box;
-    });
-    hr.height = 100;
+    await wb.xlsx.readFile(path.join(__dirname, '..', 'templates', 'accommodation.xlsx'));
+    const ws = wb.worksheets[0];
+    const COLS = 17; // A..Q
+    const rowStyle = []; for (let j = 1; j <= COLS; j++) rowStyle.push(JSON.parse(JSON.stringify(ws.getRow(4).getCell(j).style || {})));
+    const rowHeight = ws.getRow(4).height;
     const dt = (iso) => { if (!iso) return null; const [y, m, d] = iso.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)); };
+    const { transliterate } = require('../lib/fio');
     r.rows.forEach((h, i) => {
       const row = ws.getRow(4 + i);
       const badge = String(h.tco_badge || '').trim();
       const cc = String(h.cost_center || '').trim();
-      const vals = [S.company || 'EUSS', /^\d+$/.test(cc) ? Number(cc) : cc, S.direct_tco || 'Yes', `${h.last_name} ${h.first_name}`.trim(),
-        badge ? (/^\d+$/.test(badge) ? Number(badge) : badge) : 'new', h.position || '', h.room_type || 'double', h.gender || '', h.room_number || '',
+      const firstWord = String(h.first_name || '').trim().split(/\s+/)[0] || '';
+      const vals = [S.company || 'EUSS', /^\d+$/.test(cc) ? Number(cc) : cc, S.direct_tco || 'Yes', transliterate(`${h.last_name} ${firstWord}`.trim()),
+        badge ? (/^\d+$/.test(badge) ? Number(badge) : badge) : 'new', h.position || '', h.room_type ? h.room_type + ' ' : 'double ', h.gender || '', h.room_number || '',
         dt(h.check_in), dt(h.check_out), h.b2b || '', h.nationality || 'Kazakhstan', h.comment || '', h.birlik_comment || '', h.alcohol_test || '', h.contact || ''];
-      vals.forEach((v, j) => {
-        const c = row.getCell(j + 1);
-        c.value = v; c.border = box; c.font = { name: 'Calibri', size: 11 };
-        c.alignment = { vertical: 'middle', wrapText: true };
-        if (v instanceof Date) c.numFmt = 'dd.mm.yyyy';
-      });
+      vals.forEach((v, j) => { const c = row.getCell(j + 1); c.style = JSON.parse(JSON.stringify(rowStyle[j])); c.value = v === '' ? null : v; });
+      if (rowHeight) row.height = rowHeight;
     });
     await query(`UPDATE housing_requests SET status = 'sent', updated_at = NOW() WHERE id = ANY($1::bigint[]) AND status = 'new'`, [ids]);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

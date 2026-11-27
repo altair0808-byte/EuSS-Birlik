@@ -555,6 +555,7 @@ async function initDb() {
       request_cc TEXT NOT NULL DEFAULT '',
       request_email TEXT NOT NULL DEFAULT ''
     );
+    ALTER TABLE logi_settings ADD COLUMN IF NOT EXISTS request_phone TEXT NOT NULL DEFAULT '';
 
     -- Заявка на автобус — одна на дату пересменки
     CREATE TABLE IF NOT EXISTS transport_requests (

@@ -1784,6 +1784,13 @@ function hasLogi(fn) {
   if (u.role !== 'admin' && u.role !== 'assistant') return false;
   return Array.isArray(u.admin_functions) && u.admin_functions.includes(fn);
 }
+function hasAnyLogi() { return ['transport', 'transport_dispatch', 'housing'].some(hasLogi); }
+// Значок пола (виден только тем, у кого есть доступ к логистике)
+function genderIconHtml(g, big) {
+  if (!hasAnyLogi() || (g !== 'male' && g !== 'female')) return '';
+  const m = g === 'male';
+  return `<span title="${m ? _L('Мужской', 'Ер') : _L('Женский', 'Әйел')}" class="inline-flex items-center justify-center align-middle ${big ? 'w-7 h-7 text-base' : 'w-5 h-5 text-xs'} rounded-full font-bold ${m ? 'bg-sky-100 text-sky-700 border border-sky-200' : 'bg-pink-100 text-pink-700 border border-pink-200'}">${m ? '♂' : '♀'}</span>`;
+}
 function logiTabs() {
   const t = [];
   if (hasLogi('transport') || hasLogi('transport_dispatch')) t.push(['transport', '🚌 ' + _L('Автобус', 'Автобус')]);
@@ -2083,17 +2090,13 @@ function userModalHtml() {
               <input id="uIin" inputmode="numeric" maxlength="12" placeholder="12 цифр" class="w-full border p-2 rounded text-sm">
               <p class="text-[11px] text-slate-400 mt-1">Необязательно. Ровно 12 цифр. В Word/PDF протокол не выводится.</p>
             </div>
-            <details class="border rounded-lg p-2 bg-amber-50/40">
-              <summary class="text-xs font-semibold text-slate-700 cursor-pointer">🚌 Для логистики: пол, гражданство, контакты, откуда едет</summary>
+            <details id="uLogiBox" class="border rounded-lg p-2 bg-amber-50/40 hidden">
+              <summary class="text-xs font-semibold text-slate-700 cursor-pointer">🚌 Для логистики: пол, гражданство, откуда едет <span id="uGenderIcon"></span></summary>
               <div class="grid grid-cols-2 gap-2 mt-2">
                 <div><label class="text-xs font-semibold text-slate-600">Пол / Gender</label>
-                  <select id="uGender" class="w-full border p-2 rounded text-sm"><option value="">—</option><option value="male">Мужской / Male</option><option value="female">Женский / Female</option></select></div>
+                  <select id="uGender" onchange="document.getElementById('uGenderIcon').innerHTML=genderIconHtml(this.value)" class="w-full border p-2 rounded text-sm"><option value="">—</option><option value="male">Мужской / Male</option><option value="female">Женский / Female</option></select></div>
                 <div><label class="text-xs font-semibold text-slate-600">Гражданство</label>
                   <input id="uNationality" placeholder="Kazakhstan" class="w-full border p-2 rounded text-sm"></div>
-                <div><label class="text-xs font-semibold text-slate-600">Телефон</label>
-                  <input id="uPhone" inputmode="tel" placeholder="8 7xx xxx xx xx" class="w-full border p-2 rounded text-sm"></div>
-                <div><label class="text-xs font-semibold text-slate-600">Эл. почта</label>
-                  <input id="uEmail" type="email" class="w-full border p-2 rounded text-sm"></div>
                 <div class="col-span-2"><label class="text-xs font-semibold text-slate-600">Откуда едет на вахту (направление автобуса)</label>
                   <input id="uHomePoint" list="logiPointsList" placeholder="Atyrau / Dossor / Koschagyl / Karaton / Kulsary" class="w-full border p-2 rounded text-sm">
                   <datalist id="logiPointsList"><option value="Atyrau"><option value="Dossor"><option value="Koschagyl"><option value="Karaton"><option value="Kulsary"></datalist></div>
@@ -5353,7 +5356,7 @@ function trRenderRot() {
         const already = (u.in_transport || []).includes(dir);
         return `<div class="flex flex-wrap items-center gap-2 px-2 py-1.5 ${already ? 'bg-emerald-50/60' : ''}">
           <input type="checkbox" class="trChk" data-dir="${dir}" value="${u.id}" ${already ? 'disabled' : ''}>
-          <div class="flex-1 min-w-[160px]"><div class="font-medium text-slate-900 text-sm">${esc(u.last_name)} ${esc(u.first_name)}${u.overtime_end ? ' <span class="text-[10px] text-amber-700">(' + _L('конец овертайма', 'овертайм соңы') + ')</span>' : ''}</div>
+          <div class="flex-1 min-w-[160px]"><div class="font-medium text-slate-900 text-sm">${esc(u.last_name)} ${esc(u.first_name)} ${genderIconHtml(u.gender || guessGender(u.last_name, u.first_name))}${u.overtime_end ? ' <span class="text-[10px] text-amber-700">(' + _L('конец овертайма', 'овертайм соңы') + ')</span>' : ''}</div>
             <div class="text-[11px] text-slate-500">${esc(posLabel(u.position) || '')} · ${esc(u.department || '')} · ${u.tco_badge ? '№ ' + esc(u.tco_badge) : 'new'}</div></div>
           ${already ? `<span class="text-[11px] font-semibold text-emerald-700">✓ ${_L('в заявке', 'өтінімде')}</span>`
             : logiPointSelect('border rounded px-1 py-1 text-xs', u.home_point || logiPoints()[0], `id="trPt_${dir}_${u.id}"`)}
@@ -5500,7 +5503,7 @@ async function hsLoadRot() {
       <label class="flex items-center gap-2 px-2 py-1 text-xs font-semibold bg-slate-50"><input type="checkbox" onchange="document.querySelectorAll('.hsChk:not(:disabled)').forEach(c=>c.checked=this.checked)"> ${_L('Все', 'Барлығы')}: ${list.length}</label>
       ${list.map(u => `<div class="flex flex-wrap items-center gap-2 px-2 py-1.5 ${u.in_housing ? 'bg-emerald-50/60' : ''}">
         <input type="checkbox" class="hsChk" value="${u.id}" data-out="${u.shift_end || ''}" ${u.in_housing ? 'disabled' : ''}>
-        <div class="flex-1 min-w-[160px]"><div class="font-medium text-slate-900 text-sm">${esc(u.last_name)} ${esc(u.first_name)}</div>
+        <div class="flex-1 min-w-[160px]"><div class="font-medium text-slate-900 text-sm">${esc(u.last_name)} ${esc(u.first_name)} ${genderIconHtml(u.gender || guessGender(u.last_name, u.first_name))}</div>
           <div class="text-[11px] text-slate-500">${esc(posLabel(u.position) || '')} · ${esc(u.department || '')} · ${_L('выезд', 'кету')} ${u.shift_end ? fmtDate(u.shift_end) : '—'}${u.gender ? '' : ' · <span class="text-amber-700">' + _L('пол не указан', 'жынысы жоқ') + '</span>'}</div></div>
         ${u.in_housing ? `<span class="text-[11px] font-semibold text-emerald-700">✓ ${_L('заявка есть', 'өтінім бар')}</span>` : `<input id="hsB2b_${u.id}" placeholder="${_L('Сменщик (B2b)', 'Ауысымшы')}" class="border rounded px-1 py-1 text-xs w-36">`}
       </div>`).join('')}</div>` : `<div class="text-sm text-slate-400">${_L('По графику в эту дату никто не заезжает', 'Бұл күні ешкім келмейді')}</div>`;
@@ -5602,6 +5605,7 @@ async function renderLogiSettingsTab(container) {
         ${f('lsDept', 'Департамент / Department (в заявке на автобус)', S.request_department)}
         ${f('lsCc', 'ЦЗ / CC (в заявке на автобус)', S.request_cc)}
         ${f('lsEmail', 'Эл-почта инициатора / e-mail', S.request_email)}
+        ${f('lsPhone', 'Тел# инициатора / Tel#', S.request_phone)}
         ${f('lsCause', 'Цель поездки / Travel Cause', S.travel_cause)}
         ${f('lsCompany', 'Компания (проживание)', S.company)}
         ${f('lsTco', 'Прямой подрядчик TCO (Yes/No)', S.direct_tco)}
@@ -5635,7 +5639,7 @@ function lsRouteRow(r) {
 async function lsSave() {
   const v = id => (document.getElementById(id) || {}).value || '';
   const body = {
-    settings: { request_department: v('lsDept'), request_cc: v('lsCc'), request_email: v('lsEmail'), travel_cause: v('lsCause'), company: v('lsCompany'), direct_tco: v('lsTco') },
+    settings: { request_department: v('lsDept'), request_cc: v('lsCc'), request_email: v('lsEmail'), request_phone: v('lsPhone'), travel_cause: v('lsCause'), company: v('lsCompany'), direct_tco: v('lsTco') },
     routes: [...document.querySelectorAll('#lsRoutes .lsRoute')].map(tr => ({ point: tr.querySelector('.lsP').value, in_time: tr.querySelector('.lsIn').value, out_time: tr.querySelector('.lsOut').value })),
     cost_centers: [...document.querySelectorAll('.lsCc')].map(el => ({ department: el.dataset.k, cost_center: el.value })),
     room_types: [...document.querySelectorAll('.lsRt')].map(el => ({ position: el.dataset.k, room_type: el.value }))
@@ -6392,11 +6396,14 @@ async function openUserModal(u = null, presetRole = null) {
   document.getElementById('uTcoBadge').value = u ? (u.tco_badge || '') : '';
   document.getElementById('uIin').value = u ? (u.iin || '') : '';
   {
+    const box = document.getElementById('uLogiBox');
+    if (box) box.classList.toggle('hidden', !hasAnyLogi());
     const g = document.getElementById('uGender');
     if (g) g.value = u ? (u.gender || guessGender(u.last_name, u.first_name) || '') : '';
+    const gi = document.getElementById('uGenderIcon'); if (gi) gi.innerHTML = g ? genderIconHtml(g.value) : '';
     const setv = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
     setv('uNationality', u ? (u.nationality || '') : '');
-    setv('uPhone', u ? u.phone : ''); setv('uEmail', u ? u.email : ''); setv('uHomePoint', u ? u.home_point : '');
+    setv('uHomePoint', u ? u.home_point : '');
   }
   document.getElementById('uCategory').value = u ? (u.staff_category || 'employee') : 'employee';
   document.getElementById('uHireDate').value = u ? (u.hire_date || '') : '';
@@ -6547,11 +6554,9 @@ async function saveUserForm(e) {
     permanent_certificate_number: document.getElementById('uCertNumber').value.trim(),
     tco_badge: document.getElementById('uTcoBadge').value.trim(),
     iin: document.getElementById('uIin') ? document.getElementById('uIin').value.trim() : '',
-    ...(document.getElementById('uGender') ? {
+    ...(document.getElementById('uGender') && hasAnyLogi() ? {
       gender: document.getElementById('uGender').value,
       nationality: document.getElementById('uNationality').value.trim(),
-      phone: document.getElementById('uPhone').value.trim(),
-      email: document.getElementById('uEmail').value.trim(),
       home_point: document.getElementById('uHomePoint').value.trim()
     } : {}),
     committee_role: document.getElementById('uCommitteeRole') ? document.getElementById('uCommitteeRole').value : '',
@@ -9737,7 +9742,7 @@ async function loadUserProfile(userId) {
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
         <div class="flex flex-wrap justify-between items-start gap-4">
           <div>
-            <h2 class="text-xl font-bold text-slate-900">${esc(user.last_name)} ${esc(user.first_name)}
+            <h2 class="text-xl font-bold text-slate-900">${esc(user.last_name)} ${esc(user.first_name)} ${genderIconHtml(user.gender, true)}
               ${user.employment_status && user.employment_status !== 'active' ? `<span class="ml-2 align-middle text-xs font-semibold px-2 py-0.5 rounded ${user.employment_status === 'fired' ? 'bg-red-100 text-red-700' : 'bg-purple-100 text-purple-700'}">${user.employment_status === 'fired' ? _L('Уволен', 'Жұмыстан босатылған') : _L('В отпуске', 'Демалыста')}</span>` : ''}
             </h2>
             <p class="text-sm text-slate-500 mt-1">${esc(posLabel(user.position) || '—')} · ${esc(user.object || '—')} / ${esc(user.department || '—')}</p>
@@ -9745,6 +9750,7 @@ async function loadUserProfile(userId) {
             <p class="text-xs text-slate-400 mt-1">${t('login_field')}: <span class="font-mono">${user.login ? esc(user.login) : 'не назначен'}</span> · ${esc(roleName)}</p>
             <p class="text-xs text-slate-400 mt-1">№ сертификата: <span class="font-mono font-semibold text-slate-600">${user.permanent_certificate_number ? esc(user.permanent_certificate_number) : 'не присвоен'}</span></p>
             <p class="text-xs text-slate-400 mt-1">ИИН: ${iinCellHtml(user.iin)}</p>
+            ${hasAnyLogi() && user.role === 'employee' ? `<p class="text-xs text-slate-400 mt-1">🚌 ${_L('Откуда едет', 'Қайдан келеді')}: <span class="font-semibold text-slate-600">${esc(user.home_point || '—')}</span> · ${_L('Гражданство', 'Азаматтығы')}: <span class="font-semibold text-slate-600">${esc(user.nationality || 'Kazakhstan')}</span></p>` : ''}
             ${user.role === 'employee' ? `<p class="text-xs text-slate-400 mt-1">${_L('Категория', 'Санаты')}: <span class="font-semibold text-slate-600">${user.staff_category === 'manager' ? _L('Руководитель', 'Басшы') : user.staff_category === 'specialist' ? _L('Специалист', 'Маман') : _L('Сотрудник', 'Қызметкер')}</span></p>
             <p class="text-xs text-slate-400 mt-1">${_L('В компании с', 'Компанияда')}: ${user.hire_date ? `<span class="font-semibold text-slate-600">${fmtDate(user.hire_date)}</span> · ${esc(tenureText(user.hire_date))}` : `<span class="italic">${_L('дата начала работы не указана', 'жұмыс басталған күні көрсетілмеген')}</span>`}</p>
             ${user.employment_status === 'maternity' && user.status_date ? `<p class="text-xs text-purple-600 mt-1">${_L('Отпуск', 'Демалыс')}: ${fmtDate(user.status_date)}${user.status_date_end ? ' — ' + fmtDate(user.status_date_end) : ''}${user.leave_reason ? ' · ' + esc(leaveReasonText(user)) : ''}</p>` : ''}${rotationProfileHtml(user)}${overtimeProfileHtml(user)}` : ''}

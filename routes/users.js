@@ -164,9 +164,15 @@ const ROTATION_SELECT = `to_char(${ROT_CUR_ARR_SQL}, 'YYYY-MM-DD') AS rotation_a
                       CASE WHEN ${ROT_CUR_ARR_SQL} > ${ROT_SHIFT_DATE_SQL} THEN ${ROT_CUR_ARR_SQL} - ${ROT_TODAY_SQL} END AS rotation_days_to_arrival`;
 
 // Поля для логистики (пол, гражданство, телефон, почта, пункт выезда) — из тела запроса, только присланные.
-const LOGI_USER_FIELDS = ['gender', 'nationality', 'phone', 'email', 'home_point'];
-function logiFieldValues(body) {
+// Видеть и менять эти поля могут только те, у кого есть доступ к логистике (и суперадмин).
+const LOGI_USER_FIELDS = ['gender', 'nationality', 'home_point'];
+function canLogi(user) {
+  const { hasLogiFunction } = require('../lib/adminFunctions');
+  return ['transport', 'transport_dispatch', 'housing'].some((f) => hasLogiFunction(user, f));
+}
+function logiFieldValues(body, user) {
   const out = {};
+  if (!canLogi(user)) return out;
   for (const f of LOGI_USER_FIELDS) {
     if (!body || body[f] === undefined) continue;
     let v = String(body[f] == null ? '' : body[f]).trim().slice(0, 200);
@@ -1146,7 +1152,7 @@ router.get('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
               staff_category, to_char(hire_date, 'YYYY-MM-DD') AS hire_date,
               created_at, permanent_certificate_number, tco_badge,
               committee_role, iin, public_uid, assistant_objects, assistant_departments, admin_functions,
-              gender, nationality, phone, email, home_point,
+              gender, nationality, home_point,
               ${ROTATION_SELECT}
        FROM users WHERE id = $1 AND role != 'superadmin'`,
       [req.params.id]
@@ -1156,6 +1162,7 @@ router.get('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
     if (!isInAssistantScope(req.user, user)) {
       return res.status(403).json({ error: 'forbidden', message: 'Сотрудник вне вашей зоны доступа' });
     }
+    if (!canLogi(req.user)) { delete user.gender; delete user.nationality; delete user.home_point; }
     res.json(user);
   } catch (e) {
     console.error('Error fetching user:', e);
@@ -1255,7 +1262,7 @@ function validateRole(requesterRole, targetRole) {
 // ФИО / Объект / Отдел / Должность / № пропуска ТШО / ИИН. Объект и отдел — только внутри
 // своей зоны (см. valueInAssistantZone). Логин/пароль, № сертификата, роль, комиссия,
 // кадровый статус — по-прежнему только admin/superadmin.
-const ASSISTANT_EDITABLE_FIELDS = ['last_name', 'first_name', 'object', 'department', 'position', 'tco_badge', 'iin', 'gender', 'nationality', 'phone', 'email', 'home_point'];
+const ASSISTANT_EDITABLE_FIELDS = ['last_name', 'first_name', 'object', 'department', 'position', 'tco_badge', 'iin', 'gender', 'nationality', 'home_point'];
 
 // Проверка, что значение объекта/отдела лежит в зоне ассистента (зона по этому измерению не
 // ограничена — значит любое значение допустимо).
@@ -1412,7 +1419,7 @@ router.post('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), 
       details: { role: targetRole, object: object || '', department: department || '', position: position || '' }
     });
     {
-      const ex = logiFieldValues(req.body);
+      const ex = logiFieldValues(req.body, req.user);
       const keys = Object.keys(ex);
       if (keys.length) await query(`UPDATE users SET ${keys.map((k, i) => `${k} = $${i + 2}`).join(', ')} WHERE id = $1`, [result.rows[0].id, ...keys.map((k) => ex[k])]);
     }
@@ -1571,7 +1578,7 @@ router.put('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
     if (department !== undefined) { params.push(department); fields.push(`department = $${params.length}`); }
     if (position !== undefined) { params.push(position); fields.push(`position = $${params.length}`); }
     // Логистика: пол, гражданство, телефон, почта, пункт выезда
-    for (const [k, v] of Object.entries(logiFieldValues(req.body))) { params.push(v); fields.push(`${k} = $${params.length}`); }
+    for (const [k, v] of Object.entries(logiFieldValues(req.body, req.user))) { params.push(v); fields.push(`${k} = $${params.length}`); }
 
     // Уникальный номер сотрудника (№ сертификата) — редактируется вручную в карточке
     // профиля (п.2 запроса). Это отдельное поле таблицы users и никак не связано с
