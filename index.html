@@ -9472,11 +9472,19 @@ let myTestsTab = 'todo';   // 'todo' | 'done'
 let myTestsData = [];
 
 async function loadMyTests() {
-  const list = await api.getMyAssignments();
   const div = document.getElementById('myTestsList');
-  if (!div) return;
-  myTestsData = list;
-  renderMyTests();
+  try {
+    const list = await api.getMyAssignments();
+    if (!document.getElementById('myTestsList')) return;
+    myTestsData = list;
+    renderMyTests();
+  } catch (e) {
+    console.error('loadMyTests', e);
+    const d = document.getElementById('myTestsList') || div;
+    if (d) d.innerHTML = `<div class="p-4 rounded-xl border border-red-200 bg-red-50 text-sm text-red-700">
+      ${_L('Не удалось загрузить тесты.', 'Тесттерді жүктеу мүмкін болмады.')} <span class="text-red-500">${esc(e.message || '')}</span>
+      <button type="button" onclick="loadMyTests()" class="ml-2 px-3 py-1 rounded-lg bg-white border border-red-300 font-semibold">${_L('Повторить', 'Қайталау')}</button></div>`;
+  }
 }
 
 const CERT_STATUS_LABEL = {
@@ -9681,6 +9689,11 @@ function myTestCardHtml(a, color) {
       </div>`;
   }
 
+  // (объявлено ДО подсказки: раньше стояло ниже, и у начатых тестов страница падала на «Загрузка...»)
+  // Начатый тест можно продолжить, пока не вышло отведённое время (сервер считает от начала попытки)
+  const startedLeftMin = (kind === 'started' && a.started_at)
+    ? Math.ceil((new Date(a.started_at).getTime() + (a.time_limit_minutes || 20) * 60000 - Date.now()) / 60000) : null;
+
   // Подсказка, что делать дальше
   let hintHtml = '';
   if (kind === 'failed') {
@@ -9699,9 +9712,6 @@ function myTestCardHtml(a, color) {
     a.protocol_number ? `${_L('Протокол', 'Хаттама')} № ${esc(a.protocol_number)}${a.protocol_date ? ' ' + _L('от', 'күні') + ' ' + fmtDate(a.protocol_date) : ''}` : ''
   ].filter(Boolean).join(' · ');
 
-  // Начатый тест можно продолжить, пока не вышло отведённое время (сервер считает от начала попытки)
-  const startedLeftMin = (kind === 'started' && a.started_at)
-    ? Math.ceil((new Date(a.started_at).getTime() + (a.time_limit_minutes || 20) * 60000 - Date.now()) / 60000) : null;
   const canResume = kind === 'started' && a.started_at;   // время вышло — кнопка покажет результат
   const canStart = kind === 'new' || kind === 'retake' || canResume;
   const mediaBtnCls = 'inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-800 text-sm font-bold transition';
