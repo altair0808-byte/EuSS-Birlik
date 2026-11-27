@@ -163,6 +163,19 @@ const ROTATION_SELECT = `to_char(${ROT_CUR_ARR_SQL}, 'YYYY-MM-DD') AS rotation_a
                       ${OT_ON_SQL} AS overtime_active,
                       CASE WHEN ${ROT_CUR_ARR_SQL} > ${ROT_SHIFT_DATE_SQL} THEN ${ROT_CUR_ARR_SQL} - ${ROT_TODAY_SQL} END AS rotation_days_to_arrival`;
 
+// Поля для логистики (пол, гражданство, телефон, почта, пункт выезда) — из тела запроса, только присланные.
+const LOGI_USER_FIELDS = ['gender', 'nationality', 'phone', 'email', 'home_point'];
+function logiFieldValues(body) {
+  const out = {};
+  for (const f of LOGI_USER_FIELDS) {
+    if (!body || body[f] === undefined) continue;
+    let v = String(body[f] == null ? '' : body[f]).trim().slice(0, 200);
+    if (f === 'gender') v = /^(f|ж|female|жен)/i.test(v) ? 'female' : /^(m|м|male|муж)/i.test(v) ? 'male' : '';
+    out[f] = v || null;
+  }
+  return out;
+}
+
 function addDaysIso(iso, n) {
   const d = new Date(iso + 'T00:00:00Z');
   d.setUTCDate(d.getUTCDate() + n);
@@ -1133,6 +1146,7 @@ router.get('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
               staff_category, to_char(hire_date, 'YYYY-MM-DD') AS hire_date,
               created_at, permanent_certificate_number, tco_badge,
               committee_role, iin, public_uid, assistant_objects, assistant_departments, admin_functions,
+              gender, nationality, phone, email, home_point,
               ${ROTATION_SELECT}
        FROM users WHERE id = $1 AND role != 'superadmin'`,
       [req.params.id]
@@ -1241,7 +1255,7 @@ function validateRole(requesterRole, targetRole) {
 // ФИО / Объект / Отдел / Должность / № пропуска ТШО / ИИН. Объект и отдел — только внутри
 // своей зоны (см. valueInAssistantZone). Логин/пароль, № сертификата, роль, комиссия,
 // кадровый статус — по-прежнему только admin/superadmin.
-const ASSISTANT_EDITABLE_FIELDS = ['last_name', 'first_name', 'object', 'department', 'position', 'tco_badge', 'iin'];
+const ASSISTANT_EDITABLE_FIELDS = ['last_name', 'first_name', 'object', 'department', 'position', 'tco_badge', 'iin', 'gender', 'nationality', 'phone', 'email', 'home_point'];
 
 // Проверка, что значение объекта/отдела лежит в зоне ассистента (зона по этому измерению не
 // ограничена — значит любое значение допустимо).
@@ -1397,6 +1411,11 @@ router.post('/', authRequired, requireRole('admin', 'assistant', 'superadmin'), 
       entityType: 'user', entityId: result.rows[0].id, entityName: `${last_name} ${first_name}`.trim(),
       details: { role: targetRole, object: object || '', department: department || '', position: position || '' }
     });
+    {
+      const ex = logiFieldValues(req.body);
+      const keys = Object.keys(ex);
+      if (keys.length) await query(`UPDATE users SET ${keys.map((k, i) => `${k} = $${i + 2}`).join(', ')} WHERE id = $1`, [result.rows[0].id, ...keys.map((k) => ex[k])]);
+    }
     if (targetRole === 'employee') await enrollNewUser(result.rows[0].id, req.user.id);
     res.json({ id: result.rows[0].id });
   } catch (e) {
@@ -1551,6 +1570,8 @@ router.put('/:id', authRequired, requireRole('admin', 'assistant', 'superadmin')
     if (object !== undefined) { params.push(object); fields.push(`object = $${params.length}`); }
     if (department !== undefined) { params.push(department); fields.push(`department = $${params.length}`); }
     if (position !== undefined) { params.push(position); fields.push(`position = $${params.length}`); }
+    // Логистика: пол, гражданство, телефон, почта, пункт выезда
+    for (const [k, v] of Object.entries(logiFieldValues(req.body))) { params.push(v); fields.push(`${k} = $${params.length}`); }
 
     // Уникальный номер сотрудника (№ сертификата) — редактируется вручную в карточке
     // профиля (п.2 запроса). Это отдельное поле таблицы users и никак не связано с
@@ -1705,4 +1726,5 @@ router.delete('/:id', authRequired, requireRole('superadmin'), async (req, res) 
 });
 
 router.ROTATION_SELECT = ROTATION_SELECT;
+router.ROT_SQL = { ROT_REST_SQL, ROT_CYCLE_SQL };
 module.exports = router;

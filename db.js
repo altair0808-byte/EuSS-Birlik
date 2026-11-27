@@ -529,6 +529,74 @@ async function initDb() {
     -- «Закрыт окончательно» (архив): как подписанный — без изменений состава, номера, дат, переоткрытия и удаления,
     -- но без подписей. Ставит суперадмин; разово — все протоколы до № 31 за 2026 г. и все за прошлые годы.
     ALTER TABLE protocols ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE;
+
+    -- Логистика (вкладка «Логистика»): поля сотрудника для заявок на автобус и проживание
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS gender TEXT;            -- 'male' | 'female'
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS nationality TEXT;       -- по умолчанию в заявке — Kazakhstan
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT;             -- для «Тел# инициатора» / контактов
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;             -- для «Эл-почта инициатора»
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS home_point TEXT;        -- откуда едет на вахту (последнее направление)
+
+    CREATE TABLE IF NOT EXISTS logi_routes (
+      id BIGSERIAL PRIMARY KEY,
+      point TEXT NOT NULL UNIQUE,            -- Atyrau, Dossor, Koschagyl, Karaton, Kulsary
+      in_time TEXT NOT NULL DEFAULT '06:00', -- отправление X → Birlik
+      out_time TEXT NOT NULL DEFAULT '12:00',-- отправление Birlik → X
+      sort INT NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS logi_cost_centers (department TEXT PRIMARY KEY, cost_center TEXT NOT NULL DEFAULT '');
+    CREATE TABLE IF NOT EXISTS logi_room_types (position TEXT PRIMARY KEY, room_type TEXT NOT NULL DEFAULT 'double');
+    CREATE TABLE IF NOT EXISTS logi_settings (
+      id INT PRIMARY KEY DEFAULT 1,
+      travel_cause TEXT NOT NULL DEFAULT 'Crew change',
+      company TEXT NOT NULL DEFAULT 'EUSS',
+      direct_tco TEXT NOT NULL DEFAULT 'Yes',
+      request_department TEXT NOT NULL DEFAULT '',
+      request_cc TEXT NOT NULL DEFAULT '',
+      request_email TEXT NOT NULL DEFAULT ''
+    );
+
+    -- Заявка на автобус — одна на дату пересменки
+    CREATE TABLE IF NOT EXISTS transport_requests (
+      id BIGSERIAL PRIMARY KEY,
+      travel_date DATE NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','submitted','accepted')),
+      created_by BIGINT, created_at TIMESTAMPTZ DEFAULT NOW(),
+      submitted_by BIGINT, submitted_at TIMESTAMPTZ,
+      accepted_by BIGINT, accepted_at TIMESTAMPTZ,
+      comment TEXT NOT NULL DEFAULT ''
+    );
+    CREATE TABLE IF NOT EXISTS transport_passengers (
+      id BIGSERIAL PRIMARY KEY,
+      request_id BIGINT NOT NULL REFERENCES transport_requests(id) ON DELETE CASCADE,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      direction TEXT NOT NULL CHECK (direction IN ('in','out')),   -- in: X → Birlik, out: Birlik → X
+      point TEXT NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      added_by BIGINT, added_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (request_id, user_id, direction)
+    );
+    -- Автобус по группе (направление + пункт) — заполняет принимающий
+    CREATE TABLE IF NOT EXISTS transport_buses (
+      request_id BIGINT NOT NULL REFERENCES transport_requests(id) ON DELETE CASCADE,
+      direction TEXT NOT NULL, point TEXT NOT NULL,
+      bus_number TEXT NOT NULL DEFAULT '', dep_time TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (request_id, direction, point)
+    );
+    -- Заявка на проживание (строка формы Accommodation)
+    CREATE TABLE IF NOT EXISTS housing_requests (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      check_in DATE NOT NULL, check_out DATE,
+      room_type TEXT NOT NULL DEFAULT 'double', cost_center TEXT NOT NULL DEFAULT '',
+      gender TEXT NOT NULL DEFAULT '', nationality TEXT NOT NULL DEFAULT 'Kazakhstan',
+      b2b TEXT NOT NULL DEFAULT '', comment TEXT NOT NULL DEFAULT '',
+      birlik_comment TEXT NOT NULL DEFAULT '', room_number TEXT NOT NULL DEFAULT '',
+      alcohol_test TEXT NOT NULL DEFAULT '', contact TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','sent','accepted')),
+      created_by BIGINT, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ,
+      UNIQUE (user_id, check_in)
+    );
     ALTER TABLE protocols ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
     ALTER TABLE protocols ADD COLUMN IF NOT EXISTS signed_docx_data TEXT;
     ALTER TABLE protocols ADD COLUMN IF NOT EXISTS fully_signed_at TIMESTAMPTZ;
@@ -839,6 +907,17 @@ async function initDb() {
   } catch (e) {
     console.error('Ошибка выдачи card_color:', e.message);
   }
+
+  // Логистика: направления из формы заявки на автобус и настройки — один раз
+  try {
+    await pool.query(`INSERT INTO logi_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+    const n = await pool.query('SELECT COUNT(*)::int AS c FROM logi_routes');
+    if (!n.rows[0].c) {
+      await pool.query(`INSERT INTO logi_routes (point, in_time, out_time, sort) VALUES
+        ('Atyrau','06:00','12:00',1),('Dossor','07:30','12:00',2),('Koschagyl','08:00','12:00',3),
+        ('Karaton','08:20','12:00',4),('Kulsary','09:00','12:00',5) ON CONFLICT (point) DO NOTHING`);
+    }
+  } catch (e) { console.error('[migrate] logistics seed:', e.message); }
 
   // Разовое окончательное закрытие старых протоколов (по просьбе: «все до № 31 включительно»).
   // Флаг в settings, чтобы не повторять: если потом суперадмин что-то изменит — миграция это не перетрёт.

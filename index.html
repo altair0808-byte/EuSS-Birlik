@@ -1771,8 +1771,29 @@ function hasAdminFn(fn) {
   return Array.isArray(u.admin_functions) && u.admin_functions.includes(fn);
 }
 function hasAnyCourseFn() { return ['biot', 'internal', 'external'].some(hasAdminFn); }
+// Логистика (автобус, проживание) — отдельные права, суперадмин выдаёт админам и ассистентам
+const LOGI_FUNCTIONS_UI = [
+  { key: 'transport', icon: '🚌', ru: 'Автобус: запись', kz: 'Автобус: жазу', hintRu: 'Записывать сотрудников на автобус при пересменке (по графику вахты)', hintKz: 'Ауысымда автобусқа жазу' },
+  { key: 'transport_dispatch', icon: '🧾', ru: 'Автобус: приём заявки', kz: 'Автобус: өтінімді қабылдау', hintRu: 'Принимать заявку: № автобуса, время, статус «Принято»', hintKz: 'Өтінімді қабылдау: автобус №, уақыт' },
+  { key: 'housing', icon: '🏨', ru: 'Проживание (общежитие)', kz: 'Жатақхана', hintRu: 'Заявки на проживание: тип комнаты по должности, центр затрат по отделу', hintKz: 'Жатақханаға өтінімдер' }
+];
+function hasLogi(fn) {
+  const u = state.user;
+  if (!u) return false;
+  if (u.role === 'superadmin') return true;
+  if (u.role !== 'admin' && u.role !== 'assistant') return false;
+  return Array.isArray(u.admin_functions) && u.admin_functions.includes(fn);
+}
+function logiTabs() {
+  const t = [];
+  if (hasLogi('transport') || hasLogi('transport_dispatch')) t.push(['transport', '🚌 ' + _L('Автобус', 'Автобус')]);
+  if (hasLogi('housing')) t.push(['housing', '🏨 ' + _L('Проживание', 'Жатақхана')]);
+  if (state.user && state.user.role === 'superadmin') t.push(['logi_settings', '⚙️ ' + _L('Настройки логистики', 'Логистика баптаулары')]);
+  return t;
+}
 // Вкладка доступна текущему пользователю с учётом выданных функций
 function tabAllowed(tab) {
+  if (tab === 'transport' || tab === 'housing' || tab === 'logi_settings') return logiTabs().some(x => x[0] === tab);
   if (tab === 'courses' || tab === 'assignments' || tab === 'sessions' || tab === 'certificates') return hasAnyCourseFn();
   if (tab === 'protocols') return hasAdminFn('biot') && !(state.user.role === 'assistant' && !state.user.committee_role);
   if (tab === 'dashboard' && state.user.role === 'assistant') return dashAllowedKeys().length > 0;
@@ -1783,7 +1804,7 @@ function canSeeProtocols() { return tabAllowed('protocols'); }
 function adminFunctionsCellHtml(u) {
   const fns = Array.isArray(u.admin_functions) ? u.admin_functions : [];
   if (!fns.length) return `<span class="text-xs text-red-600 font-semibold">${u.role === 'assistant' ? _L('Разделы не выданы — видит только сотрудников и вахту', 'Бөлімдер берілмеген') : _L('Функции не выданы — работать с обучением нельзя', 'Функциялар берілмеген — оқытумен жұмыс істеу мүмкін емес')}</span>`;
-  return `<div class="flex flex-wrap gap-1">${ADMIN_FUNCTIONS_UI.filter(f => fns.includes(f.key) && siteFnEnabled(f.key)).map(f => `<span class="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-100 whitespace-nowrap">${f.icon} ${esc(_L(f.ru, f.kz))}</span>`).join('')}</div>`;
+  return `<div class="flex flex-wrap gap-1">${ADMIN_FUNCTIONS_UI.filter(f => fns.includes(f.key) && siteFnEnabled(f.key)).map(f => `<span class="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-100 whitespace-nowrap">${f.icon} ${esc(_L(f.ru, f.kz))}</span>`).join('')}${LOGI_FUNCTIONS_UI.filter(f => fns.includes(f.key)).map(f => `<span class="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-100 whitespace-nowrap">${f.icon} ${esc(_L(f.ru, f.kz))}</span>`).join('')}</div>`;
 }
 // Чекбоксы функций в карточке администратора (видны только суперадмину при роли «Администратор»)
 function renderAdminFunctionCheckboxes(selected) {
@@ -1796,6 +1817,12 @@ function renderAdminFunctionCheckboxes(selected) {
   box.innerHTML = hiddenKept + ADMIN_FUNCTIONS_UI.filter(f => siteFnEnabled(f.key)).map(f => `
     <label class="flex items-start gap-2 p-2 border rounded bg-white cursor-pointer hover:bg-blue-50/40">
       <input type="checkbox" class="rounded text-blue-600 mt-0.5" value="${f.key}" ${sel.includes(f.key) ? 'checked' : ''}>
+      <span><span class="text-sm font-semibold text-slate-800">${f.icon} ${esc(_L(f.ru, f.kz))}</span><span class="block text-[11px] text-slate-500">${esc(_L(f.hintRu, f.hintKz))}</span></span>
+    </label>`).join('')
+    + `<div class="col-span-full text-xs font-bold text-slate-500 uppercase mt-2">🚌 ${_L('Логистика', 'Логистика')}</div>`
+    + LOGI_FUNCTIONS_UI.map(f => `
+    <label class="flex items-start gap-2 p-2 border rounded bg-white cursor-pointer hover:bg-amber-50/40">
+      <input type="checkbox" class="rounded text-amber-600 mt-0.5" value="${f.key}" ${sel.includes(f.key) ? 'checked' : ''}>
       <span><span class="text-sm font-semibold text-slate-800">${f.icon} ${esc(_L(f.ru, f.kz))}</span><span class="block text-[11px] text-slate-500">${esc(_L(f.hintRu, f.hintKz))}</span></span>
     </label>`).join('');
 }
@@ -1830,7 +1857,7 @@ async function refreshAdminFunctions() {
 // Упрощённый дашборд ("наблюдатель"): роль assistant, либо любой пользователь
 // с назначенной ролью в комиссии (committee_role), кроме superadmin — ему всегда
 // показываем полный интерфейс. См. ТЗ §5.
-const OBSERVER_TABS = ['dashboard', 'users', 'archive', 'training', 'protocols', 'user_profile'];
+const OBSERVER_TABS = ['dashboard', 'users', 'archive', 'training', 'protocols', 'user_profile', 'transport', 'housing'];
 // Удаление сотрудников, курсов и протоколов, а также изменение номера/дат протокола и
 // системных настроек — только у суперадмина (то же ограничено и на сервере).
 function isSuperadminUser() { return !!(state.user && state.user.role === 'superadmin'); }
@@ -1866,7 +1893,8 @@ function renderMain(app) {
   if (!isEmployee && isObserver && (
       (state.tab === 'dashboard' && (state.user.role !== 'assistant' || !tabAllowed('dashboard'))) ||
       (state.tab === 'protocols' && !canSeeProtocols()) ||
-      (state.tab === 'training' && !hasAnyCourseFn()))) {
+      (state.tab === 'training' && !hasAnyCourseFn()) ||
+      ((state.tab === 'transport' || state.tab === 'housing') && !tabAllowed(state.tab)))) {
     state.tab = 'users';
   }
   // «Администраторы и ассистенты» и «Журнал действий» — только суперадмин
@@ -1911,6 +1939,7 @@ function renderMain(app) {
             <button onclick="setTab('users')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_users')}</button>
             <button onclick="setTab('archive')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'archive' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Архив', 'Мұрағат')}</button>
             ${hasAnyCourseFn() ? `<button onclick="setTab('training')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'training' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${_L('Обучение', 'Оқыту')}</button>` : ''}
+            ${logiTabs().filter(x => x[0] !== 'logi_settings').map(x => `<button onclick="setTab('${x[0]}')" class="px-3 py-1.5 text-xs font-semibold rounded-md whitespace-nowrap ${state.tab === x[0] ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${x[1]}</button>`).join('')}
             ${canSeeProtocols() ? `<button onclick="setTab('protocols')" class="px-3 py-1.5 text-xs font-semibold rounded-md ${state.tab === 'protocols' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'}">${t('nav_protocols')}</button>` : ''}
             ${hasAnyCourseFn() ? `<a href="#" onclick="openExportModal();return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-emerald-700 hover:bg-emerald-50">📥 ${t('nav_export')}</a>` : ''}
             ${state.user.committee_role ? `<a href="#" onclick="openSignatureModal();return false;" class="px-3 py-1.5 text-xs font-semibold rounded-md text-indigo-700 hover:bg-indigo-50">✍️ Электронная подпись</a>` : ''}
@@ -1943,6 +1972,7 @@ function navSections(kind) {
     { id: 'staff', label: t('nav_users'), tabs: [['users', _L('Список', 'Тізім')], ['archive', _L('Архив', 'Мұрағат')], ...(su ? [['admins', _L('Администраторы и ассистенты', 'Әкімшілер мен ассистенттер')]] : [])] },
     { id: 'learn', label: _L('Обучение', 'Оқыту'), tabs: hasAnyCourseFn() ? [['courses', t('nav_courses')], ['assignments', t('nav_assignments')], ['sessions', _L('Группы обучения', 'Оқыту топтары')]] : [] },
     { id: 'docs', label: _L('Документы', 'Құжаттар'), tabs: [...(canSeeProtocols() ? [['protocols', t('nav_protocols')]] : []), ...(hasAnyCourseFn() ? [['certificates', t('nav_certificates')]] : [])] },
+    { id: 'logi', label: '🚌 ' + _L('Логистика', 'Логистика'), tabs: logiTabs() },
     { id: 'sys', label: t('nav_settings'), tabs: [['settings', t('nav_settings')], ...(su ? [['audit', '📜 ' + _L('Журнал действий', 'Әрекеттер журналы')]] : [])] }
   ].filter(sec => sec.tabs.length);   // раздел без доступных вкладок (функция не выдана) не показываем
 }
@@ -2053,6 +2083,22 @@ function userModalHtml() {
               <input id="uIin" inputmode="numeric" maxlength="12" placeholder="12 цифр" class="w-full border p-2 rounded text-sm">
               <p class="text-[11px] text-slate-400 mt-1">Необязательно. Ровно 12 цифр. В Word/PDF протокол не выводится.</p>
             </div>
+            <details class="border rounded-lg p-2 bg-amber-50/40">
+              <summary class="text-xs font-semibold text-slate-700 cursor-pointer">🚌 Для логистики: пол, гражданство, контакты, откуда едет</summary>
+              <div class="grid grid-cols-2 gap-2 mt-2">
+                <div><label class="text-xs font-semibold text-slate-600">Пол / Gender</label>
+                  <select id="uGender" class="w-full border p-2 rounded text-sm"><option value="">—</option><option value="male">Мужской / Male</option><option value="female">Женский / Female</option></select></div>
+                <div><label class="text-xs font-semibold text-slate-600">Гражданство</label>
+                  <input id="uNationality" placeholder="Kazakhstan" class="w-full border p-2 rounded text-sm"></div>
+                <div><label class="text-xs font-semibold text-slate-600">Телефон</label>
+                  <input id="uPhone" inputmode="tel" placeholder="8 7xx xxx xx xx" class="w-full border p-2 rounded text-sm"></div>
+                <div><label class="text-xs font-semibold text-slate-600">Эл. почта</label>
+                  <input id="uEmail" type="email" class="w-full border p-2 rounded text-sm"></div>
+                <div class="col-span-2"><label class="text-xs font-semibold text-slate-600">Откуда едет на вахту (направление автобуса)</label>
+                  <input id="uHomePoint" list="logiPointsList" placeholder="Atyrau / Dossor / Koschagyl / Karaton / Kulsary" class="w-full border p-2 rounded text-sm">
+                  <datalist id="logiPointsList"><option value="Atyrau"><option value="Dossor"><option value="Koschagyl"><option value="Karaton"><option value="Kulsary"></datalist></div>
+              </div>
+            </details>
             <p data-staff-only class="text-xs text-slate-400 -mt-1">Логин и пароль можно не указывать сейчас, а добавить позже — просто откройте карточку сотрудника ещё раз и нажмите «Изменить». При указании логина обязательно укажите и пароль.</p>
             <div id="roleFieldWrapper">
               <label class="text-xs font-semibold text-slate-600">Роль</label>
@@ -2678,6 +2724,9 @@ async function loadTabContent() {
     loadAssignmentsList();
   }
 
+  if (state.tab === 'transport') { renderTransportTab(container); return; }
+  if (state.tab === 'housing') { renderHousingTab(container); return; }
+  if (state.tab === 'logi_settings') { renderLogiSettingsTab(container); return; }
   if (state.tab === 'protocols') {
     container.innerHTML = `
       <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-6">
@@ -5190,6 +5239,411 @@ document.addEventListener('click', e => {
 });
 window.addEventListener('scroll', closeUserRowMenu, true);
 
+// ════════════════════════ ЛОГИСТИКА: автобус и проживание ════════════════════════
+// Пол по отчеству/фамилии (подсказка, если в карточке не указан)
+function guessGender(last, first) {
+  const s = `${first || ''} ${last || ''}`.toLowerCase();
+  const l = String(last || '').toLowerCase().trim();
+  if (/(вна|кызы|қызы|qyzy|kyzy)(\s|$)/.test(s) || /(ова|ева|ина|ская|цкая)$/.test(l)) return 'female';
+  if (/(вич|улы|ұлы|uly|ogly|оглы)(\s|$)/.test(s) || /(ов|ев|ин|ский|цкий)$/.test(l)) return 'male';
+  return '';
+}
+const LOGI = { me: null, date: null, rot: null, tr: null, housing: [], hFrom: null, hTo: null, hSel: new Set(), searchTimer: 0 };
+function logiTodayIso(addDays = 0) { const d = new Date(Date.now() + 5 * 3600e3 + addDays * 86400e3); return d.toISOString().slice(0, 10); }
+async function logiLoadMe() { if (!LOGI.me) LOGI.me = await api.req('/api/logistics/me'); return LOGI.me; }
+function logiPoints() { return ((LOGI.me && LOGI.me.routes) || []).map(r => r.point); }
+function logiPointSelect(cls, val, attrs = '') {
+  const pts = logiPoints();
+  const v = val && !pts.includes(val) ? [val, ...pts] : pts;
+  return `<select ${attrs} class="${cls}">${v.map(p => `<option value="${esc(p)}" ${p === val ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select>`;
+}
+async function logiPostDownload(url, body, fallbackName) {
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + state.token }, body: JSON.stringify(body || {}) });
+  if (res.status === 401) { sessionExpired(); return false; }
+  if (!res.ok) { const j = await res.json().catch(() => ({})); alert(j.message || j.details || t('error_generic')); return false; }
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = cd.match(/filename="([^"]+)"/);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = m ? m[1] : fallbackName;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+  return true;
+}
+const DIR_LABEL = { in: _L('Заезд → Бирлик', 'Келу → Бірлік'), out: _L('Выезд из Бирлика', 'Бірліктен кету') };
+
+// ───────── Автобус ─────────
+async function renderTransportTab(container) {
+  await logiLoadMe();
+  if (!LOGI.date) LOGI.date = logiTodayIso(1);
+  const p = LOGI.me.perms || {};
+  container.innerHTML = `
+    <div class="bg-white p-4 sm:p-6 rounded-xl border border-slate-200 shadow-sm mb-4">
+      <div class="flex flex-wrap items-end gap-3 justify-between">
+        <div>
+          <h2 class="text-lg font-bold text-slate-900">🚌 ${_L('Заявка на автобус (пересменка)', 'Автобусқа өтінім (ауысым)')}</h2>
+          <p class="text-xs text-slate-500 mt-1">${_L('Выберите дату — сайт покажет по графику вахты, кто заезжает и кто выезжает. Отметьте людей, проверьте направление и добавьте в заявку. Заявку можно собирать заранее.', 'Күнді таңдаңыз — вахта кестесі бойынша кім келеді, кім кетеді.')}</p>
+        </div>
+        <div class="flex items-end gap-2">
+          <button type="button" onclick="trShiftDate(-1)" class="px-2 py-2 border rounded-lg text-sm">‹</button>
+          <label class="text-xs font-semibold text-slate-600">${_L('Дата пересменки', 'Ауысым күні')}<br>
+            <input type="date" id="trDate" value="${LOGI.date}" onchange="LOGI.date=this.value;trLoad()" class="border rounded-lg px-2 py-1.5 text-sm"></label>
+          <button type="button" onclick="trShiftDate(1)" class="px-2 py-2 border rounded-lg text-sm">›</button>
+        </div>
+      </div>
+      <div id="trRecent" class="flex flex-wrap gap-1.5 mt-3"></div>
+    </div>
+    <div class="grid lg:grid-cols-2 gap-4">
+      <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm ${p.transport || p.superadmin ? '' : 'hidden'}">
+        <div class="flex items-center justify-between gap-2 mb-2">
+          <h3 class="font-bold text-slate-800">${_L('По графику вахты', 'Вахта кестесі бойынша')}</h3>
+          <button type="button" onclick="trAddSelected()" class="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold">➕ ${_L('Добавить отмеченных в заявку', 'Белгіленгендерді қосу')}</button>
+        </div>
+        <div id="trRot" class="text-sm text-slate-400">${_L('Загрузка…', 'Жүктелуде…')}</div>
+        <div class="mt-4 border-t pt-3">
+          <div class="text-xs font-semibold text-slate-600 mb-1">${_L('Добавить вручную (не по графику: после больничного, новый и т.д.)', 'Қолмен қосу')}</div>
+          <input id="trSearch" oninput="trSearchInput()" placeholder="${_L('ФИО, логин или № пропуска', 'Аты-жөні, логин, рұқсатнама')}" class="w-full border rounded-lg px-3 py-2 text-sm">
+          <div id="trSearchRes" class="mt-2 space-y-1"></div>
+        </div>
+      </div>
+      <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+        <div id="trReq" class="text-sm text-slate-400">${_L('Загрузка…', 'Жүктелуде…')}</div>
+      </div>
+    </div>`;
+  trLoad();
+}
+function trShiftDate(n) {
+  const d = new Date(LOGI.date + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n);
+  LOGI.date = d.toISOString().slice(0, 10);
+  const el = document.getElementById('trDate'); if (el) el.value = LOGI.date;
+  trLoad();
+}
+async function trLoad() {
+  const date = LOGI.date;
+  const p = LOGI.me.perms || {};
+  try {
+    const [rot, tr, list] = await Promise.all([
+      (p.transport || p.superadmin) ? api.req('/api/logistics/rotation?date=' + date) : Promise.resolve(null),
+      api.req('/api/logistics/transport?date=' + date),
+      api.req('/api/logistics/transport/list')
+    ]);
+    if (date !== LOGI.date) return;
+    LOGI.rot = rot; LOGI.tr = tr;
+    const rec = document.getElementById('trRecent');
+    if (rec) rec.innerHTML = list.length ? `<span class="text-xs text-slate-500 self-center">${_L('Заявки:', 'Өтінімдер:')}</span>` + list.map(r => `
+      <button type="button" onclick="LOGI.date='${r.travel_date}';document.getElementById('trDate').value='${r.travel_date}';trLoad()"
+        class="text-xs px-2 py-1 rounded-lg border ${r.travel_date === date ? 'border-blue-600 bg-blue-50' : 'border-slate-200'}">
+        ${fmtDate(r.travel_date)} · ↓${r.cnt_in} ↑${r.cnt_out}
+        <span class="ml-1 font-semibold ${r.status === 'accepted' ? 'text-emerald-700' : r.status === 'submitted' ? 'text-amber-700' : 'text-slate-500'}">${trStatusLabel(r.status)}</span></button>`).join('') : '';
+    trRenderRot(); trRenderReq();
+  } catch (e) {
+    const d = document.getElementById('trReq'); if (d) d.innerHTML = `<div class="text-red-600">${esc(e.message || '')}</div>`;
+  }
+}
+function trStatusLabel(s) { return s === 'accepted' ? _L('Принято', 'Қабылданды') : s === 'submitted' ? _L('На приёме', 'Қабылдауда') : _L('Черновик', 'Жоба'); }
+function trRenderRot() {
+  const box = document.getElementById('trRot');
+  if (!box || !LOGI.rot) return;
+  const sect = (dir, list) => {
+    const title = dir === 'in' ? '⬇ ' + _L('Заезжают на работу', 'Жұмысқа келеді') : '⬆ ' + _L('Выезжают домой (12:00)', 'Үйге кетеді (12:00)');
+    if (!list.length) return `<div class="mb-3"><div class="text-xs font-bold text-slate-600 mb-1">${title}: 0</div></div>`;
+    return `<div class="mb-4">
+      <label class="flex items-center gap-2 text-xs font-bold text-slate-700 mb-1"><input type="checkbox" onchange="document.querySelectorAll('.trChk[data-dir=${dir}]:not(:disabled)').forEach(c=>c.checked=this.checked)"> ${title}: ${list.length}</label>
+      <div class="divide-y border rounded-lg">${list.map(u => {
+        const already = (u.in_transport || []).includes(dir);
+        return `<div class="flex flex-wrap items-center gap-2 px-2 py-1.5 ${already ? 'bg-emerald-50/60' : ''}">
+          <input type="checkbox" class="trChk" data-dir="${dir}" value="${u.id}" ${already ? 'disabled' : ''}>
+          <div class="flex-1 min-w-[160px]"><div class="font-medium text-slate-900 text-sm">${esc(u.last_name)} ${esc(u.first_name)}${u.overtime_end ? ' <span class="text-[10px] text-amber-700">(' + _L('конец овертайма', 'овертайм соңы') + ')</span>' : ''}</div>
+            <div class="text-[11px] text-slate-500">${esc(posLabel(u.position) || '')} · ${esc(u.department || '')} · ${u.tco_badge ? '№ ' + esc(u.tco_badge) : 'new'}</div></div>
+          ${already ? `<span class="text-[11px] font-semibold text-emerald-700">✓ ${_L('в заявке', 'өтінімде')}</span>`
+            : logiPointSelect('border rounded px-1 py-1 text-xs', u.home_point || logiPoints()[0], `id="trPt_${dir}_${u.id}"`)}
+        </div>`;
+      }).join('')}</div></div>`;
+  };
+  box.innerHTML = sect('in', LOGI.rot.arriving) + sect('out', LOGI.rot.departing);
+}
+async function trAddSelected() {
+  const items = [...document.querySelectorAll('.trChk:checked')].map(c => {
+    const dir = c.dataset.dir; const sel = document.getElementById(`trPt_${dir}_${c.value}`);
+    return { user_id: Number(c.value), direction: dir, point: sel ? sel.value : logiPoints()[0] };
+  });
+  if (!items.length) { alert(_L('Отметьте сотрудников', 'Қызметкерлерді белгілеңіз')); return; }
+  try { await api.req('/api/logistics/transport/passengers', { method: 'POST', body: { date: LOGI.date, items } }); trLoad(); }
+  catch (e) { alert(e.message || t('error_generic')); }
+}
+function trSearchInput() {
+  clearTimeout(LOGI.searchTimer);
+  LOGI.searchTimer = setTimeout(async () => {
+    const q = (document.getElementById('trSearch') || {}).value || '';
+    const box = document.getElementById('trSearchRes'); if (!box) return;
+    if (q.trim().length < 2) { box.innerHTML = ''; return; }
+    const list = await api.req('/api/logistics/search?q=' + encodeURIComponent(q.trim())).catch(() => []);
+    box.innerHTML = list.map(u => `<div class="flex flex-wrap items-center gap-2 border rounded-lg px-2 py-1.5">
+      <div class="flex-1 min-w-[150px] text-sm"><b>${esc(u.last_name)} ${esc(u.first_name)}</b><div class="text-[11px] text-slate-500">${esc(posLabel(u.position) || '')} · ${esc(u.department || '')}</div></div>
+      <select id="trMDir_${u.id}" class="border rounded px-1 py-1 text-xs"><option value="in">⬇ ${_L('Заезд', 'Келу')}</option><option value="out">⬆ ${_L('Выезд', 'Кету')}</option></select>
+      ${logiPointSelect('border rounded px-1 py-1 text-xs', u.home_point || logiPoints()[0], `id="trMPt_${u.id}"`)}
+      <button type="button" onclick="trAddManual(${u.id})" class="px-2 py-1 rounded bg-blue-600 text-white text-xs font-semibold">➕</button></div>`).join('')
+      || `<div class="text-xs text-slate-400">${_L('Не найдено', 'Табылмады')}</div>`;
+  }, 300);
+}
+async function trAddManual(id) {
+  const dir = document.getElementById('trMDir_' + id).value, point = document.getElementById('trMPt_' + id).value;
+  try { await api.req('/api/logistics/transport/passengers', { method: 'POST', body: { date: LOGI.date, items: [{ user_id: id, direction: dir, point }] } }); trLoad(); }
+  catch (e) { alert(e.message || t('error_generic')); }
+}
+function trRenderReq() {
+  const box = document.getElementById('trReq'); if (!box) return;
+  const d = LOGI.tr || {}; const rq = d.request; const p = LOGI.me.perms || {};
+  if (!rq || !(d.passengers || []).length) {
+    box.innerHTML = `<h3 class="font-bold text-slate-800 mb-1">${_L('Заявка на', 'Өтінім')} ${fmtDate(LOGI.date)}</h3><div class="text-sm text-slate-400">${_L('Пока никого нет. Отметьте сотрудников слева и нажмите «Добавить».', 'Әзірге ешкім жоқ.')}</div>`;
+    return;
+  }
+  const canDispatch = p.dispatch || p.superadmin;
+  const routes = (LOGI.me.routes || []);
+  const busOf = (dir, pt) => (d.buses || []).find(b => b.direction === dir && b.point === pt) || {};
+  const defTime = (dir, pt) => { const r = routes.find(x => x.point === pt) || {}; return dir === 'in' ? (r.in_time || '') : (r.out_time || '12:00'); };
+  const block = (dir) => {
+    const ps = d.passengers.filter(x => x.direction === dir);
+    if (!ps.length) return '';
+    const pts = [...new Set(ps.map(x => x.point))];
+    return `<div class="mb-4"><div class="text-sm font-bold text-slate-700 mb-2">${dir === 'in' ? '⬇' : '⬆'} ${DIR_LABEL[dir]}: ${ps.length}</div>
+      ${pts.map(pt => {
+        const b = busOf(dir, pt); const list = ps.filter(x => x.point === pt);
+        return `<div class="border rounded-lg mb-2">
+          <div class="flex flex-wrap items-center gap-2 px-2 py-1.5 bg-slate-50 rounded-t-lg">
+            <span class="font-semibold text-sm">${dir === 'in' ? esc(pt) + ' → Birlik' : 'Birlik → ' + esc(pt)}</span>
+            <span class="text-xs text-slate-500">${list.length} ${_L('чел.', 'адам')}</span>
+            <span class="ml-auto flex items-center gap-1 text-xs">
+              ${canDispatch ? `🚌 № <input class="trBus border rounded px-1 py-0.5 w-24" data-dir="${dir}" data-pt="${esc(pt)}" value="${esc(b.bus_number || '')}" placeholder="${_L('номер', 'нөмір')}">
+                 ⏱ <input class="trTime border rounded px-1 py-0.5 w-16" data-dir="${dir}" data-pt="${esc(pt)}" value="${esc(b.dep_time || defTime(dir, pt))}">`
+              : `🚌 ${b.bus_number ? '<b>№ ' + esc(b.bus_number) + '</b>' : '<span class="text-slate-400">' + _L('автобус не назначен', 'автобус жоқ') + '</span>'} · ⏱ ${esc(b.dep_time || defTime(dir, pt))}`}
+            </span>
+          </div>
+          <div class="divide-y">${list.map((x, i) => `<div class="flex items-center gap-2 px-2 py-1 text-sm">
+            <span class="w-5 text-slate-400 text-xs">${i + 1}</span>
+            <span class="flex-1">${esc(x.last_name)} ${esc(x.first_name)} <span class="text-[11px] text-slate-400">· ${x.tco_badge ? esc(x.tco_badge) : 'new'} · ${esc(x.department || '')}</span></span>
+            ${logiPointSelect('border rounded px-1 py-0.5 text-[11px]', x.point, `onchange="trMove(${x.id}, this.value)" title="${_L('Сменить направление', 'Бағытты өзгерту')}"`)}
+            <button type="button" onclick="trRemove(${x.id})" title="${_L('Убрать', 'Алып тастау')}" class="text-red-500 hover:text-red-700 px-1">✕</button></div>`).join('')}</div>
+        </div>`;
+      }).join('')}</div>`;
+  };
+  const stCls = rq.status === 'accepted' ? 'bg-emerald-100 text-emerald-800' : rq.status === 'submitted' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600';
+  box.innerHTML = `
+    <div class="flex flex-wrap items-center gap-2 mb-3">
+      <h3 class="font-bold text-slate-800">${_L('Заявка на', 'Өтінім')} ${fmtDate(rq.travel_date)}</h3>
+      <span class="text-xs font-bold px-2 py-0.5 rounded ${stCls}">${trStatusLabel(rq.status)}</span>
+      ${rq.status === 'accepted' && rq.accepted_by_name ? `<span class="text-[11px] text-slate-500">${_L('принял', 'қабылдады')}: ${esc(rq.accepted_by_name)}</span>` : ''}
+      <button type="button" onclick="downloadAuthed('/api/logistics/transport/${rq.id}/export.xlsx', null, true)" class="ml-auto px-3 py-1.5 rounded-lg border border-emerald-300 text-emerald-700 text-xs font-semibold">⬇ Excel</button>
+    </div>
+    ${block('in')}${block('out')}
+    <div class="flex flex-wrap gap-2 pt-2 border-t">
+      ${rq.status === 'draft' ? `<button type="button" onclick="trSubmit(${rq.id})" class="px-3 py-2 rounded-lg bg-amber-500 text-white text-sm font-semibold">📨 ${_L('Отправить на приём', 'Қабылдауға жіберу')}</button>` : ''}
+      ${canDispatch ? `<button type="button" onclick="trSaveBuses(${rq.id}, false)" class="px-3 py-2 rounded-lg border text-sm font-semibold">💾 ${_L('Сохранить автобусы', 'Сақтау')}</button>
+        <button type="button" onclick="trSaveBuses(${rq.id}, true)" class="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold">✓ ${_L('Принять заявку', 'Өтінімді қабылдау')}</button>` : ''}
+    </div>`;
+}
+async function trMove(pid, point) { try { await api.req('/api/logistics/transport/passengers/' + pid, { method: 'PATCH', body: { point } }); trLoad(); } catch (e) { alert(e.message); } }
+async function trRemove(pid) { if (!confirm(_L('Убрать из заявки?', 'Өтінімнен алып тастау керек пе?'))) return; try { await api.req('/api/logistics/transport/passengers/' + pid, { method: 'DELETE' }); trLoad(); } catch (e) { alert(e.message); } }
+async function trSubmit(id) { try { await api.req('/api/logistics/transport/' + id + '/submit', { method: 'POST' }); trLoad(); } catch (e) { alert(e.message); } }
+async function trSaveBuses(id, accept) {
+  const buses = [...document.querySelectorAll('.trBus')].map(el => ({
+    direction: el.dataset.dir, point: el.dataset.pt, bus_number: el.value.trim(),
+    dep_time: (document.querySelector(`.trTime[data-dir="${el.dataset.dir}"][data-pt="${CSS.escape(el.dataset.pt)}"]`) || {}).value || ''
+  }));
+  if (accept && buses.some(b => !b.bus_number) && !confirm(_L('Не у всех направлений указан № автобуса. Всё равно принять?', 'Барлық бағытта автобус № жоқ. Қабылдау керек пе?'))) return;
+  try { await api.req('/api/logistics/transport/' + id + '/buses', { method: 'POST', body: { buses, accept } }); trLoad(); }
+  catch (e) { alert(e.message || t('error_generic')); }
+}
+
+// ───────── Проживание ─────────
+async function renderHousingTab(container) {
+  await logiLoadMe();
+  if (!LOGI.date) LOGI.date = logiTodayIso(1);
+  if (!LOGI.hFrom) { LOGI.hFrom = logiTodayIso(-7); LOGI.hTo = logiTodayIso(45); }
+  container.innerHTML = `
+    <div class="bg-white p-4 sm:p-6 rounded-xl border border-slate-200 shadow-sm mb-4">
+      <div class="flex flex-wrap items-end gap-3 justify-between">
+        <div>
+          <h2 class="text-lg font-bold text-slate-900">🏨 ${_L('Заявка на проживание', 'Жатақханаға өтінім')}</h2>
+          <p class="text-xs text-slate-500 mt-1">${_L('Тип комнаты подставляется по должности, центр затрат — по отделу (Логистика → Настройки). Даты заезда/выезда — из графика вахты.', 'Бөлме түрі — лауазым бойынша, шығын орталығы — бөлім бойынша.')}</p>
+        </div>
+        <label class="text-xs font-semibold text-slate-600">${_L('Дата заезда', 'Келу күні')}<br>
+          <input type="date" id="hsDate" value="${LOGI.date}" onchange="LOGI.date=this.value;hsLoadRot()" class="border rounded-lg px-2 py-1.5 text-sm"></label>
+      </div>
+      <div class="mt-3">
+        <div class="flex items-center justify-between gap-2 mb-1">
+          <div class="text-sm font-bold text-slate-700">⬇ ${_L('Заезжают по графику', 'Кесте бойынша келеді')}</div>
+          <button type="button" onclick="hsCreateSelected()" class="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold">➕ ${_L('Создать заявки для отмеченных', 'Өтінім жасау')}</button>
+        </div>
+        <div id="hsRot" class="text-sm text-slate-400">${_L('Загрузка…', 'Жүктелуде…')}</div>
+        <div class="mt-3"><input id="hsSearch" oninput="hsSearchInput()" placeholder="${_L('Добавить вручную: ФИО, логин или № пропуска', 'Қолмен қосу')}" class="w-full border rounded-lg px-3 py-2 text-sm">
+          <div id="hsSearchRes" class="mt-2 space-y-1"></div></div>
+      </div>
+    </div>
+    <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+      <div class="flex flex-wrap items-end gap-2 mb-3">
+        <h3 class="font-bold text-slate-800 mr-auto">${_L('Заявки', 'Өтінімдер')}</h3>
+        <label class="text-xs">${_L('Заезд с', 'Келу')} <input type="date" value="${LOGI.hFrom}" onchange="LOGI.hFrom=this.value;hsLoadList()" class="border rounded px-1 py-1 text-xs"></label>
+        <label class="text-xs">${_L('по', 'дейін')} <input type="date" value="${LOGI.hTo}" onchange="LOGI.hTo=this.value;hsLoadList()" class="border rounded px-1 py-1 text-xs"></label>
+        <button type="button" onclick="hsExport()" class="px-3 py-1.5 rounded-lg border border-emerald-300 text-emerald-700 text-xs font-semibold">⬇ Excel (${_L('отмеченные', 'белгіленген')})</button>
+      </div>
+      <div id="hsList" class="overflow-x-auto text-sm text-slate-400">${_L('Загрузка…', 'Жүктелуде…')}</div>
+    </div>`;
+  hsLoadRot(); hsLoadList();
+}
+async function hsLoadRot() {
+  const box = document.getElementById('hsRot'); if (!box) return;
+  try {
+    const r = await api.req('/api/logistics/rotation?date=' + LOGI.date);
+    const list = r.arriving || [];
+    box.innerHTML = list.length ? `<div class="divide-y border rounded-lg">
+      <label class="flex items-center gap-2 px-2 py-1 text-xs font-semibold bg-slate-50"><input type="checkbox" onchange="document.querySelectorAll('.hsChk:not(:disabled)').forEach(c=>c.checked=this.checked)"> ${_L('Все', 'Барлығы')}: ${list.length}</label>
+      ${list.map(u => `<div class="flex flex-wrap items-center gap-2 px-2 py-1.5 ${u.in_housing ? 'bg-emerald-50/60' : ''}">
+        <input type="checkbox" class="hsChk" value="${u.id}" data-out="${u.shift_end || ''}" ${u.in_housing ? 'disabled' : ''}>
+        <div class="flex-1 min-w-[160px]"><div class="font-medium text-slate-900 text-sm">${esc(u.last_name)} ${esc(u.first_name)}</div>
+          <div class="text-[11px] text-slate-500">${esc(posLabel(u.position) || '')} · ${esc(u.department || '')} · ${_L('выезд', 'кету')} ${u.shift_end ? fmtDate(u.shift_end) : '—'}${u.gender ? '' : ' · <span class="text-amber-700">' + _L('пол не указан', 'жынысы жоқ') + '</span>'}</div></div>
+        ${u.in_housing ? `<span class="text-[11px] font-semibold text-emerald-700">✓ ${_L('заявка есть', 'өтінім бар')}</span>` : `<input id="hsB2b_${u.id}" placeholder="${_L('Сменщик (B2b)', 'Ауысымшы')}" class="border rounded px-1 py-1 text-xs w-36">`}
+      </div>`).join('')}</div>` : `<div class="text-sm text-slate-400">${_L('По графику в эту дату никто не заезжает', 'Бұл күні ешкім келмейді')}</div>`;
+  } catch (e) { box.innerHTML = `<div class="text-red-600">${esc(e.message || '')}</div>`; }
+}
+async function hsCreateSelected() {
+  const items = [...document.querySelectorAll('.hsChk:checked')].map(c => ({
+    user_id: Number(c.value), check_in: LOGI.date, check_out: c.dataset.out || null,
+    b2b: (document.getElementById('hsB2b_' + c.value) || {}).value || ''
+  }));
+  if (!items.length) { alert(_L('Отметьте сотрудников', 'Қызметкерлерді белгілеңіз')); return; }
+  await hsCreate(items);
+}
+async function hsCreate(items) {
+  try {
+    const r = await api.req('/api/logistics/housing', { method: 'POST', body: { items } });
+    if (r.skipped && r.skipped.length) alert(_L('Уже есть заявка на эту дату: ', 'Өтінім бар: ') + r.skipped.join(', '));
+    hsLoadRot(); hsLoadList();
+  } catch (e) { alert(e.message || t('error_generic')); }
+}
+function hsSearchInput() {
+  clearTimeout(LOGI.searchTimer);
+  LOGI.searchTimer = setTimeout(async () => {
+    const q = (document.getElementById('hsSearch') || {}).value || '';
+    const box = document.getElementById('hsSearchRes'); if (!box) return;
+    if (q.trim().length < 2) { box.innerHTML = ''; return; }
+    const list = await api.req('/api/logistics/search?q=' + encodeURIComponent(q.trim())).catch(() => []);
+    box.innerHTML = list.map(u => `<div class="flex flex-wrap items-center gap-2 border rounded-lg px-2 py-1.5">
+      <div class="flex-1 min-w-[150px] text-sm"><b>${esc(u.last_name)} ${esc(u.first_name)}</b><div class="text-[11px] text-slate-500">${esc(posLabel(u.position) || '')} · ${esc(u.department || '')}</div></div>
+      <label class="text-[11px]">${_L('заезд', 'келу')} <input type="date" id="hsMIn_${u.id}" value="${LOGI.date}" class="border rounded px-1 py-0.5 text-xs"></label>
+      <label class="text-[11px]">${_L('выезд', 'кету')} <input type="date" id="hsMOut_${u.id}" class="border rounded px-1 py-0.5 text-xs"></label>
+      <input id="hsMCom_${u.id}" placeholder="${_L('Комментарий', 'Түсініктеме')}" class="border rounded px-1 py-0.5 text-xs w-32">
+      <button type="button" onclick="hsAddManual(${u.id})" class="px-2 py-1 rounded bg-blue-600 text-white text-xs font-semibold">➕</button></div>`).join('')
+      || `<div class="text-xs text-slate-400">${_L('Не найдено', 'Табылмады')}</div>`;
+  }, 300);
+}
+function hsAddManual(id) {
+  const ci = document.getElementById('hsMIn_' + id).value;
+  if (!ci) { alert(_L('Укажите дату заезда', 'Келу күнін көрсетіңіз')); return; }
+  hsCreate([{ user_id: id, check_in: ci, check_out: document.getElementById('hsMOut_' + id).value || null, comment: document.getElementById('hsMCom_' + id).value }]);
+}
+async function hsLoadList() {
+  const box = document.getElementById('hsList'); if (!box) return;
+  try {
+    LOGI.housing = await api.req(`/api/logistics/housing?from=${LOGI.hFrom || ''}&to=${LOGI.hTo || ''}`);
+    LOGI.hSel = new Set([...LOGI.hSel].filter(id => LOGI.housing.some(h => h.id === id)));
+    if (!LOGI.housing.length) { box.innerHTML = `<div class="text-slate-400">${_L('Заявок за период нет', 'Өтінім жоқ')}</div>`; return; }
+    const inp = (h, k, w, ph = '') => `<input value="${esc(h[k] || '')}" placeholder="${ph}" onchange="hsPatch(${h.id}, '${k}', this.value)" class="border rounded px-1 py-0.5 text-xs ${w}">`;
+    const st = { new: ['bg-slate-100 text-slate-700', _L('Новая', 'Жаңа')], sent: ['bg-amber-100 text-amber-800', _L('Отправлена', 'Жіберілді')], accepted: ['bg-emerald-100 text-emerald-800', _L('Подтверждена', 'Расталды')] };
+    box.innerHTML = `<table class="min-w-full text-xs text-slate-700">
+      <thead class="bg-slate-50 text-slate-600"><tr>
+        <th class="p-1"><input type="checkbox" onchange="LOGI.hSel=this.checked?new Set(LOGI.housing.map(h=>h.id)):new Set();hsLoadListMarks()"></th>
+        <th class="p-1 text-left">${_L('ФИО', 'Аты-жөні')}</th><th class="p-1">${_L('Пропуск', 'Рұқсатнама')}</th><th class="p-1">${_L('Должность', 'Лауазым')}</th>
+        <th class="p-1">${_L('Комната', 'Бөлме')}</th><th class="p-1">${_L('ЦЗ', 'ШО')}</th><th class="p-1">${_L('Пол', 'Жынысы')}</th>
+        <th class="p-1">${_L('Заезд', 'Келу')}</th><th class="p-1">${_L('Выезд', 'Кету')}</th><th class="p-1">B2b</th><th class="p-1">${_L('Комментарий', 'Түсініктеме')}</th>
+        <th class="p-1">№ ${_L('комн.', 'бөлме')}</th><th class="p-1">${_L('От Бирлик', 'Бірліктен')}</th><th class="p-1">${_L('Статус', 'Мәртебе')}</th><th></th></tr></thead>
+      <tbody class="divide-y">${LOGI.housing.map(h => `<tr>
+        <td class="p-1"><input type="checkbox" class="hsRowChk" value="${h.id}" ${LOGI.hSel.has(h.id) ? 'checked' : ''} onchange="this.checked?LOGI.hSel.add(${h.id}):LOGI.hSel.delete(${h.id})"></td>
+        <td class="p-1 whitespace-nowrap font-medium text-slate-900">${esc(h.last_name)} ${esc(h.first_name)}<div class="text-[10px] text-slate-400">${esc(h.department || '')}</div></td>
+        <td class="p-1">${h.tco_badge ? esc(h.tco_badge) : 'new'}</td>
+        <td class="p-1">${esc(posLabel(h.position) || '')}</td>
+        <td class="p-1"><select onchange="hsPatch(${h.id}, 'room_type', this.value)" class="border rounded px-1 py-0.5 text-xs"><option value="double" ${h.room_type === 'double' ? 'selected' : ''}>double</option><option value="single" ${h.room_type === 'single' ? 'selected' : ''}>single</option></select></td>
+        <td class="p-1">${inp(h, 'cost_center', 'w-20')}</td>
+        <td class="p-1"><select onchange="hsPatch(${h.id}, 'gender', this.value)" class="border rounded px-1 py-0.5 text-xs"><option value=""></option><option ${h.gender === 'Male' ? 'selected' : ''}>Male</option><option ${h.gender === 'Female' ? 'selected' : ''}>Female</option></select></td>
+        <td class="p-1"><input type="date" value="${h.check_in || ''}" onchange="hsPatch(${h.id}, 'check_in', this.value)" class="border rounded px-1 py-0.5 text-xs"></td>
+        <td class="p-1"><input type="date" value="${h.check_out || ''}" onchange="hsPatch(${h.id}, 'check_out', this.value)" class="border rounded px-1 py-0.5 text-xs"></td>
+        <td class="p-1">${inp(h, 'b2b', 'w-28')}</td>
+        <td class="p-1">${inp(h, 'comment', 'w-32')}</td>
+        <td class="p-1">${inp(h, 'room_number', 'w-14')}</td>
+        <td class="p-1">${inp(h, 'birlik_comment', 'w-28')}</td>
+        <td class="p-1"><select onchange="hsPatch(${h.id}, 'status', this.value, true)" class="border rounded px-1 py-0.5 text-[11px] font-semibold ${(st[h.status] || st.new)[0]}">${Object.entries(st).map(([k, v]) => `<option value="${k}" ${h.status === k ? 'selected' : ''}>${v[1]}</option>`).join('')}</select></td>
+        <td class="p-1"><button type="button" onclick="hsDelete(${h.id})" class="text-red-500 px-1">✕</button></td>
+      </tr>`).join('')}</tbody></table>`;
+  } catch (e) { box.innerHTML = `<div class="text-red-600">${esc(e.message || '')}</div>`; }
+}
+function hsLoadListMarks() { document.querySelectorAll('.hsRowChk').forEach(c => { c.checked = LOGI.hSel.has(Number(c.value)); }); }
+async function hsPatch(id, k, v, reload) { try { await api.req('/api/logistics/housing/' + id, { method: 'PATCH', body: { [k]: v } }); if (reload) hsLoadList(); } catch (e) { alert(e.message || t('error_generic')); } }
+async function hsDelete(id) { if (!confirm(_L('Удалить заявку?', 'Өтінімді жою керек пе?'))) return; try { await api.req('/api/logistics/housing/' + id, { method: 'DELETE' }); LOGI.hSel.delete(id); hsLoadList(); hsLoadRot(); } catch (e) { alert(e.message); } }
+async function hsExport() {
+  const ids = [...LOGI.hSel];
+  if (!ids.length) { alert(_L('Отметьте заявки галочками', 'Өтінімдерді белгілеңіз')); return; }
+  if (await logiPostDownload('/api/logistics/housing/export.xlsx', { ids }, 'Accommodation.xlsx')) hsLoadList();
+}
+
+// ───────── Настройки логистики (суперадмин) ─────────
+async function renderLogiSettingsTab(container) {
+  container.innerHTML = `<div class="text-slate-400">${_L('Загрузка…', 'Жүктелуде…')}</div>`;
+  let c;
+  try { c = await api.req('/api/logistics/catalog'); } catch (e) { container.innerHTML = `<div class="text-red-600">${esc(e.message)}</div>`; return; }
+  const S = c.settings || {};
+  const ccMap = Object.fromEntries((c.cost_centers || []).map(x => [x.department, x.cost_center]));
+  const rtMap = Object.fromEntries((c.room_types || []).map(x => [x.position, x.room_type]));
+  const f = (id, label, v) => `<label class="text-xs font-semibold text-slate-600">${label}<input id="${id}" value="${esc(v || '')}" class="w-full border rounded px-2 py-1.5 text-sm font-normal mt-0.5"></label>`;
+  container.innerHTML = `
+    <div class="bg-white p-4 sm:p-6 rounded-xl border border-slate-200 shadow-sm mb-4">
+      <h2 class="text-lg font-bold text-slate-900 mb-3">⚙️ ${_L('Настройки логистики', 'Логистика баптаулары')}</h2>
+      <p class="text-xs text-slate-500 mb-3">${_L('Кто может записывать и принимать — выдаётся в карточке администратора/ассистента (Сотрудники → Администраторы и ассистенты → раздел «Логистика»).', 'Құқықтар әкімші/ассистент карточкасында беріледі.')}</p>
+      <div class="grid sm:grid-cols-3 gap-3">
+        ${f('lsDept', 'Департамент / Department (в заявке на автобус)', S.request_department)}
+        ${f('lsCc', 'ЦЗ / CC (в заявке на автобус)', S.request_cc)}
+        ${f('lsEmail', 'Эл-почта инициатора / e-mail', S.request_email)}
+        ${f('lsCause', 'Цель поездки / Travel Cause', S.travel_cause)}
+        ${f('lsCompany', 'Компания (проживание)', S.company)}
+        ${f('lsTco', 'Прямой подрядчик TCO (Yes/No)', S.direct_tco)}
+      </div>
+    </div>
+    <div class="bg-white p-4 sm:p-6 rounded-xl border border-slate-200 shadow-sm mb-4">
+      <h3 class="font-bold text-slate-800 mb-2">🚌 ${_L('Направления автобуса', 'Автобус бағыттары')}</h3>
+      <table class="text-sm"><thead class="text-xs text-slate-500"><tr><th class="text-left p-1">${_L('Пункт', 'Пункт')}</th><th class="p-1">${_L('Отправление → Бирлик', 'Бірлікке')}</th><th class="p-1">${_L('Отправление из Бирлика', 'Бірліктен')}</th><th></th></tr></thead>
+        <tbody id="lsRoutes">${(c.routes || []).map(r => lsRouteRow(r)).join('')}</tbody></table>
+      <button type="button" onclick="document.getElementById('lsRoutes').insertAdjacentHTML('beforeend', lsRouteRow({}))" class="mt-2 px-3 py-1 rounded border text-xs">➕ ${_L('Направление', 'Бағыт')}</button>
+    </div>
+    <div class="grid lg:grid-cols-2 gap-4">
+      <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+        <h3 class="font-bold text-slate-800 mb-2">💼 ${_L('Центр затрат по отделу', 'Бөлім бойынша шығын орталығы')}</h3>
+        <div class="max-h-[480px] overflow-y-auto divide-y">${(c.departments || []).map(d => `<div class="flex items-center gap-2 py-1"><span class="flex-1 text-sm">${esc(d)}</span><input class="lsCc border rounded px-2 py-1 text-sm w-32" data-k="${esc(d)}" value="${esc(ccMap[d] || '')}" placeholder="178410"></div>`).join('')}</div>
+      </div>
+      <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+        <h3 class="font-bold text-slate-800 mb-2">🛏 ${_L('Тип комнаты по должности', 'Лауазым бойынша бөлме түрі')}</h3>
+        <div class="max-h-[480px] overflow-y-auto divide-y">${(c.positions || []).map(p => `<div class="flex items-center gap-2 py-1"><span class="flex-1 text-sm">${esc(posLabel(p) || p)}</span>
+          <select class="lsRt border rounded px-2 py-1 text-sm" data-k="${esc(p)}"><option value="">double (${_L('по умолч.', 'әдепкі')})</option><option value="single" ${rtMap[p] === 'single' ? 'selected' : ''}>single</option><option value="double" ${rtMap[p] === 'double' ? 'selected' : ''}>double</option></select></div>`).join('')}</div>
+      </div>
+    </div>
+    <div class="mt-4"><button type="button" onclick="lsSave()" class="px-5 py-2.5 rounded-lg bg-blue-600 text-white font-semibold">💾 ${_L('Сохранить настройки', 'Сақтау')}</button></div>`;
+}
+function lsRouteRow(r) {
+  return `<tr class="lsRoute"><td class="p-1"><input class="lsP border rounded px-2 py-1 text-sm w-36" value="${esc(r.point || '')}"></td>
+    <td class="p-1"><input class="lsIn border rounded px-2 py-1 text-sm w-20" value="${esc(r.in_time || '06:00')}"></td>
+    <td class="p-1"><input class="lsOut border rounded px-2 py-1 text-sm w-20" value="${esc(r.out_time || '12:00')}"></td>
+    <td class="p-1"><button type="button" onclick="this.closest('tr').remove()" class="text-red-500">✕</button></td></tr>`;
+}
+async function lsSave() {
+  const v = id => (document.getElementById(id) || {}).value || '';
+  const body = {
+    settings: { request_department: v('lsDept'), request_cc: v('lsCc'), request_email: v('lsEmail'), travel_cause: v('lsCause'), company: v('lsCompany'), direct_tco: v('lsTco') },
+    routes: [...document.querySelectorAll('#lsRoutes .lsRoute')].map(tr => ({ point: tr.querySelector('.lsP').value, in_time: tr.querySelector('.lsIn').value, out_time: tr.querySelector('.lsOut').value })),
+    cost_centers: [...document.querySelectorAll('.lsCc')].map(el => ({ department: el.dataset.k, cost_center: el.value })),
+    room_types: [...document.querySelectorAll('.lsRt')].map(el => ({ position: el.dataset.k, room_type: el.value }))
+  };
+  try { await api.req('/api/logistics/settings', { method: 'PUT', body }); LOGI.me = null; alert(_L('Сохранено', 'Сақталды')); }
+  catch (e) { alert(e.message || t('error_generic')); }
+}
+
 // ── QR-коды сотрудников (PDF, 8 карточек на лист A4) ──────────────────────────
 async function qrDownload(ids) {
   ids = [...new Set((ids || []).map(Number).filter(Boolean))];
@@ -5937,6 +6391,13 @@ async function openUserModal(u = null, presetRole = null) {
   document.getElementById('uCertNumber').value = u ? (u.permanent_certificate_number || '') : '';
   document.getElementById('uTcoBadge').value = u ? (u.tco_badge || '') : '';
   document.getElementById('uIin').value = u ? (u.iin || '') : '';
+  {
+    const g = document.getElementById('uGender');
+    if (g) g.value = u ? (u.gender || guessGender(u.last_name, u.first_name) || '') : '';
+    const setv = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+    setv('uNationality', u ? (u.nationality || '') : '');
+    setv('uPhone', u ? u.phone : ''); setv('uEmail', u ? u.email : ''); setv('uHomePoint', u ? u.home_point : '');
+  }
   document.getElementById('uCategory').value = u ? (u.staff_category || 'employee') : 'employee';
   document.getElementById('uHireDate').value = u ? (u.hire_date || '') : '';
   document.getElementById('uRole').value = u ? u.role : (presetRole || (state.tab === 'admins' ? 'admin' : 'employee'));
@@ -6086,6 +6547,13 @@ async function saveUserForm(e) {
     permanent_certificate_number: document.getElementById('uCertNumber').value.trim(),
     tco_badge: document.getElementById('uTcoBadge').value.trim(),
     iin: document.getElementById('uIin') ? document.getElementById('uIin').value.trim() : '',
+    ...(document.getElementById('uGender') ? {
+      gender: document.getElementById('uGender').value,
+      nationality: document.getElementById('uNationality').value.trim(),
+      phone: document.getElementById('uPhone').value.trim(),
+      email: document.getElementById('uEmail').value.trim(),
+      home_point: document.getElementById('uHomePoint').value.trim()
+    } : {}),
     committee_role: document.getElementById('uCommitteeRole') ? document.getElementById('uCommitteeRole').value : '',
     staff_category: document.getElementById('uCategory') ? document.getElementById('uCategory').value : 'employee',
     hire_date: document.getElementById('uHireDate') ? (document.getElementById('uHireDate').value || '') : ''
