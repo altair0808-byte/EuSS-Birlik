@@ -819,16 +819,24 @@ router.get('/:id/answers', authRequired, async (req, res) => {
 // Allow retake
 router.post('/:id/allow-retake', authRequired, requireRole('admin', 'superadmin'), requireAssignmentFunction((req) => req.params.id), async (req, res) => {
   try {
-    await query(`UPDATE assignments SET retake_allowed = 1, status = 'pending' WHERE id = $1`, [req.params.id]);
+    const before = (await query('SELECT id, user_id, course_id, status, score_percent, test_date FROM assignments WHERE id = $1', [req.params.id])).rows[0];
+    if (!before) return res.status(404).json({ error: 'not_found', message: 'Запись не найдена' });
+    if (before.status === 'passed') return res.status(400).json({ error: 'already_passed', message: 'Тест уже сдан — пересдача не нужна' });
+    // Пересдача: неудачная попытка сразу убирается из записи (балл, дата теста, протокол, сохранённые ответы),
+    // запись снова «Назначен» — сотрудник видит тест с кнопкой «Пересдать». Сама попытка остаётся в журнале действий.
+    await query(`
+      UPDATE assignments
+         SET retake_allowed = 1, status = 'pending',
+             score_percent = NULL, test_date = NULL, next_test_date = NULL, focus_violations = 0,
+             protocol_id = NULL, started_at = NULL, question_ids = NULL, progress_answers = NULL, progress_violations = 0,
+             user_answers = NULL
+       WHERE id = $1`, [req.params.id]);
     try {
-      const a = await query('SELECT user_id, course_id FROM assignments WHERE id = $1', [req.params.id]);
-      if (a.rows[0]) {
-        const nm = await auditNames(a.rows[0].user_id, a.rows[0].course_id);
-        await logAction(req, 'retake_allowed', {
-          entityType: 'user', entityId: a.rows[0].user_id, entityName: nm.userName,
-          details: { course: nm.courseTitle, assignment_id: Number(req.params.id) }
-        });
-      }
+      const nm = await auditNames(before.user_id, before.course_id);
+      await logAction(req, 'retake_allowed', {
+        entityType: 'user', entityId: before.user_id, entityName: nm.userName,
+        details: { course: nm.courseTitle, assignment_id: Number(req.params.id), failed_score: before.score_percent, failed_date: before.test_date }
+      });
     } catch (logErr) { console.error('audit (retake):', logErr.message); }
     push.notifyRetakeAllowed(req.params.id).catch(() => {});
     res.json({ ok: true });

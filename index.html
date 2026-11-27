@@ -8415,9 +8415,16 @@ async function submitAssignForm(e) {
   }
 }
 
-async function allowRetake(id) {
-  await api.allowRetake(id);
-  loadAssignmentsList();
+async function allowRetake(id, profileUserId) {
+  if (!confirm(_L('Разрешить пересдачу?\nНеудачная попытка (балл и дата) уберётся, сотруднику снова будет доступен тест с кнопкой «Пересдать».',
+                  'Қайта тапсыруға рұқсат беру керек пе?'))) return;
+  try {
+    await api.allowRetake(id);
+  } catch (e) { alert(e.message || t('error_generic')); return; }
+  const y = window.scrollY;
+  if (profileUserId) await loadUserProfile(profileUserId);
+  else if (document.getElementById('assignTable')) await loadAssignmentsList();
+  window.scrollTo(0, y);
 }
 
 async function delAssign(id, profileUserId) {
@@ -9393,6 +9400,7 @@ async function loadUserProfile(userId) {
                     ${a.user_answers ? `<button onclick="openAnswersModal(${a.id})" class="text-slate-600 hover:underline text-xs font-semibold">Подробнее</button>` : ''}
                     ${a.status === 'passed' && !a.is_external && a.certificate_number ? `<a href="#" onclick="downloadAuthed('/api/certificates/${a.id}');return false;" class="text-blue-600 hover:underline text-xs font-semibold">${t('download_cert')}</a>
                     <a href="#" onclick="downloadAuthed('/api/id-cards/${a.id}');return false;" class="text-indigo-600 hover:underline text-xs font-semibold ml-2">${t('download_id_card')}</a>` : ''}
+                    ${a.status === 'failed' && state.user && ['admin', 'superadmin'].includes(state.user.role) && !isObserverUser() ? `<button onclick="allowRetake(${a.id}, ${user.id})" class="text-amber-600 hover:underline text-xs font-semibold">Пересдача</button>` : ''}
                     ${state.user && state.user.role === 'superadmin' ? `<button onclick="delAssign(${a.id}, ${user.id})" class="text-red-600 hover:underline text-xs font-semibold">Удалить</button>` : ''}
                   </td>
                 </tr>
